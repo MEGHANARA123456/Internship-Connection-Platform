@@ -26,6 +26,12 @@
    - 3.13 Pydantic Schemas (`backend/app/schemas/*`)
    - 3.14 API Layer & Dependencies (`backend/app/api/v1/*`)
    - 3.15 Services & Utilities (`backend/app/services/mail.py`, `backend/app/seed.py`)
+   - 3.16 PDF Extraction Engine (`backend/app/services/pdf.py`)
+   - 3.17 AI Services & Matching Suite (`backend/app/services/ai.py`)
+   - 3.18 AI API Endpoints (`backend/app/api/v1/ai.py`)
+   - 3.19 Real-Time WebSockets & WebRTC Signaling (`backend/app/api/v1/ws.py`)
+   - 3.20 College Placement Portal & TPO Analytics (`backend/app/api/v1/institution.py`)
+   - 3.21 Backend Test Suite Architecture (`backend/tests/*`)
 4. [Separately: Complete Imports & Suggested Alternatives Catalog](#4-separately-complete-imports--suggested-alternatives-catalog)
 5. [Authentication, Authorization & Security Architecture](#5-authentication-authorization--security-architecture)
 6. [API Endpoints Reference Matrix](#6-api-endpoints-reference-matrix)
@@ -204,6 +210,7 @@ Centralized typed configuration using Pydantic Settings:
   - `max_resume_size_mb` (5), `resume_storage_path` ("storage/resumes").
   - `rate_limit_requests` (120), `rate_limit_window_seconds` (60).
   - `admin_signup_key`: Secret bootstrap key for admin registrations.
+  - `gemini_api_key`: Optional API key for Google Gemini / generative AI services.
 
 ---
 
@@ -370,6 +377,114 @@ Provides runtime input validation, type coercion, and OpenAPI JSON serialization
 
 ---
 
+### 3.16 PDF Extraction Engine (`backend/app/services/pdf.py`)
+Responsible for parsing and extracting raw text from student resumes uploaded in PDF format for downstream ATS scoring and keyword analysis.
+- **Imports**:
+  - `logging`: Standard Python logging for non-fatal extraction warnings.
+  - `pathlib.Path`: Cross-platform filesystem path representations.
+  - `pypdf.PdfReader` (lazy loaded inside `extract_text_from_pdf`): Parses PDF page trees and streams without requiring external C libraries.
+- **Functions**:
+  - `extract_text_from_pdf(file_path: str | Path) -> str`: Checks file existence, instantiates `PdfReader`, iterates over `reader.pages`, calls `page.extract_text()`, and returns joined newline-separated text. Handles corrupted or unreadable PDFs gracefully by catching exceptions and returning an empty string.
+
+---
+
+### 3.17 AI Services & Matching Suite (`backend/app/services/ai.py`)
+Autonomous intelligence algorithms for ATS scoring, pitch drafting, mock interview generation, and structured rubric evaluations.
+- **Imports**:
+  - `re`: Regular expressions for boundary-aware tokenization (`\b\w+\b`) and exact phrase matching.
+  - `typing.Any`: Flexible typing for return dictionaries and score payloads.
+- **Core Algorithms**:
+  1. `compute_ats_score(resume_text, student_skills, job_title, job_description, job_skills) -> dict[str, Any]`:
+     - Normalizes candidate text (resume text + student profile skills) and job text (title + description + required skills).
+     - Computes skill coverage ratio: compares required job skills against student skills and resume keywords using word-boundary regex (`\b<skill>\b`).
+     - Evaluates job title relevance: matches non-trivial job title tokens against candidate profile.
+     - Calculates weighted ATS score: 70% skill coverage + 20% job title alignment + 10% resume completeness bonus (capped between 35% and 98%).
+     - Dynamically synthesizes personalized improvement recommendations (e.g. suggesting specific missing technologies or resume length enhancements).
+  2. `generate_tailored_pitch(student_name, university, major, skills, bio, job_title, company_name, job_description) -> str`:
+     - Synthesizes a compelling, tailored 2-paragraph cover pitch incorporating the candidate's academic institution, major, relevant technical skills, and company mission.
+  3. `generate_mock_interview_questions(job_title, industry, skills) -> list[dict[str, Any]]`:
+     - Generates 5 structured interview questions across Technical (Architecture & Implementation), Technical (Debugging & Bottlenecks), System Design (Traffic Spikes & Scalability), Behavioral (Constructive Feedback & Teamwork), and Behavioral (Motivation & Industry Fit) domains, each accompanied by an evaluation rubric.
+  4. `evaluate_mock_interview_answer(question, answer, rubric) -> dict[str, Any]`:
+     - Evaluates candidate answers using word-count depth heuristics, STAR method adherence criteria, technical specificity analysis, and delivers a score out of 10 with actionable strengths and improvement areas.
+
+---
+
+### 3.18 AI API Endpoints (`backend/app/api/v1/ai.py`)
+Exposes the AI services as authenticated REST endpoints protected by role-based guards.
+- **Imports**:
+  - `pathlib.Path`: Filesystem path manipulation to locate stored resumes.
+  - `typing.Annotated`: Type-hinted FastAPI dependency injection.
+  - `fastapi.APIRouter, Depends, HTTPException`: HTTP routing, dependencies, and exception handling.
+  - `pydantic.BaseModel, Field`: Request body validation for answer evaluations.
+  - `sqlalchemy.select`: Async ORM querying for internships, student profiles, and resume metadata.
+  - `app.api.v1.dependencies.DbSession, get_current_user, require_roles`: Authenticated session and role enforcement.
+  - `app.core.config.get_settings`: Locates `resume_storage_path`.
+  - `app.models.*`: Database entity models (`CompanyProfile`, `Internship`, `Resume`, `StudentProfile`, `User`, `UserRole`).
+  - `app.services.ai.*`: AI calculation algorithms.
+  - `app.services.pdf.extract_text_from_pdf`: Text extraction utility.
+- **Endpoints**:
+  - `GET /api/v1/ai/internships/{id}/ats-score`: Extracts current student's resume PDF text and calculates live ATS score against the target internship.
+  - `POST /api/v1/ai/internships/{id}/generate-pitch`: Automatically crafts a personalized 2-paragraph application pitch.
+  - `GET /api/v1/ai/internships/{id}/mock-interview`: Retrieves 5 customized practice questions with rubrics.
+  - `POST /api/v1/ai/mock-interview/evaluate`: Submits an interview answer and returns instant score, strengths, and critique.
+
+---
+
+### 3.19 Real-Time WebSockets & WebRTC Signaling (`backend/app/api/v1/ws.py`)
+Provides bi-directional real-time communication for instant messaging, live typing indicators, presence tracking, and WebRTC peer-to-peer video rooms.
+- **Imports**:
+  - `json`: Parsing and serializing WebSocket payloads.
+  - `logging`: Connection logging and disconnect monitoring.
+  - `collections.defaultdict`: Multi-connection tracking by user ID and video room.
+  - `typing.Any`: Flexible payload types.
+  - `fastapi.APIRouter, WebSocket, WebSocketDisconnect`: Starlette WebSocket abstractions.
+- **Classes & Architecture**:
+  - `ConnectionManager`:
+    - `active_user_connections: dict[int, set[WebSocket]]`: Maps `user_id` to sets of active browser tabs/sockets.
+    - `video_rooms: dict[int, set[WebSocket]]`: Maps `interview_id` to participating video call peers.
+    - `connect_user(user_id, websocket)`: Accepts connection, registers socket, and broadcasts online presence.
+    - `disconnect_user(user_id, websocket)`: Deregisters socket, removes empty sets, and triggers presence updates.
+    - `send_personal_message(user_id, data)`: Dispatches JSON payloads to all connected devices for a specific user.
+    - `broadcast_presence()`: Sends `{"type": "presence_update", "online_users": [...]}` to all connected users.
+    - `connect_video(interview_id, websocket)` & `disconnect_video(...)`: Manages WebRTC signaling mesh and notifies peers (`peer_joined`, `peer_left`).
+- **Endpoints**:
+  - `WebSocket /api/v1/ws/chat/{user_id}`: Bi-directional chat socket handling typing indicators (`{"type": "typing"}`), instant message notifications, and ping/pong heartbeats.
+  - `WebSocket /api/v1/ws/video-signal/{interview_id}`: Relays WebRTC SDP offers, answers, and ICE candidates between interviewer and candidate without storing video on the server.
+
+---
+
+### 3.20 College Placement Portal & TPO Analytics (`backend/app/api/v1/institution.py`)
+Provides aggregated macro metrics and departmental breakdowns for university Placement Cells and Training & Placement Officers (TPO).
+- **Imports**:
+  - `typing.Annotated`: Dependency injection annotations.
+  - `fastapi.APIRouter, Depends`: Router declaration and authorization.
+  - `sqlalchemy.func, select`: SQL aggregations (`count`, `avg`, `distinct`, `group_by`).
+  - `app.api.v1.dependencies.DbSession, get_current_user`: Authenticated user session.
+  - `app.models.*`: Models (`Application`, `Internship`, `StudentProfile`, `User`).
+- **Endpoints**:
+  - `GET /api/v1/institution/placement-stats`: Computes total student headcount, overall placement rates, total placed candidates, active hiring partners, average stipend packages, department-wise placement distributions, and recent placement offer records.
+
+---
+
+### 3.21 Backend Test Suite Architecture (`backend/tests/*`)
+Automated testing harness validating system security, role boundaries, API schemas, and business workflows.
+- **Imports Across Tests**:
+  - `pytest`: Test orchestrator with `@pytest.mark.anyio` async fixtures.
+  - `httpx.ASGITransport, AsyncClient`: Async in-memory ASGI test client simulating HTTP and WebSocket requests without opening OS network sockets.
+  - `app.main.app`: Root FastAPI application instance.
+- **Test Modules**:
+  - `test_health.py`: Verifies `/api/v1/health` returns 200 OK.
+  - `test_auth.py`: Tests user registration, argon2 password hashing, JWT issuance, token rotation, and invalid credential rejections.
+  - `test_profiles.py`: Validates student/company profile creation, profile updates, and resume upload boundary validation.
+  - `test_internships.py`: Tests CRUD operations, salary/location filters, company draft submissions, and admin approval workflows.
+  - `test_applications.py`: Tests 7-stage application lifecycle transitions and applicant listing permissions.
+  - `test_communication.py`: Tests chat message posting, conversation listing, and interview scheduling.
+  - `test_admin.py`: Tests admin moderation dashboard, company verification, user suspension, and reports investigation.
+  - `test_ai.py`: Verifies unauthorized access guards on AI evaluation endpoints.
+  - `test_institution.py`: Verifies institutional placement endpoints require valid authentication tokens.
+
+---
+
 ## 4. Separately: Complete Imports & Suggested Alternatives Catalog
 
 Below is the **comprehensive catalog of every major library, import, and module** used in the backend, along with **high-performance, modern, and production-grade alternatives**:
@@ -391,6 +506,10 @@ Below is the **comprehensive catalog of every major library, import, and module*
 | **`pytest`** (`import pytest`) | Automated Testing Framework | Fixture architecture, parameterized tests, concise assertions. | **1. `unittest`** (standard library)<br/>**2. `ward`**<br/>**3. `hypothesis`** | **Ward**: Modern test runner designed specifically for Python 3.10+.<br/>**Hypothesis**: Property-based testing library to generate hundreds of randomized edge-case inputs automatically. |
 | **`Starlette`** (`from starlette.middleware.base import ...`) | Underlying ASGI Toolkit | Provides ASGI middleware base, request lifecycle, and streaming response primitives. | **1. Raw ASGI Callables**<br/>**2. Falcon (ASGI engine)** | Writing raw ASGI middleware (`async def __call__(self, scope, receive, send)`) achieves slightly higher throughput than `BaseHTTPMiddleware` by bypassing request wrapping overhead. |
 | **`Mailpit`** (Dev SMTP/API) | Transactional Email Testing | Local test inbox with web UI (port 8025) preventing accidental emails to real users. | **1. SendGrid API**<br/>**2. Amazon SES**<br/>**3. Resend**<br/>**4. Postmark** | **Resend**: Modern developer-first email API with great React email support.<br/>**Amazon SES**: Most cost-effective bulk delivery service for high-scale production. |
+| **`pypdf`** (`from pypdf import PdfReader`) | PDF Resume Parsing & Text Extraction | Pure-Python PDF extraction, zero native C compilation dependencies, lightweight in Docker containers. | **1. `pdfplumber`**<br/>**2. `PyMuPDF` (fitz)**<br/>**3. `pypdfium2`**<br/>**4. `pdfminer.six`**<br/>**5. Apache Tika** | **pdfplumber**: Better extraction of tabular data and layouts, but significantly heavier.<br/>**PyMuPDF**: 10x-20x faster C-binding renderer, but introduces platform-dependent binary dependencies.<br/>**Apache Tika**: Enterprise multi-format parser (DOCX, PDF, RTF), but requires a Java runtime. |
+| **`fastapi.WebSocket`** (`from fastapi import WebSocket, WebSocketDisconnect`) | Real-Time Chat & WebRTC Signaling | Native ASGI WebSocket support, shares same port and auth context as HTTP API without secondary daemon. | **1. `python-socketio`**<br/>**2. Centrifugo**<br/>**3. Pusher / Ably**<br/>**4. Mercure Hub**<br/>**5. Django Channels** | **python-socketio**: Includes automatic reconnects, room broadcast abstractions, and HTTP fallback.<br/>**Centrifugo**: High-performance real-time messaging server in Go, handles millions of concurrent sockets.<br/>**Pusher / Ably**: Managed serverless real-time infrastructure; zero ops but incurred SaaS costs. |
+| **`google-generativeai` / Gemini API** (`gemini_api_key`) | Multimodal Generative AI & Semantic Evaluation | State-of-the-art multimodal reasoning, massive context windows, and cost-effective structured output. | **1. OpenAI API (`openai`)**<br/>**2. Anthropic Claude (`anthropic`)**<br/>**3. Mistral AI (`mistralai`)**<br/>**4. Ollama (Self-Hosted)**<br/>**5. HuggingFace Transformers** | **OpenAI**: Industry standard tool calling and JSON mode, higher API cost.<br/>**Claude**: Superior nuanced writing style for pitch drafting.<br/>**Ollama / vLLM**: Runs open-weight LLMs (Llama 3, Mistral) locally without data leaving the private cloud. |
+| **`re`** (`import re`) | Heuristic ATS Matching & Skill Tokenization | Zero-dependency, microsecond-latency deterministic matching with word boundaries (`\b\w+\b`). | **1. `spaCy`**<br/>**2. `sentence-transformers`**<br/>**3. `pgvector`** (PostgreSQL extension)<br/>**4. `nltk`** | **spaCy**: Industrial-strength NLP with part-of-speech tagging and entity extraction.<br/>**sentence-transformers**: Generates 384d/768d vector embeddings to measure cosine similarity between resume and job description semantics.<br/>**pgvector**: Stores embeddings directly in PostgreSQL to perform approximate nearest neighbor (`<->`) queries across candidate pools. |
 
 ---
 
@@ -488,6 +607,13 @@ To prevent remote code execution, denial-of-service, or path traversal attacks:
 | | `GET` | `/api/v1/admin/reports` | Admin | Lists open user reports and flags. |
 | | `PATCH`| `/api/v1/admin/reports/{id}` | Admin | Updates report status (`INVESTIGATING`, `RESOLVED`). |
 | **Reports** | `POST` | `/api/v1/reports` | Authenticated | Submits report against a user or internship. |
+| **AI Suite** | `GET` | `/api/v1/ai/internships/{id}/ats-score` | Student | Analyzes uploaded PDF resume text and computes live ATS Match Score & tips. |
+| | `POST` | `/api/v1/ai/internships/{id}/generate-pitch` | Student | Crafts tailored 2-paragraph cover pitch aligned with job requirements. |
+| | `GET` | `/api/v1/ai/internships/{id}/mock-interview` | Student | Generates 5 technical & behavioral questions with rubrics for role. |
+| | `POST` | `/api/v1/ai/mock-interview/evaluate` | Student | Submits mock interview answer and receives instant score and feedback. |
+| **Institution** | `GET` | `/api/v1/institution/placement-stats` | Authenticated | Aggregated university placement KPIs, department distributions, and offers. |
+| **WebSockets** | `WS` | `/api/v1/ws/chat/{user_id}` | Authenticated | Real-time bi-directional chat, typing bubbles, and presence broadcasts. |
+| | `WS` | `/api/v1/ws/video-signal/{interview_id}` | Authenticated | Relays WebRTC SDP offers/answers and ICE candidate signals between peers. |
 
 ---
 
@@ -498,6 +624,10 @@ To prevent remote code execution, denial-of-service, or path traversal attacks:
 - It reads the backend URL from `VITE_API_URL` (defaults to `http://localhost:8010/api/v1`).
 - Axios request interceptors automatically inject `Authorization: Bearer <access_token>`.
 - Response interceptors intercept HTTP 401s and automatically call `/auth/refresh` to refresh credentials without logging out the user.
+- **WebSockets Connection**: `useWebSocketChat` establishes an async connection to `ws://localhost:8010/api/v1/ws/chat/{user_id}` with automatic reconnects, tracking active presence and typing statuses.
+- **WebRTC Video Signaling**: `VideoInterviewModal` establishes a signaling connection to `ws://localhost:8010/api/v1/ws/video-signal/{interview_id}` to exchange SDP offers and ICE candidates for zero-server-overhead peer-to-peer video streams.
+- **Theme Engine**: Built with Zustand (`frontend/src/store/theme.ts`) supporting `dark`, `light`, and `system` modes, synchronized with Tailwind CSS `@custom-variant dark` variables.
+- **Interactive Modals**: Includes Live ATS Gauges (`ApplyModal.tsx`), AI Mock Interview Room (`MockInterviewModal.tsx`), In-App Offer Letters with HTML5 Canvas Digital Signatures (`OfferLetterModal.tsx`), Timed Technical Skill Quizzes (`SkillQuizModal.tsx`), and Faculty Endorsements (`RecommendationModal.tsx`).
 
 ### 7.2 Docker Compose Services
 - **`backend`**: FastAPI running on internal port 8000, mapped to host port **8010**.
