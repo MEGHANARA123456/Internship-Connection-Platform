@@ -186,27 +186,33 @@ export function CollegePlacementPortal() {
           <CardDescription>Real-time completion metrics by academic branch.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {data.department_stats.map((dept: any, idx: number) => {
-              const pct = Math.round((dept.placed / dept.students) * 100)
-              return (
-                <div key={idx} className="space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-slate-900 dark:text-white">{dept.department}</span>
-                    <span className="font-semibold text-slate-500 dark:text-slate-400">
-                      {dept.placed} / {dept.students} ({pct}%)
-                    </span>
+          {data.department_stats.length === 0 ? (
+            <div className="text-center py-6 text-xs text-slate-500 dark:text-slate-400">
+              No department records registered yet for this academic cycle.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {data.department_stats.map((dept: any, idx: number) => {
+                const pct = dept.students > 0 ? Math.round((dept.placed / dept.students) * 100) : 0
+                return (
+                  <div key={idx} className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-900 dark:text-white">{dept.department}</span>
+                      <span className="font-semibold text-slate-500 dark:text-slate-400">
+                        {dept.placed} / {dept.students} ({pct}%)
+                      </span>
+                    </div>
+                    <div className="w-full h-2.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-linear-to-r from-indigo-500 to-emerald-500 rounded-full transition-all duration-500"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
                   </div>
-                  <div className="w-full h-2.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-linear-to-r from-indigo-500 to-emerald-500 rounded-full transition-all duration-500"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+                )
+              })}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -257,22 +263,30 @@ export function CollegePlacementPortal() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
-                {filteredPlacements.map((rec: any) => (
-                  <tr key={rec.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
-                    <td className="p-3.5 font-bold text-slate-900 dark:text-white">{rec.student_name}</td>
-                    <td className="p-3.5 text-slate-600 dark:text-slate-300">{rec.major}</td>
-                    <td className="p-3.5 font-semibold text-indigo-600 dark:text-indigo-400">{rec.company_name}</td>
-                    <td className="p-3.5 text-slate-700 dark:text-slate-300">{rec.role}</td>
-                    <td className="p-3.5 font-medium text-slate-900 dark:text-white">${rec.stipend}/mo</td>
-                    <td className="p-3.5">
-                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                        Offer Accepted
-                      </span>
+                {filteredPlacements.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-8 text-center text-xs text-slate-400">
+                      No matching placement records found.
                     </td>
-                    <td className="p-3.5 text-right text-slate-400 text-[11px]">{rec.date}</td>
                   </tr>
-                ))}
+                ) : (
+                  filteredPlacements.map((rec: any) => (
+                    <tr key={rec.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
+                      <td className="p-3.5 font-bold text-slate-900 dark:text-white">{rec.student_name}</td>
+                      <td className="p-3.5 text-slate-600 dark:text-slate-300">{rec.major}</td>
+                      <td className="p-3.5 font-semibold text-indigo-600 dark:text-indigo-400">{rec.company_name}</td>
+                      <td className="p-3.5 text-slate-700 dark:text-slate-300">{rec.role}</td>
+                      <td className="p-3.5 font-medium text-slate-900 dark:text-white">${rec.stipend}/mo</td>
+                      <td className="p-3.5">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                          Offer Accepted
+                        </span>
+                      </td>
+                      <td className="p-3.5 text-right text-slate-400 text-[11px]">{rec.date}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
