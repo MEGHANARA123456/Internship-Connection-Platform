@@ -107,7 +107,33 @@ async def list_messages(conversation_id: int, user: participant, db: DbSession) 
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageResponse, status_code=201)
 async def send_message(conversation_id: int, data: MessageCreate, user: participant, db: DbSession) -> Message:
     conversation = await get_conversation(conversation_id, user, db)
-    message = Message(conversation_id=conversation.id, sender_id=user.id, body=data.body); db.add(message); await db.commit(); await db.refresh(message)
+    message = Message(conversation_id=conversation.id, sender_id=user.id, body=data.body)
+    db.add(message)
+    await db.commit()
+    await db.refresh(message)
+
+    # Real-time WebSocket relay to conversation partner
+    try:
+        from app.api.v1.ws import manager
+        recipient_id = conversation.company_id if user.id == conversation.student_id else conversation.student_id
+        await manager.send_personal_message(
+            recipient_id,
+            {
+                "type": "new_message",
+                "conversation_id": conversation.id,
+                "message": {
+                    "id": message.id,
+                    "conversation_id": message.conversation_id,
+                    "sender_id": message.sender_id,
+                    "body": message.body,
+                    "created_at": message.created_at.isoformat(),
+                    "read_at": None,
+                },
+            },
+        )
+    except Exception:
+        pass
+
     return message
 
 
@@ -124,6 +150,20 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
         db.add(Notification(user_id=student.id, notification_type="INTERVIEW_INVITE", title="Interview invitation", body=f"Interview scheduled for {data.scheduled_at.isoformat()}"))
         await db.commit()
         await send_dev_email(student.email, "Interview invitation", f"Interview scheduled for {data.scheduled_at.isoformat()}")
+        try:
+            from app.api.v1.ws import manager
+            await manager.send_personal_message(
+                student.id,
+                {
+                    "type": "interview_scheduled",
+                    "application_id": application_id,
+                    "scheduled_at": data.scheduled_at.isoformat(),
+                    "interview_type": data.interview_type,
+                    "meeting_link": data.meeting_link,
+                },
+            )
+        except Exception:
+            pass
     return interview
 
 

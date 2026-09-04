@@ -121,17 +121,17 @@ export function InterviewsPage() {
             const isCompany = session?.role === 'COMPANY'
 
             return (
-              <Card key={item.id} className="p-5 bg-white space-y-3">
+              <Card key={item.id} className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2.5 flex-wrap">
-                      <h3 className="text-base font-bold text-slate-900">
+                      <h3 className="text-base font-bold text-slate-900 dark:text-white">
                         {item.interview_type} Interview
                       </h3>
                       <Badge status={item.status}>{item.status}</Badge>
                     </div>
 
-                    <div className="flex items-center gap-4 text-xs text-slate-500 pt-1">
+                    <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 pt-1">
                       <span className="flex items-center gap-1">
                         <Calendar className="w-3.5 h-3.5 text-slate-400" />
                         {dateObj.toLocaleDateString(undefined, {
@@ -148,8 +148,8 @@ export function InterviewsPage() {
                     </div>
 
                     {item.notes && (
-                      <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-md border border-slate-100 mt-2">
-                        <strong className="text-slate-700">Instructions:</strong> {item.notes}
+                      <p className="text-xs text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-md border border-slate-100 dark:border-slate-700/60 mt-2">
+                        <strong className="text-slate-700 dark:text-slate-200">Instructions:</strong> {item.notes}
                       </p>
                     )}
                   </div>

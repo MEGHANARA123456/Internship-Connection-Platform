@@ -80,6 +80,21 @@ async def update_status(application_id: int, data: ApplicationStatusUpdate, back
         body = f"Your application has moved to {data.status.replace('_', ' ').title()}"
         db.add(Notification(user_id=recipient.id, notification_type="APPLICATION_STATUS", title=title, body=body))
         background_tasks.add_task(send_dev_email, recipient.email, title, body)
+        try:
+            from app.api.v1.ws import manager
+            await manager.send_personal_message(
+                recipient.id,
+                {
+                    "type": "application_status_updated",
+                    "application_id": application.id,
+                    "status": data.status,
+                    "internship_id": application.internship_id,
+                    "title": title,
+                    "body": body,
+                },
+            )
+        except Exception:
+            pass
     await db.commit(); await db.refresh(application)
     return await serialize(application, db)
 

@@ -349,9 +349,10 @@ Provides runtime input validation, type coercion, and OpenAPI JSON serialization
 - **`applications.py`**:
   - Submits applications, prevents duplicates via unique constraints.
   - Strict status transitions: `APPLIED` -> `UNDER_REVIEW` -> `SHORTLISTED` -> `INTERVIEW_SCHEDULED` -> `SELECTED` / `REJECTED` / `WITHDRAWN`.
-  - Dispatches email alerts to students when companies update application status.
+  - Dispatches email alerts and real-time WebSocket status updates (`application_status_updated`) to students when companies update application status.
 - **`communication.py`**:
-  - Direct message conversations between students and companies.
+  - Direct message conversations between students and companies with bi-directional real-time WebSocket push (`new_message`) directly on message commit.
+  - Schedules interviews with real-time WebSocket interview invites and email delivery.
   - Automatic unread-message status update (`read_at = now()`) when fetching chat logs.
   - Interview scheduling, updates, and automatic notifications.
 - **`admin.py`**:

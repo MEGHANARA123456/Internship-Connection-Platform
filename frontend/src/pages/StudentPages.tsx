@@ -538,20 +538,20 @@ export function ApplicationsPage() {
             const canWithdraw = ['APPLIED', 'UNDER_REVIEW', 'SHORTLISTED'].includes(app.status)
 
             return (
-              <Card key={app.id} className="p-5 bg-white">
+              <Card key={app.id} className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2.5 flex-wrap">
-                      <h3 className="text-base font-bold text-slate-900">
+                      <h3 className="text-base font-bold text-slate-900 dark:text-white">
                         {app.internship_title || `Internship #${app.internship_id}`}
                       </h3>
                       <Badge status={app.status}>{app.status}</Badge>
                     </div>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
                       Applied on {new Date(app.created_at).toLocaleDateString()}
                     </p>
                     {app.cover_note && (
-                      <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-md border border-slate-100 mt-2 italic">
+                      <p className="text-xs text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-md border border-slate-100 dark:border-slate-700/60 mt-2 italic">
                         "{app.cover_note}"
                       </p>
                     )}
@@ -630,24 +630,70 @@ export function StudentProfilePage() {
   const [profileError, setProfileError] = useState('')
 
   // Developer Social Proof & Badges State
-  const [githubHandle, setGithubHandle] = useState(() => localStorage.getItem('student_github_handle') || 'alex-chen')
-  const [leetcodeHandle, setLeetcodeHandle] = useState(() => localStorage.getItem('student_leetcode_handle') || 'alex_coder')
+  const [githubHandle, setGithubHandle] = useState(() => localStorage.getItem('student_github_handle') || '')
+  const [leetcodeHandle, setLeetcodeHandle] = useState(() => localStorage.getItem('student_leetcode_handle') || '')
   const [editingHandles, setEditingHandles] = useState(false)
   const [tempGithub, setTempGithub] = useState(githubHandle)
   const [tempLeetcode, setTempLeetcode] = useState(leetcodeHandle)
 
+  // Live GitHub API State
+  const [githubData, setGithubData] = useState<{
+    public_repos: number
+    followers: number
+    avatar_url: string
+    name: string
+    bio: string
+    html_url: string
+  } | null>(null)
+  const [githubLoading, setGithubLoading] = useState(false)
+  const [githubError, setGithubError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!githubHandle.trim()) {
+      setGithubData(null)
+      setGithubError(null)
+      return
+    }
+    let isMounted = true
+    setGithubLoading(true)
+    setGithubError(null)
+
+    fetch(`https://api.github.com/users/${encodeURIComponent(githubHandle.trim())}`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error('User not found')
+        return res.json()
+      })
+      .then((data) => {
+        if (isMounted) {
+          setGithubData({
+            public_repos: data.public_repos ?? 0,
+            followers: data.followers ?? 0,
+            avatar_url: data.avatar_url,
+            name: data.name || data.login,
+            bio: data.bio || '',
+            html_url: data.html_url,
+          })
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setGithubError('GitHub profile not found')
+          setGithubData(null)
+        }
+      })
+      .finally(() => {
+        if (isMounted) setGithubLoading(false)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [githubHandle])
+
   const [verifiedBadges, setVerifiedBadges] = useState<any[]>(() => {
     try {
       const saved = localStorage.getItem('student_verified_badges')
-      if (saved) return JSON.parse(saved)
-      return [
-        {
-          topicId: 'python',
-          title: 'Verified Python Specialist',
-          score: 100,
-          date: new Date().toLocaleDateString(),
-        },
-      ]
+      return saved ? JSON.parse(saved) : []
     } catch {
       return []
     }
@@ -656,16 +702,7 @@ export function StudentProfilePage() {
   const [recommendations, setRecommendations] = useState<any[]>(() => {
     try {
       const saved = localStorage.getItem('student_recommendations')
-      if (saved) return JSON.parse(saved)
-      return [
-        {
-          mentorName: 'Prof. Ananya Desai',
-          title: 'Head of Computer Systems Dept',
-          institution: 'National Institute of Tech',
-          quote: 'Demonstrates outstanding architectural aptitude in async microservices and maintains disciplined clean-code standards.',
-          date: 'Aug 2026',
-        },
-      ]
+      return saved ? JSON.parse(saved) : []
     } catch {
       return []
     }
@@ -960,81 +997,120 @@ export function StudentProfilePage() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {/* GitHub Card */}
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center">
-                          <Github className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-900 dark:text-white">GitHub</h4>
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400">@{githubHandle || 'unlinked'}</p>
-                        </div>
+                  {/* Real GitHub Card */}
+                  {!githubHandle ? (
+                    <div className="p-4 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/30 dark:bg-slate-800/20 text-center space-y-2 flex flex-col justify-center items-center">
+                      <Github className="w-6 h-6 text-slate-400" />
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-900 dark:text-white">GitHub Unlinked</h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Connect your GitHub to showcase public repositories and activity.</p>
                       </div>
-                      <a
-                        href={`https://github.com/${githubHandle}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
+                      <Button size="sm" variant="outline" onClick={() => setEditingHandles(true)}>
+                        Connect GitHub
+                      </Button>
                     </div>
+                  ) : githubLoading ? (
+                    <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 animate-pulse space-y-3">
+                      <div className="h-6 bg-slate-200 dark:bg-slate-700 rounded w-2/3" />
+                      <div className="h-8 bg-slate-200 dark:bg-slate-700 rounded" />
+                    </div>
+                  ) : githubError ? (
+                    <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/40 dark:bg-rose-950/20 space-y-2 text-center flex flex-col justify-center items-center">
+                      <p className="text-xs text-rose-600 dark:text-rose-400">GitHub handle @{githubHandle} not found.</p>
+                      <Button size="sm" variant="outline" onClick={() => setEditingHandles(true)}>
+                        Edit Handle
+                      </Button>
+                    </div>
+                  ) : githubData ? (
+                    <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {githubData.avatar_url ? (
+                            <img src={githubData.avatar_url} alt={githubHandle} className="w-8 h-8 rounded-lg object-cover shrink-0" />
+                          ) : (
+                            <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center shrink-0">
+                              <Github className="w-4 h-4" />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">{githubData.name || 'GitHub'}</h4>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">@{githubHandle}</p>
+                          </div>
+                        </div>
+                        <a
+                          href={githubData.html_url || `https://github.com/${githubHandle}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0"
+                          title="View on GitHub"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
 
-                    <div className="grid grid-cols-3 gap-1 pt-1 border-t border-slate-200/60 dark:border-slate-700/60 text-center">
-                      <div className="p-1.5">
-                        <span className="block text-xs font-bold text-slate-900 dark:text-white">18</span>
-                        <span className="text-[10px] text-slate-400">Repos</span>
-                      </div>
-                      <div className="p-1.5">
-                        <span className="block text-xs font-bold text-slate-900 dark:text-white">42</span>
-                        <span className="text-[10px] text-slate-400">Stars</span>
-                      </div>
-                      <div className="p-1.5">
-                        <span className="block text-xs font-bold text-emerald-600 dark:text-emerald-400">98.4%</span>
-                        <span className="text-[10px] text-slate-400">Commit Pct</span>
+                      <div className="grid grid-cols-2 gap-1 pt-1 border-t border-slate-200/60 dark:border-slate-700/60 text-center">
+                        <div className="p-1.5">
+                          <span className="block text-xs font-bold text-slate-900 dark:text-white">{githubData.public_repos}</span>
+                          <span className="text-[10px] text-slate-400">Public Repos</span>
+                        </div>
+                        <div className="p-1.5">
+                          <span className="block text-xs font-bold text-slate-900 dark:text-white">{githubData.followers}</span>
+                          <span className="text-[10px] text-slate-400">Followers</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  ) : null}
 
                   {/* LeetCode Card */}
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold text-xs">
-                          LC
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-900 dark:text-white">LeetCode</h4>
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400">@{leetcodeHandle || 'unlinked'}</p>
-                        </div>
+                  {!leetcodeHandle ? (
+                    <div className="p-4 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/30 dark:bg-slate-800/20 text-center space-y-2 flex flex-col justify-center items-center">
+                      <div className="w-6 h-6 rounded bg-amber-500 text-white font-bold text-[10px] flex items-center justify-center">
+                        LC
                       </div>
-                      <a
-                        href={`https://leetcode.com/${leetcodeHandle}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-900 dark:text-white">LeetCode Unlinked</h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Link your profile to display verified competitive problem solving.</p>
+                      </div>
+                      <Button size="sm" variant="outline" onClick={() => setEditingHandles(true)}>
+                        Connect LeetCode
+                      </Button>
                     </div>
+                  ) : (
+                    <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                            LC
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className="text-xs font-bold text-slate-900 dark:text-white">LeetCode</h4>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">@{leetcodeHandle}</p>
+                          </div>
+                        </div>
+                        <a
+                          href={`https://leetcode.com/${leetcodeHandle}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0"
+                          title="View on LeetCode"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
 
-                    <div className="grid grid-cols-3 gap-1 pt-1 border-t border-slate-200/60 dark:border-slate-700/60 text-center">
-                      <div className="p-1.5">
-                        <span className="block text-xs font-bold text-slate-900 dark:text-white">164</span>
-                        <span className="text-[10px] text-slate-400">Solved</span>
-                      </div>
-                      <div className="p-1.5">
-                        <span className="block text-xs font-bold text-indigo-600 dark:text-indigo-400">Top 9%</span>
-                        <span className="text-[10px] text-slate-400">Global</span>
-                      </div>
-                      <div className="p-1.5">
-                        <span className="block text-xs font-bold text-amber-600 dark:text-amber-400">1,780</span>
-                        <span className="text-[10px] text-slate-400">Rating</span>
+                      <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between text-xs px-1">
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">Public Profile</span>
+                        <a
+                          href={`https://leetcode.com/${leetcodeHandle}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline"
+                        >
+                          View Solved Problems &rarr;
+                        </a>
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -1056,7 +1132,16 @@ export function StudentProfilePage() {
             </CardHeader>
             <CardContent>
               {recommendations.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center py-4">No endorsements added yet.</p>
+                <div className="text-center py-6 space-y-2">
+                  <GraduationCap className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto" />
+                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">No mentor endorsements yet</p>
+                  <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                    Request formal recommendations from professors, department heads, or past project leads to elevate your profile.
+                  </p>
+                  <Button size="sm" variant="outline" onClick={() => setIsRecModalOpen(true)}>
+                    Add First Endorsement
+                  </Button>
+                </div>
               ) : (
                 <div className="space-y-3">
                   {recommendations.map((rec, i) => (
@@ -1099,9 +1184,12 @@ export function StudentProfilePage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {verifiedBadges.length === 0 ? (
-                <div className="text-center py-4 space-y-2">
+                <div className="text-center py-5 space-y-2">
                   <Award className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto" />
-                  <p className="text-xs text-slate-500 dark:text-slate-400">No skill badges earned yet.</p>
+                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">No skill badges earned yet</p>
+                  <p className="text-[11px] text-slate-400">
+                    Complete a timed technical assessment to verify competencies and earn gold badges on your profile.
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-2">
