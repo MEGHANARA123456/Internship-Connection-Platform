@@ -1,0 +1,92 @@
+{
+  "student_registered": {
+    "id": 36,
+    "email": "student_e2e_1788425149@university.edu",
+    "role": "STUDENT",
+    "is_verified": false
+  },
+  "student_mailpit_delivered": "Verify your account",
+  "student_logged_in": {
+    "user_id": 36,
+    "role": "STUDENT"
+  },
+  "student_resume_verified": {
+    "id": 10,
+    "original_filename": "jane_doe_resume.pdf",
+    "content_type": "application/pdf",
+    "file_size": 74
+  },
+  "company_verified": {
+    "id": 12,
+    "user_id": 37,
+    "company_name": "NextGen Technologies",
+    "industry": "Artificial Intelligence",
+    "website": "https://nextgen.tech",
+    "description": "Building modern agentic AI infrastructure.",
+    "verification_status": "VERIFIED"
+  },
+  "job_published": {
+    "id": 10,
+    "status": "PUBLISHED"
+  },
+  "application_submitted": {
+    "id": 9,
+    "internship_id": 10,
+    "student_id": 36,
+    "status": "APPLIED",
+    "cover_note": "I have extensive experience building FastAPI backends with React.",
+    "created_at": "2026-09-03T08:45:52.699512Z",
+    "updated_at": "2026-09-03T08:45:52.699519Z",
+    "student_name": "Jane Doe",
+    "student_university": "Stanford University",
+    "student_skills": [
+      "Python",
+      " React",
+      " TypeScript",
+      " FastAPI",
+      " PostgreSQL"
+    ],
+    "resume_id": 10
+  },
+  "interview_scheduled": {
+    "scheduled_at": "2026-09-15T14:00:00Z",
+    "interview_type": "VIDEO",
+    "meeting_link": "https://meet.google.com/e2e-live-test",
+    "notes": "System design and live code pairing.",
+    "id": 7,
+    "application_id": 9,
+    "scheduled_by": 37,
+    "status": "SCHEDULED"
+  },
+  "candidate_selected": {
+    "id": 9,
+    "internship_id": 10,
+    "student_id": 36,
+    "status": "SELECTED",
+    "cover_note": "I have extensive experience building FastAPI backends with React.",
+    "created_at": "2026-09-03T08:45:52.699512Z",
+    "updated_at": "2026-09-03T08:45:52.875577Z",
+    "student_name": "Jane Doe",
+    "student_university": "Stanford University",
+    "student_skills": [
+      "Python",
+      " React",
+      " TypeScript",
+      " FastAPI",
+      " PostgreSQL"
+    ],
+    "resume_id": 10
+  },
+  "messaging_verified": 2,
+  "dispute_resolved": {
+    "id": 2,
+    "reporter_id": 36,
+    "reported_user_id": null,
+    "internship_id": 10,
+    "reason": "Sample test report for compliance audit validation.",
+    "status": "RESOLVED",
+    "resolution_notes": "Reviewed posting compliance with recruiter and closed audit.",
+    "created_at": "2026-09-03T08:45:52.999240Z",
+    "updated_at": "2026-09-03T08:45:53.037966Z"
+  }
+}

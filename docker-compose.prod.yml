@@ -1,0 +1,23 @@
+services:
+  db:
+    restart: unless-stopped
+    ports: []
+  backend:
+    restart: unless-stopped
+    ports: ["127.0.0.1:8000:8000"]
+  frontend:
+    image: null
+    command: null
+    working_dir: null
+    volumes: []
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
+    restart: unless-stopped
+    ports: ["80:80"]
+    depends_on:
+      backend:
+        condition: service_healthy
+  mailpit:
+    profiles: ["dev-mail"]
