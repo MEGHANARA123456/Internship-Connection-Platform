@@ -18,10 +18,15 @@ import {
   Building,
   CheckCircle2,
   Users,
+  Sun,
+  Moon,
+  GraduationCap,
 } from 'lucide-react'
+import { useThemeStore } from '../../store/theme'
 
 export function Navbar() {
   const { session, logout } = useAuthStore()
+  const { setTheme, isDark } = useThemeStore()
   const navigate = useNavigate()
   const location = useLocation()
   const [unreadCount, setUnreadCount] = useState(0)
@@ -60,11 +65,11 @@ export function Navbar() {
   const isActive = (path: string) => location.pathname === path
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-slate-200 bg-white/95 backdrop-blur-xs shadow-2xs">
+    <header className="sticky top-0 z-40 w-full border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xs shadow-2xs transition-colors">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
         {/* Brand */}
         <div className="flex items-center gap-3">
-          <Link to="/" className="flex items-center gap-2 text-slate-900 font-bold text-base tracking-tight hover:text-indigo-600 transition-colors">
+          <Link to="/" className="flex items-center gap-2 text-slate-900 dark:text-white font-bold text-base tracking-tight hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
             <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-black text-sm shadow-xs">
               IC
             </div>
@@ -91,6 +96,17 @@ export function Navbar() {
                 }`}
               >
                 Browse Internships
+              </Link>
+              <Link
+                to="/college/dashboard"
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                  isActive('/college/dashboard')
+                    ? 'bg-indigo-50 text-indigo-700'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <GraduationCap className="w-4 h-4 text-indigo-500" />
+                Campus TPO
               </Link>
               <Link
                 to="/login"
@@ -163,6 +179,17 @@ export function Navbar() {
                 <User className="w-4 h-4" />
                 My Profile
               </Link>
+              <Link
+                to="/college/dashboard"
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                  isActive('/college/dashboard')
+                    ? 'bg-indigo-50 text-indigo-700'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <GraduationCap className="w-4 h-4 text-indigo-500" />
+                Campus TPO
+              </Link>
             </>
           )}
 
@@ -221,6 +248,17 @@ export function Navbar() {
               >
                 <Building className="w-4 h-4" />
                 Company Profile
+              </Link>
+              <Link
+                to="/college/dashboard"
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                  isActive('/college/dashboard')
+                    ? 'bg-indigo-50 text-indigo-700'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <GraduationCap className="w-4 h-4 text-indigo-500" />
+                Campus TPO
               </Link>
             </>
           )}
@@ -287,12 +325,22 @@ export function Navbar() {
         </nav>
 
         {/* User Right Slot */}
-        <div className="hidden md:flex items-center gap-3">
+        <div className="hidden md:flex items-center gap-2">
+          {/* Theme Toggle Button */}
+          <button
+            onClick={() => setTheme(isDark ? 'light' : 'dark')}
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-800 transition-colors"
+            title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label="Toggle theme"
+          >
+            {isDark ? <Sun className="w-5 h-5 text-amber-400" /> : <Moon className="w-5 h-5 text-slate-600 dark:text-slate-300" />}
+          </button>
+
           {session && (
             <>
               <Link
                 to="/notifications"
-                className="relative p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                className="relative p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-800 transition-colors"
                 title="Notifications"
               >
                 <Bell className="w-5 h-5" />
@@ -307,8 +355,8 @@ export function Navbar() {
                 variant="ghost"
                 size="sm"
                 onClick={handleSignOut}
-                leftIcon={<LogOut className="w-4 h-4 text-slate-500" />}
-                className="text-slate-600 hover:text-rose-600 hover:bg-rose-50"
+                leftIcon={<LogOut className="w-4 h-4 text-slate-500 dark:text-slate-400" />}
+                className="text-slate-600 dark:text-slate-300 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30"
               >
                 Sign out
               </Button>
@@ -316,10 +364,20 @@ export function Navbar() {
           )}
         </div>
 
-        {/* Mobile menu hamburger */}
-        <div className="flex items-center gap-2 md:hidden">
+        {/* Mobile menu right controls */}
+        <div className="flex items-center gap-1.5 md:hidden">
+          {/* Mobile Theme Toggle */}
+          <button
+            onClick={() => setTheme(isDark ? 'light' : 'dark')}
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition-colors"
+            title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label="Toggle theme"
+          >
+            {isDark ? <Sun className="w-5 h-5 text-amber-400" /> : <Moon className="w-5 h-5 text-slate-600 dark:text-slate-300" />}
+          </button>
+
           {session && unreadCount > 0 && (
-            <Link to="/notifications" className="relative p-1.5 text-slate-600">
+            <Link to="/notifications" className="relative p-1.5 text-slate-600 dark:text-slate-300">
               <Bell className="w-5 h-5" />
               <span className="absolute top-1 right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-rose-500 text-[9px] font-bold text-white">
                 {unreadCount}
@@ -328,7 +386,7 @@ export function Navbar() {
           )}
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
-            className="p-2 rounded-lg text-slate-600 hover:bg-slate-100"
+            className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             {mobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
           </button>
@@ -337,7 +395,7 @@ export function Navbar() {
 
       {/* Mobile navigation drawer */}
       {mobileOpen && (
-        <div className="md:hidden border-t border-slate-200 bg-white px-4 py-3 space-y-2">
+        <div className="md:hidden border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 space-y-2">
           {!session ? (
             <div className="flex flex-col gap-2">
               <Link

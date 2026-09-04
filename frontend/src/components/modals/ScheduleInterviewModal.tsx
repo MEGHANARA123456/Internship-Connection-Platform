@@ -8,7 +8,7 @@ import { Input } from '../ui/Input'
 import { Select } from '../ui/Select'
 import { Textarea } from '../ui/Textarea'
 import { Button } from '../ui/Button'
-import { Calendar, CheckCircle2 } from 'lucide-react'
+import { Calendar, CheckCircle2, Clock, Sparkles } from 'lucide-react'
 
 const interviewSchema = z.object({
   scheduled_at: z.string().min(1, 'Interview date & time is required'),
@@ -36,30 +36,74 @@ export function ScheduleInterviewModal({
 }: ScheduleInterviewModalProps) {
   const [success, setSuccess] = useState(false)
   const [serverError, setServerError] = useState('')
+  const [selectedDuration, setSelectedDuration] = useState('45 min')
 
   const {
     register,
     handleSubmit,
+    setValue,
     reset,
     formState: { errors, isSubmitting },
   } = useForm<InterviewFormData>({
     resolver: zodResolver(interviewSchema),
     defaultValues: {
       interview_type: 'VIDEO',
+      meeting_link: `In-App Encrypted Video Room #${applicationId}`,
     },
   })
+
+  // Generates quick time slot helpers (Tomorrow 10 AM, etc.)
+  const generateQuickSlots = () => {
+    const slots = []
+    const now = new Date()
+
+    // Tomorrow 10:00 AM
+    const tomorrow10 = new Date(now)
+    tomorrow10.setDate(tomorrow10.getDate() + 1)
+    tomorrow10.setHours(10, 0, 0, 0)
+
+    // Tomorrow 2:30 PM
+    const tomorrow14 = new Date(now)
+    tomorrow14.setDate(tomorrow14.getDate() + 1)
+    tomorrow14.setHours(14, 30, 0, 0)
+
+    // In 2 days 11:00 AM
+    const dayAfter11 = new Date(now)
+    dayAfter11.setDate(dayAfter11.getDate() + 2)
+    dayAfter11.setHours(11, 0, 0, 0)
+
+    // In 3 days 3:00 PM
+    const in3Days15 = new Date(now)
+    in3Days15.setDate(in3Days15.getDate() + 3)
+    in3Days15.setHours(15, 0, 0, 0)
+
+    slots.push({ label: 'Tomorrow 10:00 AM', date: tomorrow10 })
+    slots.push({ label: 'Tomorrow 2:30 PM', date: tomorrow14 })
+    slots.push({ label: 'In 2 Days 11:00 AM', date: dayAfter11 })
+    slots.push({ label: 'In 3 Days 3:00 PM', date: in3Days15 })
+
+    return slots
+  }
+
+  const handlePickSlot = (date: Date) => {
+    // Format to YYYY-MM-DDTHH:mm for datetime-local input
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const formatted = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+      date.getHours()
+    )}:${pad(date.getMinutes())}`
+    setValue('scheduled_at', formatted, { shouldValidate: true })
+  }
 
   const onSubmit = async (data: InterviewFormData) => {
     setServerError('')
     try {
-      // Format datetime to ISO
       const isoDate = new Date(data.scheduled_at).toISOString()
 
       await api.post(`/applications/${applicationId}/interviews`, {
         scheduled_at: isoDate,
         interview_type: data.interview_type,
         meeting_link: data.meeting_link?.trim() || null,
-        notes: data.notes?.trim() || null,
+        notes: data.notes ? `[Duration: ${selectedDuration}] ${data.notes.trim()}` : `Duration: ${selectedDuration}`,
       })
 
       setSuccess(true)
@@ -69,7 +113,7 @@ export function ScheduleInterviewModal({
         onScheduled()
         onClose()
       }, 1500)
-    } catch (err: unknown) {
+    } catch {
       setServerError('Failed to schedule interview. Ensure application is Shortlisted.')
     }
   }
@@ -80,15 +124,37 @@ export function ScheduleInterviewModal({
       onClose={onClose}
       title="Schedule Interview"
       description={`Invite ${candidateName || 'the candidate'} to an interview.`}
+      maxWidth="lg"
     >
       {success ? (
-        <div className="flex flex-col items-center justify-center p-6 text-center text-emerald-700 space-y-2">
-          <CheckCircle2 className="w-10 h-10 text-emerald-600" />
+        <div className="flex flex-col items-center justify-center p-6 text-center text-emerald-700 dark:text-emerald-400 space-y-2">
+          <CheckCircle2 className="w-10 h-10 text-emerald-600 dark:text-emerald-400" />
           <p className="text-sm font-semibold">Interview scheduled successfully!</p>
-          <p className="text-xs text-slate-500">Candidate has been notified via in-app notification & email.</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Candidate has been notified via in-app notification & email with instant calendar sync.</p>
         </div>
       ) : (
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          {/* Quick Calendly-style Slot Suggestions */}
+          <div>
+            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 mb-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+              Quick Recommended Slots
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {generateQuickSlots().map((slot, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => handlePickSlot(slot.date)}
+                  className="px-2.5 py-1.5 text-left text-xs rounded-lg border border-slate-200 dark:border-slate-700 hover:border-indigo-500 dark:hover:border-indigo-500 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/40 text-slate-700 dark:text-slate-300 transition-colors flex items-center justify-between"
+                >
+                  <span>{slot.label}</span>
+                  <Clock className="w-3 h-3 text-slate-400" />
+                </button>
+              ))}
+            </div>
+          </div>
+
           <Input
             label="Date & Time"
             type="datetime-local"
@@ -96,10 +162,33 @@ export function ScheduleInterviewModal({
             {...register('scheduled_at')}
           />
 
+          {/* Duration Selector */}
+          <div>
+            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1.5">
+              Session Duration
+            </label>
+            <div className="flex gap-2">
+              {['30 min', '45 min', '60 min'].map((dur) => (
+                <button
+                  key={dur}
+                  type="button"
+                  onClick={() => setSelectedDuration(dur)}
+                  className={`flex-1 py-1.5 text-xs rounded-lg border font-medium transition-colors ${
+                    selectedDuration === dur
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {dur}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <Select
             label="Interview Format"
             options={[
-              { label: 'Video Call (Google Meet, Zoom, etc.)', value: 'VIDEO' },
+              { label: 'Video Call (In-App Encrypted WebRTC Room)', value: 'VIDEO' },
               { label: 'Phone Call', value: 'PHONE' },
               { label: 'In Person', value: 'IN_PERSON' },
             ]}
@@ -109,9 +198,9 @@ export function ScheduleInterviewModal({
 
           <Input
             label="Meeting Link or Location"
-            placeholder="https://meet.google.com/abc-defg-hij"
+            placeholder="https://meet.google.com/abc-defg-hij or In-App Room"
             error={errors.meeting_link?.message}
-            helperText="Provide video meeting link or office address"
+            helperText="Provide video meeting link or in-app session link"
             {...register('meeting_link')}
           />
 
@@ -125,7 +214,7 @@ export function ScheduleInterviewModal({
 
           {serverError && <p className="text-xs text-rose-600 font-medium">{serverError}</p>}
 
-          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
             <Button type="button" variant="outline" size="sm" onClick={onClose}>
               Cancel
             </Button>
