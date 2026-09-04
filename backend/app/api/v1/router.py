@@ -9,6 +9,9 @@ from app.api.v1.applications import router as applications_router
 from app.api.v1.communication import router as communication_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.reports import router as reports_router
+from app.api.v1.ai import router as ai_router
+from app.api.v1.ws import router as ws_router
+from app.api.v1.institution import router as institution_router
 from app.api.v1.dependencies import require_roles
 from app.models import User, UserRole
 
@@ -20,6 +23,9 @@ api_router.include_router(applications_router)
 api_router.include_router(communication_router)
 api_router.include_router(admin_router)
 api_router.include_router(reports_router)
+api_router.include_router(ai_router)
+api_router.include_router(ws_router)
+api_router.include_router(institution_router)
 
 
 @api_router.get("/health", tags=["health"])
