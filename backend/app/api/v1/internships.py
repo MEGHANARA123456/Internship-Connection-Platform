@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
 from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
-from app.models import Internship, User, UserRole
+from app.models import CompanyProfile, Internship, User, UserRole
 from app.schemas.internship import InternshipInput, InternshipPage, InternshipResponse
 
 router = APIRouter(prefix="/internships", tags=["internships"])
@@ -15,10 +15,16 @@ admin_only = Annotated[User, Depends(require_roles(UserRole.ADMIN))]
 optional_user = Annotated[User | None, Depends(get_current_user_optional)]
 
 
-def output(item: Internship) -> dict:
+def output(item: Internship, company_name: str | None = None) -> dict:
     data = {key: getattr(item, key) for key in ("id", "company_id", "title", "description", "location", "industry", "duration_months", "stipend", "work_mode", "deadline", "status", "created_at")}
     data["skills"] = [skill for skill in item.skills.split(",") if skill]
+    data["company_name"] = company_name or "Enterprise Partner"
     return data
+
+
+async def get_company_name(company_id: int, db: DbSession) -> str:
+    profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == company_id))
+    return profile.company_name if (profile and profile.company_name) else "Enterprise Partner"
 
 
 def transition_allowed(current: str, target: str) -> bool:
@@ -29,13 +35,15 @@ def transition_allowed(current: str, target: str) -> bool:
 async def create_internship(data: InternshipInput, user: company_only, db: DbSession) -> dict:
     item = Internship(company_id=user.id, status="DRAFT", skills=",".join(data.skills), **data.model_dump(exclude={"skills"}))
     db.add(item); await db.commit(); await db.refresh(item)
-    return output(item)
+    cname = await get_company_name(user.id, db)
+    return output(item, cname)
 
 
 @router.get("/mine", response_model=list[InternshipResponse])
 async def list_company_internships(user: company_only, db: DbSession) -> list[dict]:
-    result = await db.scalars(select(Internship).where(Internship.company_id == user.id).order_by(Internship.created_at.desc()))
-    return [output(item) for item in result]
+    result = list(await db.scalars(select(Internship).where(Internship.company_id == user.id).order_by(Internship.created_at.desc())))
+    cname = await get_company_name(user.id, db)
+    return [output(item, cname) for item in result]
 
 
 @router.get("", response_model=InternshipPage)
@@ -53,8 +61,11 @@ async def browse_internships(db: DbSession, user: optional_user, location: str |
     if deadline_before: filters.append(Internship.deadline <= deadline_before)
     if filters: query = query.where(*filters)
     total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    result = await db.scalars(query.order_by(Internship.created_at.desc()).offset((page - 1) * page_size).limit(page_size))
-    return InternshipPage(items=[output(item) for item in result], page=page, page_size=page_size, total=total)
+    items = list(await db.scalars(query.order_by(Internship.created_at.desc()).offset((page - 1) * page_size).limit(page_size)))
+    company_ids = {item.company_id for item in items}
+    comp_profiles = (await db.scalars(select(CompanyProfile).where(CompanyProfile.user_id.in_(company_ids)))).all() if company_ids else []
+    comp_map = {cp.user_id: cp.company_name for cp in comp_profiles if cp.company_name}
+    return InternshipPage(items=[output(item, comp_map.get(item.company_id)) for item in items], page=page, page_size=page_size, total=total)
 
 
 @router.get("/{internship_id}", response_model=InternshipResponse)
@@ -69,7 +80,8 @@ async def get_internship(internship_id: int, db: DbSession, user: optional_user)
             pass
         else:
             raise HTTPException(404, "Internship not found")
-    return output(item)
+    cname = await get_company_name(item.company_id, db)
+    return output(item, cname)
 
 
 @router.put("/{internship_id}", response_model=InternshipResponse)
@@ -78,7 +90,9 @@ async def edit_internship(internship_id: int, data: InternshipInput, user: compa
     if item is None: raise HTTPException(404, "Internship not found")
     for key, value in data.model_dump(exclude={"skills"}).items(): setattr(item, key, value)
     item.skills = ",".join(data.skills); item.status = "DRAFT"
-    await db.commit(); await db.refresh(item); return output(item)
+    await db.commit(); await db.refresh(item)
+    cname = await get_company_name(item.company_id, db)
+    return output(item, cname)
 
 
 @router.post("/{internship_id}/status", response_model=InternshipResponse)
@@ -86,7 +100,9 @@ async def change_status(internship_id: int, target: str, user: company_only, db:
     item = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id))
     if item is None: raise HTTPException(404, "Internship not found")
     if target not in {"PENDING_APPROVAL", "CLOSED"} or not transition_allowed(item.status, target): raise HTTPException(409, f"Cannot move {item.status} to {target}")
-    item.status = target; await db.commit(); await db.refresh(item); return output(item)
+    item.status = target; await db.commit(); await db.refresh(item)
+    cname = await get_company_name(item.company_id, db)
+    return output(item, cname)
 
 
 @router.post("/{internship_id}/submit", response_model=InternshipResponse)
@@ -105,7 +121,9 @@ async def review_internship(internship_id: int, target: str, user: admin_only, d
     if item is None: raise HTTPException(404, "Internship not found")
     if item.status != "PENDING_APPROVAL" or target not in {"PUBLISHED", "REJECTED"}:
         raise HTTPException(409, f"Cannot review {item.status} as {target}")
-    item.status = target; await db.commit(); await db.refresh(item); return output(item)
+    item.status = target; await db.commit(); await db.refresh(item)
+    cname = await get_company_name(item.company_id, db)
+    return output(item, cname)
 
 
 @router.delete("/{internship_id}", status_code=204)
