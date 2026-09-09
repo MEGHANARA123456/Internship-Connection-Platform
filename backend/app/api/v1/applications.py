@@ -4,7 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import func, select
 
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
-from app.models import Application, Internship, Notification, Resume, StudentProfile, User, UserRole
+from app.models import Application, CompanyProfile, Internship, Notification, Resume, StudentProfile, User, UserRole
 from app.services.mail import send_dev_email
 from app.schemas.application import ApplicationCreate, ApplicationDashboard, ApplicationResponse, ApplicationStatusUpdate
 
@@ -31,10 +31,12 @@ async def serialize(application: Application, db: DbSession) -> dict:
     student = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == application.student_id))
     resume = await db.scalar(select(Resume).where(Resume.student_id == application.student_id))
     internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id))
+    comp = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == internship.company_id)) if (internship and internship.company_id) else None
     return {
         "id": application.id,
         "internship_id": application.internship_id,
         "internship_title": internship.title if internship else None,
+        "company_name": comp.company_name if (comp and comp.company_name) else "Enterprise Partner",
         "student_id": application.student_id,
         "status": application.status,
         "cover_note": application.cover_note,

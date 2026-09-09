@@ -21,6 +21,7 @@ import {
   Ban,
   RotateCcw,
   RefreshCw,
+  Building2,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
@@ -793,8 +794,12 @@ export function AdminModerationPage() {
                     <h3 className="text-base font-bold text-slate-900">{job.title}</h3>
                     <Badge status="PENDING_APPROVAL">Pending Approval</Badge>
                   </div>
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600">
+                    <Building2 className="w-3.5 h-3.5" />
+                    <span>{job.company_name || `Company #${job.company_id}`}</span>
+                  </div>
                   <p className="text-xs text-slate-500">
-                    Company #{job.company_id} • {job.industry} • {job.location} • ${job.stipend}/mo •{' '}
+                    {job.industry} • {job.location} • ${job.stipend}/mo •{' '}
                     {job.duration_months} mo • {job.work_mode}
                   </p>
                   <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-md border border-slate-100 mt-2 leading-relaxed">

@@ -27,6 +27,7 @@ class ApplicationResponse(BaseModel):
     student_skills: list[str] = []
     resume_id: int | None = None
     internship_title: str | None = None
+    company_name: str | None = None
 
 
 class ApplicationDashboard(BaseModel):

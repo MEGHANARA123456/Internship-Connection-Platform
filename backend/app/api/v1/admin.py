@@ -81,7 +81,26 @@ async def verify_company(user_id: int, data: ModerationStatus, db: DbSession, us
 async def moderation_queue(db: DbSession, user: admin_user, status: str | None = None) -> list[dict]:
     query = select(Internship).order_by(Internship.created_at.desc())
     if status: query = query.where(Internship.status == status)
-    return [{"id": item.id, "title": item.title, "company_id": item.company_id, "status": item.status} for item in await db.scalars(query)]
+    items = list(await db.scalars(query))
+    company_ids = {item.company_id for item in items}
+    comp_profiles = (await db.scalars(select(CompanyProfile).where(CompanyProfile.user_id.in_(company_ids)))).all() if company_ids else []
+    comp_map = {cp.user_id: cp.company_name for cp in comp_profiles if cp.company_name}
+    return [
+        {
+            "id": item.id,
+            "title": item.title,
+            "company_id": item.company_id,
+            "company_name": comp_map.get(item.company_id, f"Company #{item.company_id}"),
+            "status": item.status,
+            "description": item.description,
+            "location": item.location,
+            "industry": item.industry,
+            "stipend": item.stipend,
+            "duration_months": item.duration_months,
+            "work_mode": item.work_mode,
+        }
+        for item in items
+    ]
 
 
 @router.post("/internships/{internship_id}/moderate", response_model=dict)

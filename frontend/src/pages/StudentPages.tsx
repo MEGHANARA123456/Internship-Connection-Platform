@@ -48,6 +48,7 @@ import {
   ExternalLink,
   GraduationCap,
   BarChart3,
+  Building2,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 
@@ -296,7 +297,7 @@ export function OpportunitiesPage() {
               onClick={() => setSelectedJob(job)}
             >
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-base font-bold text-slate-900 hover:text-indigo-600 transition-colors">
                       {job.title}
@@ -304,6 +305,12 @@ export function OpportunitiesPage() {
                     <Badge status={job.work_mode}>{job.work_mode}</Badge>
                     <Badge variant="slate">{job.industry}</Badge>
                   </div>
+
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                    <Building2 className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    <span>{job.company_name || 'Enterprise Partner'}</span>
+                  </div>
+
                   <p className="text-xs text-slate-500 line-clamp-2 max-w-3xl leading-relaxed">
                     {job.description}
                   </p>
@@ -414,10 +421,29 @@ export function OpportunitiesPage() {
           isOpen={!!selectedJob}
           onClose={() => setSelectedJob(null)}
           title={selectedJob.title}
-          description={`${selectedJob.industry} • ${selectedJob.location}`}
+          description={`${selectedJob.company_name ? `${selectedJob.company_name} • ` : ''}${selectedJob.industry} • ${selectedJob.location}`}
           maxWidth="lg"
         >
           <div className="space-y-4 text-xs leading-relaxed">
+            {/* Company Banner */}
+            <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 rounded-xl border border-indigo-100 dark:border-indigo-900/60 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-indigo-600 text-white shadow-2xs">
+                  <Building2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                    {selectedJob.company_name || 'Enterprise Partner'}
+                  </h4>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {selectedJob.industry} • {selectedJob.location}
+                  </p>
+                </div>
+              </div>
+              <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300">
+                Verified Employer
+              </span>
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 bg-slate-50 rounded-xl border border-slate-200">
               <div>
                 <span className="text-slate-400 block font-medium">Stipend</span>
@@ -632,6 +658,12 @@ export function ApplicationsPage() {
                       </h3>
                       <Badge status={app.status}>{app.status}</Badge>
                     </div>
+                    {app.company_name && (
+                      <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
+                        <Building2 className="w-3.5 h-3.5 text-indigo-500" />
+                        <span>{app.company_name}</span>
+                      </p>
+                    )}
                     <p className="text-xs text-slate-500 dark:text-slate-400">
                       Applied on {new Date(app.created_at).toLocaleDateString()}
                     </p>

@@ -23,6 +23,7 @@ class InternshipResponse(InternshipInput):
     company_id: int
     status: Status
     created_at: datetime
+    company_name: str | None = None
 
 
 class InternshipPage(BaseModel):
