@@ -30,7 +30,21 @@ def application_transition_allowed(current: str, target: str) -> bool:
 async def serialize(application: Application, db: DbSession) -> dict:
     student = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == application.student_id))
     resume = await db.scalar(select(Resume).where(Resume.student_id == application.student_id))
-    return {"id": application.id, "internship_id": application.internship_id, "student_id": application.student_id, "status": application.status, "cover_note": application.cover_note, "created_at": application.created_at, "updated_at": application.updated_at, "student_name": student.full_name if student else None, "student_university": student.university if student else None, "student_skills": [skill for skill in (student.skills if student else "").split(",") if skill], "resume_id": resume.id if resume else None}
+    internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id))
+    return {
+        "id": application.id,
+        "internship_id": application.internship_id,
+        "internship_title": internship.title if internship else None,
+        "student_id": application.student_id,
+        "status": application.status,
+        "cover_note": application.cover_note,
+        "created_at": application.created_at,
+        "updated_at": application.updated_at,
+        "student_name": student.full_name if student else None,
+        "student_university": student.university if student else None,
+        "student_skills": [skill for skill in (student.skills if student else "").split(",") if skill],
+        "resume_id": resume.id if resume else None,
+    }
 
 
 @router.post("/internships/{internship_id}", response_model=ApplicationResponse, status_code=201)
@@ -50,6 +64,17 @@ async def student_dashboard(user: student_only, db: DbSession) -> dict:
     applications = list(await db.scalars(select(Application).where(Application.student_id == user.id).order_by(Application.created_at.desc())))
     counts = {name: count for name, count in (await db.execute(select(Application.status, func.count()).where(Application.student_id == user.id).group_by(Application.status))).all()}
     return {"counts": counts, "applications": [await serialize(application, db) for application in applications]}
+
+
+@router.get("/company", response_model=list[ApplicationResponse])
+async def list_all_company_applications(user: company_only, db: DbSession) -> list[dict]:
+    applications = await db.scalars(
+        select(Application)
+        .join(Internship, Application.internship_id == Internship.id)
+        .where(Internship.company_id == user.id)
+        .order_by(Application.created_at.desc())
+    )
+    return [await serialize(application, db) for application in applications]
 
 
 @router.get("/internships/{internship_id}", response_model=list[ApplicationResponse])

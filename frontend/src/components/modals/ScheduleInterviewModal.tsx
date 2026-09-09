@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -8,7 +8,7 @@ import { Input } from '../ui/Input'
 import { Select } from '../ui/Select'
 import { Textarea } from '../ui/Textarea'
 import { Button } from '../ui/Button'
-import { Calendar, CheckCircle2, Clock, Sparkles } from 'lucide-react'
+import { Calendar, CheckCircle2, Clock, Sparkles, User, Briefcase, AlertCircle } from 'lucide-react'
 
 const interviewSchema = z.object({
   scheduled_at: z.string().min(1, 'Interview date & time is required'),
@@ -19,11 +19,13 @@ const interviewSchema = z.object({
 
 type InterviewFormData = z.infer<typeof interviewSchema>
 
-interface ScheduleInterviewModalProps {
+export interface ScheduleInterviewModalProps {
   isOpen: boolean
   onClose: () => void
-  applicationId: number
+  applicationId?: number
   candidateName?: string
+  jobId?: number
+  jobTitle?: string
   onScheduled: () => void
 }
 
@@ -32,11 +34,22 @@ export function ScheduleInterviewModal({
   onClose,
   applicationId,
   candidateName,
+  jobId,
+  jobTitle,
   onScheduled,
 }: ScheduleInterviewModalProps) {
   const [success, setSuccess] = useState(false)
   const [serverError, setServerError] = useState('')
   const [selectedDuration, setSelectedDuration] = useState('45 min')
+
+  // Dynamic selection state when applicationId is not pre-provided
+  const [jobs, setJobs] = useState<any[]>([])
+  const [selectedJobId, setSelectedJobId] = useState<number | undefined>(jobId)
+  const [candidates, setCandidates] = useState<any[]>([])
+  const [selectedAppId, setSelectedAppId] = useState<number | undefined>(applicationId)
+  const [loadingOptions, setLoadingOptions] = useState(false)
+
+  const activeAppId = applicationId || selectedAppId
 
   const {
     register,
@@ -48,31 +61,85 @@ export function ScheduleInterviewModal({
     resolver: zodResolver(interviewSchema),
     defaultValues: {
       interview_type: 'VIDEO',
-      meeting_link: `In-App Encrypted Video Room #${applicationId}`,
+      meeting_link: activeAppId ? `In-App Encrypted Video Room #${activeAppId}` : 'In-App Encrypted Video Room',
     },
   })
 
-  // Generates quick time slot helpers (Tomorrow 10 AM, etc.)
+  // Synchronize incoming props
+  useEffect(() => {
+    if (jobId) {
+      setSelectedJobId(jobId)
+    }
+    if (applicationId) {
+      setSelectedAppId(applicationId)
+      setValue('meeting_link', `In-App Encrypted Video Room #${applicationId}`)
+    }
+  }, [jobId, applicationId, setValue])
+
+  // Load jobs if neither applicationId nor jobId is passed
+  useEffect(() => {
+    if (isOpen && !applicationId && !jobId) {
+      setLoadingOptions(true)
+      api.get('/internships/company')
+        .then((res) => {
+          const list = res.data || []
+          setJobs(list)
+          if (list.length > 0 && !selectedJobId) {
+            setSelectedJobId(list[0].id)
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLoadingOptions(false))
+    }
+  }, [isOpen, applicationId, jobId])
+
+  // Fetch applicants whenever selectedJobId changes (and no fixed applicationId)
+  useEffect(() => {
+    if (isOpen && !applicationId && selectedJobId) {
+      setLoadingOptions(true)
+      api.get(`/applications/internships/${selectedJobId}`)
+        .then((res) => {
+          const list = res.data || []
+          setCandidates(list)
+          if (list.length > 0) {
+            setSelectedAppId(list[0].id)
+            setValue('meeting_link', `In-App Encrypted Video Room #${list[0].id}`)
+          } else {
+            setSelectedAppId(undefined)
+          }
+        })
+        .catch(() => {
+          setCandidates([])
+          setSelectedAppId(undefined)
+        })
+        .finally(() => setLoadingOptions(false))
+    }
+  }, [isOpen, applicationId, selectedJobId, setValue])
+
+  // Update meeting link when selectedAppId changes
+  useEffect(() => {
+    if (selectedAppId && !applicationId) {
+      setValue('meeting_link', `In-App Encrypted Video Room #${selectedAppId}`)
+    }
+  }, [selectedAppId, applicationId, setValue])
+
+  // Quick slot helpers (Tomorrow 10 AM, etc.)
   const generateQuickSlots = () => {
     const slots = []
     const now = new Date()
 
-    // Tomorrow 10:00 AM
     const tomorrow10 = new Date(now)
     tomorrow10.setDate(tomorrow10.getDate() + 1)
     tomorrow10.setHours(10, 0, 0, 0)
 
-    // Tomorrow 2:30 PM
     const tomorrow14 = new Date(now)
     tomorrow14.setDate(tomorrow14.getDate() + 1)
     tomorrow14.setHours(14, 30, 0, 0)
 
-    // In 2 days 11:00 AM
     const dayAfter11 = new Date(now)
     dayAfter11.setDate(dayAfter11.getDate() + 2)
     dayAfter11.setHours(11, 0, 0, 0)
 
-    // In 3 days 3:00 PM
     const in3Days15 = new Date(now)
     in3Days15.setDate(in3Days15.getDate() + 3)
     in3Days15.setHours(15, 0, 0, 0)
@@ -86,7 +153,6 @@ export function ScheduleInterviewModal({
   }
 
   const handlePickSlot = (date: Date) => {
-    // Format to YYYY-MM-DDTHH:mm for datetime-local input
     const pad = (n: number) => String(n).padStart(2, '0')
     const formatted = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
       date.getHours()
@@ -95,11 +161,17 @@ export function ScheduleInterviewModal({
   }
 
   const onSubmit = async (data: InterviewFormData) => {
+    const targetAppId = applicationId || selectedAppId
+    if (!targetAppId) {
+      setServerError('Please select a candidate to interview.')
+      return
+    }
+
     setServerError('')
     try {
       const isoDate = new Date(data.scheduled_at).toISOString()
 
-      await api.post(`/applications/${applicationId}/interviews`, {
+      await api.post(`/applications/${targetAppId}/interviews`, {
         scheduled_at: isoDate,
         interview_type: data.interview_type,
         meeting_link: data.meeting_link?.trim() || null,
@@ -113,27 +185,100 @@ export function ScheduleInterviewModal({
         onScheduled()
         onClose()
       }, 1500)
-    } catch {
-      setServerError('Failed to schedule interview. Ensure application is Shortlisted.')
+    } catch (err: any) {
+      setServerError(err.response?.data?.detail || 'Failed to schedule interview. Please try again.')
     }
   }
+
+  const activeCandidate = candidates.find((c) => c.id === selectedAppId)
+  const currentCandidateName = candidateName || (activeCandidate ? activeCandidate.student_name || `Applicant #${activeCandidate.student_id}` : 'the candidate')
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
       title="Schedule Interview"
-      description={`Invite ${candidateName || 'the candidate'} to an interview.`}
+      description={`Invite ${currentCandidateName} to an interview.`}
       maxWidth="lg"
     >
       {success ? (
         <div className="flex flex-col items-center justify-center p-6 text-center text-emerald-700 dark:text-emerald-400 space-y-2">
           <CheckCircle2 className="w-10 h-10 text-emerald-600 dark:text-emerald-400" />
           <p className="text-sm font-semibold">Interview scheduled successfully!</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">Candidate has been notified via in-app notification & email with instant calendar sync.</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Candidate has been notified via in-app notification & email with instant calendar sync.
+          </p>
         </div>
       ) : (
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          {/* Candidate / Job Context Selector */}
+          {applicationId ? (
+            <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 rounded-xl border border-indigo-100 dark:border-indigo-900/60 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-indigo-600 text-white">
+                <User className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-900 dark:text-white">
+                  Candidate: {candidateName || `Application #${applicationId}`}
+                </p>
+                {jobTitle && (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Role: {jobTitle}
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
+              {/* Job Selector (if not locked by jobId prop) */}
+              {!jobId && (
+                <Select
+                  label="Internship Role"
+                  value={selectedJobId || ''}
+                  onChange={(e) => setSelectedJobId(Number(e.target.value))}
+                  disabled={loadingOptions || jobs.length === 0}
+                  options={
+                    jobs.length > 0
+                      ? jobs.map((j) => ({ label: `${j.title} (${j.status})`, value: j.id }))
+                      : [{ label: 'No active internships found', value: '' }]
+                  }
+                />
+              )}
+
+              {jobId && jobTitle && (
+                <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-200">
+                  <Briefcase className="w-4 h-4 text-indigo-500" />
+                  <span>Role: {jobTitle}</span>
+                </div>
+              )}
+
+              {/* Candidate Picker */}
+              {loadingOptions ? (
+                <p className="text-xs text-slate-500">Loading candidates...</p>
+              ) : candidates.length > 0 ? (
+                <Select
+                  label="Select Candidate"
+                  value={selectedAppId || ''}
+                  onChange={(e) => setSelectedAppId(Number(e.target.value))}
+                  options={candidates.map((c) => ({
+                    label: `${c.student_name || `Applicant #${c.student_id}`} (${c.status}) • ${c.student_university || 'Student'}`,
+                    value: c.id,
+                  }))}
+                />
+              ) : (
+                <div className="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-lg border border-amber-200 dark:border-amber-900/60 flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-300">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold">No candidates have applied to this role yet.</p>
+                    <p className="text-[11px] mt-0.5 text-amber-700 dark:text-amber-400">
+                      Once candidates apply, you can schedule live technical or behavioral interviews directly.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Quick Calendly-style Slot Suggestions */}
           <div>
             <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 mb-1.5">
@@ -223,6 +368,7 @@ export function ScheduleInterviewModal({
               variant="primary"
               size="sm"
               isLoading={isSubmitting}
+              disabled={!activeAppId}
               leftIcon={<Calendar className="w-3.5 h-3.5" />}
             >
               Confirm & Schedule

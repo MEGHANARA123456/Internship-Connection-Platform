@@ -40,6 +40,9 @@ class InterviewResponse(InterviewCreate):
     application_id: int
     scheduled_by: int
     status: str
+    candidate_name: str | None = None
+    internship_title: str | None = None
+    company_name: str | None = None
 
 
 class NotificationResponse(BaseModel):
