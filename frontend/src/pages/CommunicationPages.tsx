@@ -10,6 +10,7 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { CardSkeleton } from '../components/ui/LoadingSkeleton'
 import { ErrorState } from '../components/ui/ErrorState'
 import { VideoInterviewModal } from '../components/modals/VideoInterviewModal'
+import { ScheduleInterviewModal } from '../components/modals/ScheduleInterviewModal'
 import { useWebSocketChat } from '../lib/useWebSocketChat'
 import { requestNotificationPermission } from '../lib/notifications'
 import {
@@ -51,6 +52,7 @@ export function InterviewsPage() {
   const [error, setError] = useState<string | null>(null)
   const [updatingId, setUpdatingId] = useState<number | null>(null)
   const [videoModalInterview, setVideoModalInterview] = useState<any | null>(null)
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false)
 
   const downloadIcs = (item: any) => {
     try {
@@ -111,11 +113,24 @@ export function InterviewsPage() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Interviews & Meetings</h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          Review your upcoming candidate screenings, technical evaluations, and interview process milestones.
-        </p>
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Interviews & Meetings</h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Review your upcoming candidate screenings, technical evaluations, and interview process milestones.
+          </p>
+        </div>
+        {session?.role === 'COMPANY' && (
+          <Button
+            size="md"
+            variant="primary"
+            leftIcon={<Plus className="w-4 h-4" />}
+            onClick={() => setIsScheduleModalOpen(true)}
+            className="shadow-xs shrink-0"
+          >
+            Schedule Interview
+          </Button>
+        )}
       </div>
 
       {/* 4-Stage Interview Process Roadmap */}
@@ -240,11 +255,21 @@ export function InterviewsPage() {
       ) : error ? (
         <ErrorState message={error} onRetry={fetchInterviews} />
       ) : interviews.length === 0 ? (
-        <EmptyState
-          icon={Calendar}
-          title="No scheduled interviews yet"
-          description="Once your application is reviewed and shortlisted by a recruiter, interview sessions will appear here with in-app video links and calendar invitations."
-        />
+        session?.role === 'COMPANY' ? (
+          <EmptyState
+            icon={Calendar}
+            title="No scheduled interviews yet"
+            description="You haven't scheduled any candidate interviews yet. Take action to schedule live video sessions, technical rounds, or telephone screenings with your applicants."
+            actionLabel="Schedule an Interview"
+            onAction={() => setIsScheduleModalOpen(true)}
+          />
+        ) : (
+          <EmptyState
+            icon={Calendar}
+            title="No scheduled interviews yet"
+            description="Once your application is reviewed and shortlisted by a recruiter, interview sessions will appear here with in-app video links and calendar invitations."
+          />
+        )
       ) : (
         <div className="space-y-4">
           {interviews.map((item) => {
@@ -258,9 +283,17 @@ export function InterviewsPage() {
                     <div className="flex items-center gap-2.5 flex-wrap">
                       <h3 className="text-base font-bold text-slate-900 dark:text-white">
                         {item.interview_type} Interview
+                        {item.internship_title ? ` • ${item.internship_title}` : ''}
                       </h3>
                       <Badge status={item.status}>{item.status}</Badge>
                     </div>
+
+                    {item.candidate_name && (
+                      <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
+                        <Users className="w-3.5 h-3.5 text-indigo-500" />
+                        Candidate: {item.candidate_name}
+                      </p>
+                    )}
 
                     <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 pt-1">
                       <span className="flex items-center gap-1">
@@ -361,6 +394,13 @@ export function InterviewsPage() {
           roleName={`${videoModalInterview.interview_type} Interview`}
         />
       )}
+
+      {/* Schedule Interview Modal for Companies */}
+      <ScheduleInterviewModal
+        isOpen={isScheduleModalOpen}
+        onClose={() => setIsScheduleModalOpen(false)}
+        onScheduled={fetchInterviews}
+      />
     </div>
   )
 }

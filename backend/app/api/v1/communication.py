@@ -249,14 +249,28 @@ async def send_message(conversation_id: int, data: MessageCreate, user: particip
 
 
 @router.post("/applications/{application_id}/interviews", response_model=InterviewResponse, status_code=201)
-async def schedule_interview(application_id: int, data: InterviewCreate, user: Annotated[User, Depends(require_roles(UserRole.COMPANY))], db: DbSession) -> Interview:
+async def schedule_interview(application_id: int, data: InterviewCreate, user: Annotated[User, Depends(require_roles(UserRole.COMPANY))], db: DbSession) -> dict:
     application = await db.scalar(select(Application).join(Internship, Application.internship_id == Internship.id).where(Application.id == application_id, Internship.company_id == user.id))
     if application is None: raise HTTPException(404, "Application not found")
-    if not application_transition_allowed(application.status, "INTERVIEW_SCHEDULED"):
-        raise HTTPException(409, f"Cannot schedule an interview from {application.status}")
-    interview = Interview(application_id=application_id, scheduled_by=user.id, **data.model_dump()); db.add(interview)
-    application.status = "INTERVIEW_SCHEDULED"; await db.commit(); await db.refresh(interview)
+    
+    # If application is in APPLIED or UNDER_REVIEW, auto-advance to SHORTLISTED so scheduling succeeds seamlessly
+    if application.status in ("APPLIED", "UNDER_REVIEW"):
+        application.status = "SHORTLISTED"
+    elif application.status not in ("SHORTLISTED", "INTERVIEW_SCHEDULED"):
+        if not application_transition_allowed(application.status, "INTERVIEW_SCHEDULED"):
+            raise HTTPException(409, f"Cannot schedule an interview from {application.status}")
+
+    interview = Interview(application_id=application_id, scheduled_by=user.id, **data.model_dump())
+    db.add(interview)
+    application.status = "INTERVIEW_SCHEDULED"
+    await db.commit()
+    await db.refresh(interview)
+    
     student = await db.scalar(select(User).where(User.id == application.student_id))
+    student_profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == application.student_id))
+    internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id))
+    company_profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
+
     if student:
         db.add(Notification(user_id=student.id, notification_type="INTERVIEW_INVITE", title="Interview invitation", body=f"Interview scheduled for {data.scheduled_at.isoformat()}"))
         await db.commit()
@@ -275,7 +289,20 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
             )
         except Exception:
             pass
-    return interview
+
+    return {
+        "id": interview.id,
+        "application_id": interview.application_id,
+        "scheduled_by": interview.scheduled_by,
+        "status": interview.status,
+        "scheduled_at": interview.scheduled_at,
+        "interview_type": interview.interview_type,
+        "meeting_link": interview.meeting_link,
+        "notes": interview.notes,
+        "candidate_name": student_profile.full_name if student_profile else (student.email if student else None),
+        "internship_title": internship.title if internship else None,
+        "company_name": company_profile.company_name if company_profile else None,
+    }
 
 
 @router.get("/applications/{application_id}/interviews", response_model=list[InterviewResponse])
@@ -289,14 +316,36 @@ async def list_interviews(application_id: int, user: participant, db: DbSession)
 
 @router.get("/interviews/my", response_model=list[InterviewResponse])
 @router.get("/interviews", response_model=list[InterviewResponse])
-async def list_my_interviews(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[Interview]:
+async def list_my_interviews(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[dict]:
     if user.role == UserRole.STUDENT:
         query = select(Interview).join(Application, Interview.application_id == Application.id).where(Application.student_id == user.id).order_by(Interview.scheduled_at.desc())
     elif user.role == UserRole.COMPANY:
         query = select(Interview).join(Application, Interview.application_id == Application.id).join(Internship, Application.internship_id == Internship.id).where(Internship.company_id == user.id).order_by(Interview.scheduled_at.desc())
     else:
         query = select(Interview).order_by(Interview.scheduled_at.desc())
-    return list(await db.scalars(query))
+    
+    interviews = list(await db.scalars(query))
+    results = []
+    for inv in interviews:
+        app = await db.scalar(select(Application).where(Application.id == inv.application_id))
+        internship = await db.scalar(select(Internship).where(Internship.id == app.internship_id)) if app else None
+        student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == app.student_id)) if app else None
+        comp_prof = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == internship.company_id)) if (internship and internship.company_id) else None
+        
+        results.append({
+            "id": inv.id,
+            "application_id": inv.application_id,
+            "scheduled_by": inv.scheduled_by,
+            "status": inv.status,
+            "scheduled_at": inv.scheduled_at,
+            "interview_type": inv.interview_type,
+            "meeting_link": inv.meeting_link,
+            "notes": inv.notes,
+            "candidate_name": student_prof.full_name if (student_prof and student_prof.full_name) else (f"Candidate #{app.student_id}" if app else "Candidate"),
+            "internship_title": internship.title if (internship and internship.title) else "Internship",
+            "company_name": comp_prof.company_name if (comp_prof and comp_prof.company_name) else "Company",
+        })
+    return results
 
 
 @router.patch("/interviews/{interview_id}", response_model=InterviewResponse)

@@ -44,6 +44,7 @@ export function CompanyJobsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [submittingId, setSubmittingId] = useState<number | null>(null)
+  const [schedulingJob, setSchedulingJob] = useState<{ id: number; title: string } | null>(null)
 
   const fetchJobs = async () => {
     setLoading(true)
@@ -164,16 +165,15 @@ export function CompanyJobsPage() {
                     </Button>
                   </Link>
 
-                  <Link to="/interviews">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      leftIcon={<Calendar className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
-                      className="border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
-                    >
-                      Interview Scheduling
-                    </Button>
-                  </Link>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    leftIcon={<Calendar className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+                    className="border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                    onClick={() => setSchedulingJob({ id: job.id, title: job.title })}
+                  >
+                    Interview Scheduling
+                  </Button>
 
                   {job.status === 'DRAFT' && (
                     <>
@@ -209,6 +209,18 @@ export function CompanyJobsPage() {
             </Card>
           ))}
         </div>
+      )}
+
+      {schedulingJob && (
+        <ScheduleInterviewModal
+          isOpen={!!schedulingJob}
+          onClose={() => setSchedulingJob(null)}
+          jobId={schedulingJob.id}
+          jobTitle={schedulingJob.title}
+          onScheduled={() => {
+            fetchJobs()
+          }}
+        />
       )}
     </div>
   )
@@ -942,22 +954,42 @@ export function JobApplicantsPage() {
                         </Button>
                       )}
                       {app.status === 'APPLIED' && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleUpdateStatus(app.id, 'UNDER_REVIEW')}
-                        >
-                          Review
-                        </Button>
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleUpdateStatus(app.id, 'UNDER_REVIEW')}
+                          >
+                            Review
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            leftIcon={<Calendar className="w-3 h-3" />}
+                            onClick={() => setActiveInterviewApp(app)}
+                          >
+                            Schedule
+                          </Button>
+                        </>
                       )}
                       {app.status === 'UNDER_REVIEW' && (
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          onClick={() => handleUpdateStatus(app.id, 'SHORTLISTED')}
-                        >
-                          Shortlist
-                        </Button>
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleUpdateStatus(app.id, 'SHORTLISTED')}
+                          >
+                            Shortlist
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            leftIcon={<Calendar className="w-3 h-3" />}
+                            onClick={() => setActiveInterviewApp(app)}
+                          >
+                            Schedule
+                          </Button>
+                        </>
                       )}
                       {app.status === 'SHORTLISTED' && (
                         <Button
@@ -970,14 +1002,24 @@ export function JobApplicantsPage() {
                         </Button>
                       )}
                       {app.status === 'INTERVIEW_SCHEDULED' && (
-                        <Button
-                          size="sm"
-                          variant="success"
-                          leftIcon={<CheckCircle2 className="w-3 h-3" />}
-                          onClick={() => handleUpdateStatus(app.id, 'SELECTED')}
-                        >
-                          Select
-                        </Button>
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            leftIcon={<Calendar className="w-3 h-3" />}
+                            onClick={() => setActiveInterviewApp(app)}
+                          >
+                            Reschedule
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="success"
+                            leftIcon={<CheckCircle2 className="w-3 h-3" />}
+                            onClick={() => handleUpdateStatus(app.id, 'SELECTED')}
+                          >
+                            Select
+                          </Button>
+                        </>
                       )}
                     </td>
                   </tr>
