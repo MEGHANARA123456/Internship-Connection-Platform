@@ -41,6 +41,9 @@ pnpm-debug.log*
 # Storage & Uploads
 backend/storage/resumes/*
 !backend/storage/resumes/.gitkeep
+backend/storage/avatars/*
+!backend/storage/avatars/.gitkeep
+backend/storage/*.json
 
 # IDEs & System
 .vscode/

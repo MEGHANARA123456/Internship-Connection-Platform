@@ -9,7 +9,9 @@ import { Input } from '../components/ui/Input'
 import { Textarea } from '../components/ui/Textarea'
 import { Button } from '../components/ui/Button'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/Card'
-import { CheckCircle2, AlertCircle, ShieldCheck, Mail } from 'lucide-react'
+import { CheckCircle2, AlertCircle, ShieldCheck, KeyRound, ExternalLink, RefreshCw } from 'lucide-react'
+import { GoogleSignInButton } from '../components/auth/GoogleSignInButton'
+import { Logo } from '../components/layout/Logo'
 
 // --- Validation Schemas ---
 
@@ -44,14 +46,6 @@ const adminRegisterSchema = z.object({
   signup_key: z.string().min(16, 'Bootstrap key must be at least 16 characters'),
 })
 
-const forgotPasswordSchema = z.object({
-  email: z.string().email('Please enter a valid email'),
-})
-
-const resetPasswordSchema = z.object({
-  token: z.string().min(1, 'Reset token is required'),
-  new_password: z.string().min(8, 'Password must be at least 8 characters long'),
-})
 
 // --- Auth Layout Wrapper ---
 
@@ -71,8 +65,8 @@ function AuthCardLayout({
       <div className="w-full max-w-md">
         <Card className="shadow-sm border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
           <CardHeader className="text-center pb-4">
-            <div className="mx-auto w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-black text-base shadow-xs mb-2">
-              IC
+            <div className="flex justify-center mb-3">
+              <Logo size="lg" />
             </div>
             <CardTitle className="text-xl font-bold text-slate-900 dark:text-white">{title}</CardTitle>
             <CardDescription className="text-xs text-slate-500 dark:text-slate-400">{description}</CardDescription>
@@ -90,42 +84,82 @@ function AuthCardLayout({
 export function LoginPage() {
   const navigate = useNavigate()
   const setSession = useAuthStore((state) => state.setSession)
+  const [portal, setPortal] = useState<'STUDENT' | 'COMPANY' | 'ADMIN'>('STUDENT')
   const [serverError, setServerError] = useState('')
+  const [resendingVerification, setResendingVerification] = useState(false)
+  const [resendStatus, setResendStatus] = useState('')
 
   const {
     register,
     handleSubmit,
+    getValues,
     formState: { errors, isSubmitting },
   } = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
   })
 
+  const handleResendVerification = async () => {
+    const email = getValues('email')?.trim()
+    if (!email || !email.includes('@')) {
+      setServerError('Please enter a valid email address first.')
+      return
+    }
+    setResendingVerification(true)
+    setResendStatus('')
+    try {
+      const res = await api.post('/auth/resend-verification', { email })
+      setResendStatus(res.data?.message || 'Verification link has been dispatched to your email.')
+      setTimeout(() => setResendStatus(''), 6000)
+    } catch (err: any) {
+      setServerError(err.response?.data?.detail || 'Failed to resend verification link.')
+    } finally {
+      setResendingVerification(false)
+    }
+  }
+
   const onSubmit = async (data: z.infer<typeof loginSchema>) => {
     setServerError('')
+    setResendStatus('')
     try {
-      const response = await api.post('/auth/login', data)
-      const { access_token, refresh_token, role, user_id } = response.data
+      const response = await api.post('/auth/login', {
+        ...data,
+        email: data.email.trim().toLowerCase(),
+        portal,
+      })
+      const { access_token, refresh_token, role, user_id, name } = response.data
       setSession({
         accessToken: access_token,
         refreshToken: refresh_token,
-        role: role ?? 'STUDENT',
+        role: role ?? portal,
         userId: user_id,
         email: data.email,
+        name: name,
       })
 
       // Route according to role
       if (role === 'ADMIN') navigate('/admin')
       else if (role === 'COMPANY') navigate('/company/jobs')
       else navigate('/opportunities')
-    } catch {
-      setServerError('Invalid email or password. Please check your credentials.')
+    } catch (err: any) {
+      const detail = err.response?.data?.detail
+      if (detail) {
+        setServerError(detail)
+      } else if (err.response?.status === 404) {
+        setServerError('No account registered with this email. Please sign up first.')
+      } else if (err.response?.status === 401) {
+        setServerError('Incorrect password. Please verify your credentials or use Forgot Password.')
+      } else if (err.response?.status === 403) {
+        setServerError('Account access restricted or email verification required.')
+      } else {
+        setServerError('Sign in failed. Please check your credentials and try again.')
+      }
     }
   }
 
   return (
     <AuthCardLayout
-      title="Welcome back"
-      description="Sign in to your account to manage your internships and applications."
+      title={`Sign In to ${portal === 'STUDENT' ? 'Student Portal' : portal === 'COMPANY' ? 'Recruiter Portal' : 'Admin Console'}`}
+      description="Enter your registered credentials to access your dashboard and opportunities."
       footer={
         <div className="text-center space-y-1">
           <p>
@@ -148,17 +182,91 @@ export function LoginPage() {
       }
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        {/* Role Portal Selector */}
+        <div className="space-y-1">
+          <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+            Select Your Login Portal
+          </label>
+          <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+            <button
+              type="button"
+              onClick={() => {
+                setPortal('STUDENT')
+                setServerError('')
+              }}
+              className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all text-center ${
+                portal === 'STUDENT'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+              }`}
+            >
+              🎓 Student
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPortal('COMPANY')
+                setServerError('')
+              }}
+              className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all text-center ${
+                portal === 'COMPANY'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+              }`}
+            >
+              🏢 Recruiter
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPortal('ADMIN')
+                setServerError('')
+              }}
+              className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all text-center ${
+                portal === 'ADMIN'
+                  ? 'bg-white dark:bg-slate-900 text-purple-600 dark:text-purple-400 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+              }`}
+            >
+              🛡️ Admin
+            </button>
+          </div>
+        </div>
+
         {serverError && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700 font-medium">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{serverError}</span>
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg space-y-2 text-xs text-rose-700 font-medium">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{serverError}</span>
+            </div>
+            {serverError.toLowerCase().includes('verification') && (
+              <div className="pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  isLoading={resendingVerification}
+                  onClick={handleResendVerification}
+                  className="w-full text-xs bg-white text-rose-800 border-rose-300 hover:bg-rose-100"
+                >
+                  Resend Verification Email
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {resendStatus && (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-2 text-xs text-emerald-700 font-medium">
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+            <span>{resendStatus}</span>
           </div>
         )}
 
         <Input
           label="Email address"
           type="email"
-          placeholder="you@example.com"
+          placeholder={portal === 'COMPANY' ? 'recruiter@company.com' : portal === 'ADMIN' ? 'admin@internsphere.internal' : 'student@university.edu'}
           error={errors.email?.message}
           {...register('email')}
         />
@@ -181,7 +289,7 @@ export function LoginPage() {
         </div>
 
         <Button type="submit" variant="primary" className="w-full" isLoading={isSubmitting}>
-          Sign in
+          Sign in as {portal === 'STUDENT' ? 'Student' : portal === 'COMPANY' ? 'Recruiter' : 'Admin'}
         </Button>
 
         <div className="relative my-4">
@@ -193,21 +301,7 @@ export function LoginPage() {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            alert('Google Single Sign-On: Redirecting to Google OAuth2 consent screen...')
-          }}
-          className="w-full py-2.5 px-4 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/60 font-semibold text-xs flex items-center justify-center gap-2.5 transition-all shadow-2xs hover:shadow-xs cursor-pointer"
-        >
-          <svg className="w-4 h-4" viewBox="0 0 24 24">
-            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-          </svg>
-          Continue with Google
-        </button>
+        <GoogleSignInButton role={portal} />
       </form>
     </AuthCardLayout>
   )
@@ -398,6 +492,17 @@ export function StudentRegisterPage() {
           <Button type="submit" variant="primary" className="w-full mt-2" isLoading={isSubmitting}>
             Create account
           </Button>
+
+          <div className="relative my-4">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-slate-200 dark:border-slate-800" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-white dark:bg-slate-900 px-2 text-slate-400 font-medium">Or register with</span>
+            </div>
+          </div>
+
+          <GoogleSignInButton role="STUDENT" buttonText="Sign up with Google" />
         </form>
       )}
     </AuthCardLayout>
@@ -406,20 +511,31 @@ export function StudentRegisterPage() {
 
 // --- 3. Company Registration ---
 
+const isAcademicEmail = (email: string) => {
+  const clean = email.toLowerCase().trim()
+  if (!clean.includes('@')) return false
+  const domain = clean.split('@')[1] || ''
+  return ['.edu', '.ac.', '.res.in', 'student', 'campus', 'college', 'univ', 'scholar'].some((ind) => domain.includes(ind))
+}
+
 export function CompanyRegisterPage() {
   const navigate = useNavigate()
   const [serverError, setServerError] = useState('')
   const [createdCompany, setCreatedCompany] = useState<any>(null)
   const [verifying, setVerifying] = useState(false)
-  const [emailStatus, setEmailStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle')
+  const [emailStatus, setEmailStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'academic_rejected'>('idle')
 
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<z.infer<typeof companyRegisterSchema>>({
     resolver: zodResolver(companyRegisterSchema),
   })
+
+  const currentEmail = watch('email') || ''
+  const hasAcademicEmail = isAcademicEmail(currentEmail)
 
   const handleEmailBlur = async (e: React.FocusEvent<HTMLInputElement>) => {
     const val = e.target.value.trim()
@@ -427,10 +543,23 @@ export function CompanyRegisterPage() {
       setEmailStatus('idle')
       return
     }
+    if (isAcademicEmail(val)) {
+      setEmailStatus('academic_rejected')
+      setServerError('Academic and student email addresses (.edu, .ac) cannot be used for company registration. Please use your corporate business email or register as a student.')
+      return
+    }
     setEmailStatus('checking')
     try {
-      const res = await api.post('/auth/check-email', { email: val })
-      setEmailStatus(res.data.available ? 'available' : 'taken')
+      const res = await api.post('/auth/check-email', { email: val, role: 'COMPANY' })
+      if (!res.data.available) {
+        setEmailStatus('taken')
+        if (res.data.reason) {
+          setServerError(res.data.reason)
+        }
+      } else {
+        setEmailStatus('available')
+        setServerError('')
+      }
     } catch {
       setEmailStatus('idle')
     }
@@ -438,15 +567,23 @@ export function CompanyRegisterPage() {
 
   const onSubmit = async (data: z.infer<typeof companyRegisterSchema>) => {
     setServerError('')
+    if (isAcademicEmail(data.email)) {
+      setServerError('Academic and student email addresses (.edu, .ac) cannot be used for company registration. Please use your corporate work email or register as a student.')
+      return
+    }
     try {
       const res = await api.post('/auth/register/company', {
         ...data,
+        email: data.email.trim().toLowerCase(),
         website: data.website || null,
         description: data.description || null,
       })
       setCreatedCompany(res.data)
     } catch (err: any) {
-      if (err.response?.status === 409) {
+      const detail = err.response?.data?.detail
+      if (detail) {
+        setServerError(detail)
+      } else if (err.response?.status === 409) {
         setServerError('An account with this email is already registered.')
       } else {
         setServerError('Company registration failed. Please verify the information entered.')
@@ -472,7 +609,7 @@ export function CompanyRegisterPage() {
           <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto" />
           <h3 className="text-base font-semibold text-slate-900">Email Verification Sent</h3>
           <p className="text-xs text-slate-600 leading-relaxed">
-            We sent an email verification link to <strong>{createdCompany.email}</strong>.
+            We sent an email verification link to <strong>{createdCompany.email}</strong>. Please check your corporate inbox to activate your recruiter account.
           </p>
           <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700 font-medium">
             Local Mailbox: Check <a href="http://localhost:8025" target="_blank" rel="noreferrer" className="underline font-bold">Mailpit (Port 8025)</a> for local emails.
@@ -505,8 +642,8 @@ export function CompanyRegisterPage() {
       ) : (
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-3.5">
           {serverError && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700 font-medium">
-              <AlertCircle className="w-4 h-4 shrink-0" />
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-2 text-xs text-rose-700 font-medium">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{serverError}</span>
             </div>
           )}
@@ -520,18 +657,37 @@ export function CompanyRegisterPage() {
 
           <div>
             <Input
-              label="Work email"
+              label="Corporate Work Email"
               type="email"
               placeholder="recruiter@acme.com"
-              error={emailStatus === 'taken' ? 'This email is already registered. Please sign in instead.' : errors.email?.message}
+              helperText="Must be your official corporate work email"
+              error={
+                hasAcademicEmail || emailStatus === 'academic_rejected'
+                  ? 'Academic emails (.edu, .ac) are rejected for company accounts'
+                  : emailStatus === 'taken'
+                  ? 'This email is already registered. Please sign in instead.'
+                  : errors.email?.message
+              }
               {...register('email')}
               onBlur={handleEmailBlur}
             />
-            {emailStatus === 'checking' && (
-              <p className="text-[11px] text-slate-400 mt-1">Checking email availability...</p>
+            {hasAcademicEmail && (
+              <div className="mt-1.5 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+                <span className="font-semibold block mb-0.5">⚠️ Educational email domain detected</span>
+                <span>
+                  Students must register through{' '}
+                  <Link to="/register-student" className="underline font-bold text-amber-900">
+                    Student Registration
+                  </Link>
+                  . Companies must provide a business or corporate work email domain.
+                </span>
+              </div>
             )}
-            {emailStatus === 'available' && (
-              <p className="text-[11px] text-emerald-600 font-medium mt-1">✓ Email address is valid and available</p>
+            {emailStatus === 'checking' && (
+              <p className="text-[11px] text-slate-400 mt-1">Checking email availability and domain eligibility...</p>
+            )}
+            {emailStatus === 'available' && !hasAcademicEmail && (
+              <p className="text-[11px] text-emerald-600 font-medium mt-1">✓ Corporate work email is valid and available</p>
             )}
           </div>
 
@@ -569,6 +725,17 @@ export function CompanyRegisterPage() {
           <Button type="submit" variant="primary" className="w-full mt-2" isLoading={isSubmitting}>
             Register organization
           </Button>
+
+          <div className="relative my-4">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-slate-200 dark:border-slate-800" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-white dark:bg-slate-900 px-2 text-slate-400 font-medium">Or register with</span>
+            </div>
+          </div>
+
+          <GoogleSignInButton role="COMPANY" buttonText="Sign up with Google" />
         </form>
       )}
     </AuthCardLayout>
@@ -662,32 +829,136 @@ export function AdminRegisterPage() {
 
 // --- 5. Forgot Password ---
 
+// --- 5. Forgot Password & OTP Reset ---
+
 export function ForgotPasswordPage() {
-  const [success, setSuccess] = useState(false)
+  const navigate = useNavigate()
+  const [step, setStep] = useState<'request' | 'verify'>('request')
+  const [email, setEmail] = useState('')
+  const [otp, setOtp] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [serverError, setServerError] = useState('')
+  const [success, setSuccess] = useState(false)
+  const [recentOtpFound, setRecentOtpFound] = useState<string | null>(null)
+  const [checkingMailbox, setCheckingMailbox] = useState(false)
+  const [resending, setResending] = useState(false)
+  const [resendStatus, setResendStatus] = useState('')
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<z.infer<typeof forgotPasswordSchema>>({
-    resolver: zodResolver(forgotPasswordSchema),
-  })
+  // Poll/Check mailbox for the user's latest OTP
+  const checkMailboxForOtp = async (targetEmail: string) => {
+    if (!targetEmail) return
+    setCheckingMailbox(true)
+    try {
+      const res = await api.get(`/mailbox/public?email=${encodeURIComponent(targetEmail.trim().toLowerCase())}`)
+      const emails = res.data || []
+      if (emails.length > 0) {
+        // Look for 6-digit OTP in the latest email
+        const latest = emails[0]
+        const match = (latest.subject + ' ' + (latest.body || '')).match(/\b\d{6}\b/)
+        if (match) {
+          setRecentOtpFound(match[0])
+        }
+      }
+    } catch {
+      // mailbox check non-fatal
+    } finally {
+      setCheckingMailbox(false)
+    }
+  }
 
-  const onSubmit = async (data: z.infer<typeof forgotPasswordSchema>) => {
+  const handleSendOtp = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setServerError('')
+    if (!email || !email.includes('@')) {
+      setServerError('Please enter a valid email address.')
+      return
+    }
+
+    setIsSubmitting(true)
+    try {
+      await api.post('/auth/forgot-password', { email: email.trim().toLowerCase() })
+      setStep('verify')
+      // Auto-check mailbox
+      checkMailboxForOtp(email)
+    } catch (err: any) {
+      const detail = err.response?.data?.detail
+      if (detail) {
+        setServerError(detail)
+      } else if (err.response?.status === 404) {
+        setServerError(`No account found with email '${email}'. Please check for typos or register.`)
+      } else {
+        setServerError('Failed to dispatch verification code. Please check the email and try again.')
+      }
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleResend = async () => {
+    if (resending || !email) return
+    setResending(true)
+    setResendStatus('')
     setServerError('')
     try {
-      await api.post('/auth/forgot-password', data)
+      const res = await api.post('/auth/forgot-password', { email: email.trim().toLowerCase() })
+      setResendStatus(res.data?.message || 'A fresh verification code has been dispatched!')
+      checkMailboxForOtp(email)
+      setTimeout(() => setResendStatus(''), 4000)
+    } catch (err: any) {
+      const detail = err.response?.data?.detail || 'Could not resend code. Please try again.'
+      setServerError(detail)
+    } finally {
+      setResending(false)
+    }
+  }
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setServerError('')
+
+    const cleanOtp = otp.trim()
+    if (!cleanOtp || cleanOtp.length !== 6 || !/^\d+$/.test(cleanOtp)) {
+      setServerError('Please enter the 6-digit numeric verification code.')
+      return
+    }
+
+    if (newPassword.length < 8) {
+      setServerError('New password must be at least 8 characters long.')
+      return
+    }
+
+    if (newPassword !== confirmPassword) {
+      setServerError('Passwords do not match. Please re-enter.')
+      return
+    }
+
+    setIsSubmitting(true)
+    try {
+      await api.post('/auth/reset-password', {
+        email: email.trim().toLowerCase(),
+        otp: cleanOtp,
+        new_password: newPassword,
+      })
       setSuccess(true)
-    } catch {
-      setServerError('An error occurred. Please try again.')
+      setTimeout(() => navigate('/login'), 2500)
+    } catch (err: any) {
+      const detail = err.response?.data?.detail
+      setServerError(detail || 'Verification code is invalid or has expired. Please request a new one.')
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
   return (
     <AuthCardLayout
-      title="Reset your password"
-      description="Enter your account email and we will send password reset instructions."
+      title={step === 'request' ? 'Reset your password' : 'Enter Verification Code'}
+      description={
+        step === 'request'
+          ? 'Enter your registered email address and we will dispatch a 6-digit verification code.'
+          : `We dispatched a 6-digit verification OTP to ${email}.`
+      }
       footer={
         <Link to="/login" className="text-indigo-600 hover:underline">
           Return to sign in
@@ -695,22 +966,18 @@ export function ForgotPasswordPage() {
       }
     >
       {success ? (
-        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg text-center space-y-2 text-emerald-800">
-          <Mail className="w-8 h-8 text-emerald-600 mx-auto" />
-          <h4 className="text-sm font-semibold">Reset Email Sent</h4>
-          <p className="text-xs text-emerald-700">
-            If an account exists for that email, a password reset token has been dispatched. Please check Mailpit (port 8025).
+        <div className="p-6 text-center space-y-4">
+          <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto" />
+          <h3 className="text-base font-semibold text-slate-900">Password Reset Complete!</h3>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Your account password has been safely updated. You can now sign in with your new credentials.
           </p>
-          <div className="pt-2">
-            <Link to="/reset-password">
-              <Button size="sm" variant="outline">
-                Enter reset token
-              </Button>
-            </Link>
-          </div>
+          <Button variant="primary" className="w-full mt-2" onClick={() => navigate('/login')}>
+            Sign In Now
+          </Button>
         </div>
-      ) : (
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      ) : step === 'request' ? (
+        <form onSubmit={handleSendOtp} className="space-y-4">
           {serverError && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -719,16 +986,158 @@ export function ForgotPasswordPage() {
           )}
 
           <Input
-            label="Account email"
+            label="Account email address"
             type="email"
             placeholder="you@example.com"
-            error={errors.email?.message}
-            {...register('email')}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+
+          <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-lg text-xs text-indigo-800 space-y-1">
+            <div className="flex items-center gap-1.5 font-semibold text-indigo-900">
+              <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Instant OTP Verification</span>
+            </div>
+            <p className="text-[11px] text-indigo-700 leading-relaxed">
+              We will generate a secure 6-digit verification code valid for 15 minutes. Check your email or Mailpit at{' '}
+              <a href="http://localhost:8025" target="_blank" rel="noreferrer" className="underline font-bold">
+                localhost:8025
+              </a>
+              .
+            </p>
+          </div>
+
+          <Button type="submit" variant="primary" className="w-full" isLoading={isSubmitting}>
+            Send Verification Code
+          </Button>
+        </form>
+      ) : (
+        <form onSubmit={handleResetPassword} className="space-y-4">
+          {serverError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{serverError}</span>
+            </div>
+          )}
+
+          {resendStatus && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-2 text-xs text-emerald-700">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>{resendStatus}</span>
+            </div>
+          )}
+
+          {/* Target Email & Mailpit Banner */}
+          <div className="p-3 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-xs space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-600 dark:text-slate-300">
+                Code sent to: <strong className="text-slate-900 dark:text-white">{email}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setStep('request')
+                  setServerError('')
+                }}
+                className="text-indigo-600 hover:underline text-[11px] font-medium"
+              >
+                Change
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-700">
+              <a
+                href={`http://localhost:8025?search=${encodeURIComponent(email)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 font-semibold"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Open Mailpit (port 8025)
+              </a>
+
+              <button
+                type="button"
+                onClick={() => checkMailboxForOtp(email)}
+                disabled={checkingMailbox}
+                className="text-[11px] text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 flex items-center gap-1 cursor-pointer"
+              >
+                <RefreshCw className={`w-3 h-3 ${checkingMailbox ? 'animate-spin' : ''}`} />
+                Check Mailbox
+              </button>
+            </div>
+
+            {recentOtpFound && (
+              <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-md flex items-center justify-between text-xs text-emerald-800 mt-2">
+                <span>
+                  Detected OTP: <strong className="font-mono text-sm tracking-wider">{recentOtpFound}</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setOtp(recentOtpFound)}
+                  className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold cursor-pointer"
+                >
+                  Auto-Fill
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 6-Digit OTP Input */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+              6-Digit Verification Code *
+            </label>
+            <input
+              type="text"
+              maxLength={6}
+              placeholder="123456"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              className="flex h-12 w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-2 text-xl font-mono text-center tracking-[0.5em] font-bold text-slate-900 dark:text-white placeholder:text-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              required
+            />
+            <p className="text-[11px] text-slate-400 mt-1">Enter the 6-digit number received in your email.</p>
+          </div>
+
+          {/* New Password */}
+          <Input
+            label="New password"
+            type="password"
+            placeholder="At least 8 characters"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            required
+          />
+
+          {/* Confirm Password */}
+          <Input
+            label="Confirm new password"
+            type="password"
+            placeholder="Repeat new password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            required
           />
 
           <Button type="submit" variant="primary" className="w-full" isLoading={isSubmitting}>
-            Send reset instructions
+            Reset & Update Password
           </Button>
+
+          <div className="flex items-center justify-between text-xs pt-1">
+            <button
+              type="button"
+              onClick={handleResend}
+              disabled={resending}
+              className="text-slate-500 hover:text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer"
+            >
+              {resending ? 'Sending fresh code...' : "Didn't receive code? Resend"}
+            </button>
+            <Link to="/login" className="text-slate-500 hover:underline">
+              Cancel
+            </Link>
+          </div>
         </form>
       )}
     </AuthCardLayout>
@@ -740,36 +1149,64 @@ export function ForgotPasswordPage() {
 export function ResetPasswordPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const tokenFromUrl = searchParams.get('token') || ''
-  const [success, setSuccess] = useState(false)
+  const emailFromUrl = searchParams.get('email') || ''
+  const otpFromUrl = searchParams.get('otp') || searchParams.get('token') || ''
+
+  const [email, setEmail] = useState(emailFromUrl)
+  const [otp, setOtp] = useState(otpFromUrl)
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [serverError, setServerError] = useState('')
+  const [success, setSuccess] = useState(false)
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<z.infer<typeof resetPasswordSchema>>({
-    resolver: zodResolver(resetPasswordSchema),
-    defaultValues: {
-      token: tokenFromUrl,
-    },
-  })
+  useEffect(() => {
+    if (emailFromUrl) setEmail(emailFromUrl)
+    if (otpFromUrl) setOtp(otpFromUrl)
+  }, [emailFromUrl, otpFromUrl])
 
-  const onSubmit = async (data: z.infer<typeof resetPasswordSchema>) => {
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
     setServerError('')
+
+    const cleanCode = otp.trim()
+    if (!cleanCode) {
+      setServerError('Verification code or reset token is required.')
+      return
+    }
+
+    if (newPassword.length < 8) {
+      setServerError('Password must be at least 8 characters long.')
+      return
+    }
+
+    if (newPassword !== confirmPassword) {
+      setServerError('Passwords do not match.')
+      return
+    }
+
+    setIsSubmitting(true)
     try {
-      await api.post('/auth/reset-password', data)
+      await api.post('/auth/reset-password', {
+        email: email.trim().toLowerCase() || undefined,
+        otp: cleanCode,
+        token: cleanCode,
+        new_password: newPassword,
+      })
       setSuccess(true)
       setTimeout(() => navigate('/login'), 2000)
-    } catch {
-      setServerError('Invalid or expired reset token. Please request a new link.')
+    } catch (err: any) {
+      const detail = err.response?.data?.detail
+      setServerError(detail || 'Invalid or expired verification code. Please request a new link.')
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
   return (
     <AuthCardLayout
       title="Set new password"
-      description="Provide your reset token and choose a new password for your account."
+      description="Provide your verification code and choose a new password for your account."
       footer={
         <Link to="/login" className="text-indigo-600 hover:underline">
           Back to sign in
@@ -783,7 +1220,14 @@ export function ResetPasswordPage() {
           <p className="text-xs text-slate-600">Your password has been changed. Redirecting to login...</p>
         </div>
       ) : (
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form onSubmit={onSubmit} className="space-y-4">
+          {otpFromUrl && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 rounded-lg flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span>Reset link verified for <strong>{emailFromUrl || 'your account'}</strong>. Please choose your new password.</span>
+            </div>
+          )}
+
           {serverError && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -792,18 +1236,37 @@ export function ResetPasswordPage() {
           )}
 
           <Input
-            label="Reset Token"
-            placeholder="Paste token from email"
-            error={errors.token?.message}
-            {...register('token')}
+            label="Account email (optional if link contained token)"
+            type="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          <Input
+            label="6-Digit OTP or Reset Token"
+            placeholder="Enter 6-digit code or paste token"
+            value={otp}
+            onChange={(e) => setOtp(e.target.value)}
+            required
           />
 
           <Input
             label="New password"
             type="password"
             placeholder="At least 8 characters"
-            error={errors.new_password?.message}
-            {...register('new_password')}
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            required
+          />
+
+          <Input
+            label="Confirm new password"
+            type="password"
+            placeholder="Repeat new password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            required
           />
 
           <Button type="submit" variant="primary" className="w-full" isLoading={isSubmitting}>

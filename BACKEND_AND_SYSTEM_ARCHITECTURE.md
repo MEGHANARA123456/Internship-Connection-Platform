@@ -370,11 +370,7 @@ Provides runtime input validation, type coercion, and OpenAPI JSON serialization
 - **`backend/app/services/mail.py`**:
   - `send_dev_email(to, subject, body)`: Asynchronously submits transactional emails via HTTP POST to Mailpit's REST API (`http://mailpit:8025/api/v1/send`).
 - **`backend/app/seed.py`**:
-  - Independent async bootstrapping script that seeds:
-    - Pre-configured Admin accounts (`admin@platform.com`, `admin@internship.local`, and user's email).
-    - Verified Company account (`recruiter@techcorp.com` / `TechCorp AI`).
-    - Verified Student account (`student@stanford.edu` / `Alex Johnson`).
-    - 3 live published internships with realistic requirements, durations, and stipends.
+  - Independent async bootstrapping script that initializes verified production administrator accounts with zero mock or sample data.
 
 ---
 

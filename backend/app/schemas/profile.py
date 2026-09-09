@@ -8,6 +8,7 @@ class StudentProfileUpdate(BaseModel):
     graduation_year: int = Field(ge=2000, le=2100)
     bio: str | None = None
     skills: str | None = None
+    avatar_url: str | None = None
 
 
 class CompanyProfileUpdate(BaseModel):
@@ -16,6 +17,7 @@ class CompanyProfileUpdate(BaseModel):
     website: str | None = None
     description: str | None = None
     verification_status: str = Field(default="PENDING", pattern="^(PENDING|VERIFIED|REJECTED)$")
+    avatar_url: str | None = None
 
 
 class ProfileResponse(BaseModel):
@@ -32,6 +34,7 @@ class ProfileResponse(BaseModel):
     website: str | None = None
     description: str | None = None
     verification_status: str | None = None
+    avatar_url: str | None = None
 
 
 class ResumeResponse(BaseModel):

@@ -1,6 +1,6 @@
 from pathlib import Path
 from uuid import uuid4
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -157,3 +157,97 @@ async def delete_resume(resume_id: int, user: student_only, db: DbSession) -> No
     (Path(get_settings().resume_storage_path) / resume.stored_filename).unlink(missing_ok=True)
     await db.delete(resume)
     await db.commit()
+
+
+ALLOWED_AVATAR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".svg", ".gif"}
+ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp", "image/svg+xml", "image/gif"}
+MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024
+
+
+@router.post("/avatar")
+async def upload_avatar(
+    user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))],
+    db: DbSession,
+    file: UploadFile = File(...),
+) -> dict[str, str]:
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED_AVATAR_EXTENSIONS or (file.content_type and file.content_type not in ALLOWED_AVATAR_TYPES):
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Avatar must be a JPEG, PNG, WEBP, or SVG image")
+
+    content = await file.read(MAX_AVATAR_SIZE_BYTES + 1)
+    if len(content) > MAX_AVATAR_SIZE_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Image exceeds 5MB size limit")
+
+    avatar_dir = Path(get_settings().resume_storage_path).parent / "avatars"
+    avatar_dir.mkdir(parents=True, exist_ok=True)
+    stored_name = f"avatar_{user.id}_{uuid4().hex[:8]}{ext}"
+    (avatar_dir / stored_name).write_bytes(content)
+
+    avatar_url = f"/api/v1/profiles/avatar/{stored_name}"
+
+    if user.role == UserRole.STUDENT:
+        profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+        if profile is None:
+            profile = StudentProfile(
+                user_id=user.id,
+                full_name=user.email.split("@")[0].title(),
+                university="University",
+                major="Computer Science",
+                graduation_year=2026,
+                avatar_url=avatar_url,
+            )
+            db.add(profile)
+        else:
+            profile.avatar_url = avatar_url
+    elif user.role == UserRole.COMPANY:
+        profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
+        if profile is None:
+            profile = CompanyProfile(
+                user_id=user.id,
+                company_name=user.email.split("@")[0].title(),
+                industry="Technology",
+                avatar_url=avatar_url,
+            )
+            db.add(profile)
+        else:
+            profile.avatar_url = avatar_url
+
+    await db.commit()
+    return {"avatar_url": avatar_url}
+
+
+@router.get("/avatar/{filename}")
+async def get_avatar(filename: str) -> FileResponse:
+    avatar_dir = Path(get_settings().resume_storage_path).parent / "avatars"
+    safe_path = avatar_dir / Path(filename).name
+    if not safe_path.exists() or not safe_path.is_file():
+        raise HTTPException(404, "Avatar not found")
+
+    content_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+        ".gif": "image/gif",
+    }
+    return FileResponse(safe_path, media_type=content_types.get(safe_path.suffix.lower(), "application/octet-stream"))
+
+
+@router.delete("/avatar")
+async def delete_avatar(
+    user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))],
+    db: DbSession,
+) -> dict[str, Any]:
+    if user.role == UserRole.STUDENT:
+        profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+    else:
+        profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
+
+    if profile and profile.avatar_url:
+        filename = profile.avatar_url.split("/")[-1]
+        avatar_dir = Path(get_settings().resume_storage_path).parent / "avatars"
+        (avatar_dir / filename).unlink(missing_ok=True)
+        profile.avatar_url = None
+        await db.commit()
+    return {"message": "Avatar removed", "avatar_url": None}

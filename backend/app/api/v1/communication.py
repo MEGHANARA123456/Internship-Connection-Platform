@@ -50,17 +50,116 @@ async def list_contacts(user: Annotated[User, Depends(get_current_user)], db: Db
     contacts = []
     for u in users:
         name = u.email.split("@")[0]
+        avatar_url = None
         if u.role == UserRole.STUDENT and u.student_profile:
             name = u.student_profile.full_name
+            avatar_url = u.student_profile.avatar_url
         elif u.role == UserRole.COMPANY and u.company_profile:
             name = u.company_profile.company_name
+            avatar_url = u.company_profile.avatar_url
         contacts.append({
             "id": u.id,
             "email": u.email,
             "name": name,
             "role": u.role.value,
+            "avatar_url": avatar_url,
         })
     return contacts
+
+
+@router.get("/contacts/recommended")
+async def list_recommended_contacts(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[dict]:
+    """
+    Returns recommended contacts with related internship context.
+    - For students: returns hiring companies with active and applied internships.
+    - For companies: returns candidate applicants for review.
+    """
+    recommended = []
+
+    if user.role == UserRole.STUDENT:
+        query = (
+            select(User, CompanyProfile, Internship)
+            .join(CompanyProfile, User.id == CompanyProfile.user_id)
+            .join(Internship, Internship.company_id == User.id)
+            .where(User.id != user.id, Internship.status == "PUBLISHED")
+            .order_by(Internship.created_at.desc())
+            .limit(10)
+        )
+        rows = (await db.execute(query)).all()
+        seen_companies = set()
+
+        my_app_company_ids = set(
+            (
+                await db.scalars(
+                    select(Internship.company_id)
+                    .join(Application, Application.internship_id == Internship.id)
+                    .where(Application.student_id == user.id)
+                )
+            ).all()
+        )
+
+        for u, comp, job in rows:
+            if u.id in seen_companies:
+                continue
+            seen_companies.add(u.id)
+            is_applied = u.id in my_app_company_ids
+            recommended.append({
+                "id": u.id,
+                "user_id": u.id,
+                "company_id": comp.id,
+                "company_name": comp.company_name,
+                "recruiter_name": comp.company_name,
+                "industry": comp.industry,
+                "email": u.email,
+                "avatar_url": comp.avatar_url,
+                "active_role": job.title,
+                "recent_roles": [job.title],
+                "internship_id": job.id,
+                "stipend": job.stipend,
+                "work_mode": job.work_mode,
+                "status": "Applied" if is_applied else "Hiring Now",
+                "relationship": "Applied" if is_applied else "Hiring Now",
+                "role": "COMPANY",
+            })
+
+    elif user.role == UserRole.COMPANY:
+        query = (
+            select(User, StudentProfile, Application, Internship)
+            .join(StudentProfile, User.id == StudentProfile.user_id)
+            .join(Application, Application.student_id == User.id)
+            .join(Internship, Application.internship_id == Internship.id)
+            .where(Internship.company_id == user.id)
+            .order_by(Application.created_at.desc())
+            .limit(10)
+        )
+        rows = (await db.execute(query)).all()
+        seen_students = set()
+        for u, stud, app, job in rows:
+            if u.id in seen_students:
+                continue
+            seen_students.add(u.id)
+            status_str = app.status.value if hasattr(app.status, "value") else str(app.status)
+            recommended.append({
+                "id": u.id,
+                "user_id": u.id,
+                "student_id": stud.id,
+                "name": stud.full_name,
+                "student_name": stud.full_name,
+                "university": stud.university,
+                "major": stud.major,
+                "email": u.email,
+                "avatar_url": stud.avatar_url,
+                "applied_role": job.title,
+                "active_role": job.title,
+                "recent_roles": [job.title],
+                "internship_id": job.id,
+                "application_id": app.id,
+                "status": status_str,
+                "relationship": "Candidate",
+                "role": "STUDENT",
+            })
+
+    return recommended
 
 
 @router.get("/conversations")
@@ -70,14 +169,25 @@ async def list_conversations(user: participant, db: DbSession) -> list[dict]:
     for conv in conversations:
         partner_id = conv.company_id if user.id == conv.student_id else conv.student_id
         partner_user = await db.get(User, partner_id)
-        partner_name = f"User #{partner_id}"
+        partner_name = "User"
+        partner_avatar = None
         if partner_user:
-            if partner_user.role == UserRole.STUDENT and partner_user.student_profile:
-                partner_name = partner_user.student_profile.full_name
-            elif partner_user.role == UserRole.COMPANY and partner_user.company_profile:
-                partner_name = partner_user.company_profile.company_name
+            if partner_user.role == UserRole.STUDENT:
+                sp = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == partner_id))
+                if sp and sp.full_name:
+                    partner_name = sp.full_name
+                    partner_avatar = sp.avatar_url
+                elif partner_user.email:
+                    partner_name = partner_user.email.split("@")[0].title()
+            elif partner_user.role == UserRole.COMPANY:
+                cp = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == partner_id))
+                if cp and cp.company_name:
+                    partner_name = cp.company_name
+                    partner_avatar = cp.avatar_url
+                elif partner_user.email:
+                    partner_name = partner_user.email.split("@")[0].title()
             elif partner_user.email:
-                partner_name = partner_user.email.split("@")[0]
+                partner_name = partner_user.email.split("@")[0].title()
 
         last_msg = await db.scalar(select(Message).where(Message.conversation_id == conv.id).order_by(Message.created_at.desc()).limit(1))
         unread = await db.scalar(select(Message.id).where(Message.conversation_id == conv.id, Message.sender_id != user.id, Message.read_at.is_(None)).limit(1))
@@ -88,6 +198,7 @@ async def list_conversations(user: participant, db: DbSession) -> list[dict]:
             "company_id": conv.company_id,
             "partner_id": partner_id,
             "partner_name": partner_name,
+            "partner_avatar": partner_avatar,
             "partner_role": partner_user.role.value if partner_user else "USER",
             "last_message": last_msg.body if last_msg else "No messages yet",
             "last_message_at": last_msg.created_at.isoformat() if last_msg else conv.created_at.isoformat(),
@@ -204,7 +315,19 @@ async def notifications(user: Annotated[User, Depends(get_current_user)], db: Db
     return list(await db.scalars(select(Notification).where(Notification.user_id == user.id).order_by(Notification.created_at.desc())))
 
 
+@router.post("/notifications/read-all", status_code=204)
+@router.patch("/notifications/read-all", status_code=204)
+async def mark_all_notifications_read(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> None:
+    await db.execute(
+        update(Notification)
+        .where(Notification.user_id == user.id, Notification.read_at.is_(None))
+        .values(read_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
+
+
 @router.post("/notifications/{notification_id}/read", status_code=204)
+@router.patch("/notifications/{notification_id}/read", status_code=204)
 async def mark_notification_read(notification_id: int, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> None:
     notification = await db.scalar(select(Notification).where(Notification.id == notification_id, Notification.user_id == user.id))
     if notification is None: raise HTTPException(404, "Notification not found")

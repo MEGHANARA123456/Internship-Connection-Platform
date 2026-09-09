@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -20,6 +20,10 @@ import { MockInterviewModal } from '../components/modals/MockInterviewModal'
 import { SkillQuizModal } from '../components/modals/SkillQuizModal'
 import { RecommendationModal } from '../components/modals/RecommendationModal'
 import { OfferLetterModal } from '../components/modals/OfferLetterModal'
+import { AccountSecurityCard } from '../components/auth/AccountSecurityCard'
+import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
+import { ResumeEditorModal } from '../components/resume/ResumeEditorModal'
+import { AvatarUploadCard } from '../components/ui/AvatarUploadCard'
 import {
   Search,
   MapPin,
@@ -43,22 +47,41 @@ import {
   Sparkles,
   ExternalLink,
   GraduationCap,
+  BarChart3,
 } from 'lucide-react'
+import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 
 // --- 1. Opportunities Page (Browse Internships) ---
 
 export function OpportunitiesPage() {
   const { session } = useAuthStore()
   const navigate = useNavigate()
+  const { id } = useParams()
+  const [searchParams] = useSearchParams()
 
-  // Filters state
-  const [searchTerm, setSearchTerm] = useState('')
-  const [location, setLocation] = useState('')
-  const [industry, setIndustry] = useState('')
-  const [workMode, setWorkMode] = useState('')
-  const [minStipend, setMinStipend] = useState('')
-  const [skills, setSkills] = useState('')
+  // Filters state with initial query params from URL
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || searchParams.get('search') || '')
+  const [location, setLocation] = useState(searchParams.get('location') || '')
+  const [industry, setIndustry] = useState(searchParams.get('industry') || '')
+  const [workMode, setWorkMode] = useState(searchParams.get('work_mode') || '')
+  const [minStipend, setMinStipend] = useState(searchParams.get('min_stipend') || '')
+  const [skills, setSkills] = useState(searchParams.get('skills') || '')
   const [page, setPage] = useState(1)
+  const [showVisuals, setShowVisuals] = useState(false)
+
+  // Keep state in sync with URL search params changes
+  useEffect(() => {
+    const loc = searchParams.get('location')
+    const q = searchParams.get('q') || searchParams.get('search')
+    const ind = searchParams.get('industry')
+    const wm = searchParams.get('work_mode')
+    const sk = searchParams.get('skills')
+    if (loc !== null) setLocation(loc)
+    if (q !== null) setSearchTerm(q)
+    if (ind !== null) setIndustry(ind)
+    if (wm !== null) setWorkMode(wm)
+    if (sk !== null) setSkills(sk)
+  }, [searchParams])
 
   // Data & loading states
   const [internships, setInternships] = useState<any[]>([])
@@ -99,6 +122,25 @@ export function OpportunitiesPage() {
     fetchInternships()
   }, [page, location, industry, workMode, minStipend, skills])
 
+  // Auto-open selected job if :id route param is present (e.g. /opportunities/:id or /internships/:id)
+  useEffect(() => {
+    if (!id) return
+    const numericId = parseInt(id, 10)
+    if (isNaN(numericId)) return
+
+    const matched = internships.find((j) => j.id === numericId)
+    if (matched) {
+      setSelectedJob(matched)
+    } else {
+      api
+        .get(`/internships/${numericId}`)
+        .then((res) => {
+          if (res.data) setSelectedJob(res.data)
+        })
+        .catch(() => {})
+    }
+  }, [id, internships])
+
   // Filter client-side by keyword search if user typed in title
   const displayedJobs = internships.filter((job) =>
     searchTerm ? job.title.toLowerCase().includes(searchTerm.toLowerCase()) : true
@@ -118,13 +160,41 @@ export function OpportunitiesPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+      {session && (
+        <WelcomeGreeting
+          role={session.role}
+          name={session.name}
+          className="mb-6"
+        />
+      )}
+
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Explore Internships</h1>
-        <p className="text-xs text-slate-500 mt-1">
-          Discover verified paid internships, remote roles, and summer placements.
-        </p>
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Explore Internships</h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Discover verified paid internships, remote roles, and summer placements.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowVisuals((prev) => !prev)}
+          className="hidden md:inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60 shadow-2xs transition-colors cursor-pointer"
+        >
+          <BarChart3 className="w-3.5 h-3.5 text-indigo-500" />
+          <span>{showVisuals ? 'Hide Market Visuals' : 'Market Analysis Visuals'}</span>
+        </button>
       </div>
+
+      {showVisuals && (
+        <div className="hidden md:block mb-6">
+          <DesktopAnalysisVisuals
+            variant="public"
+            title="Ecosystem Role Domains & Compensation Visuals"
+            subtitle="Explore industry demand, hiring funnels, and work mode splits across the network"
+          />
+        </div>
+      )}
 
       {/* Filter Toolbar */}
       <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-2xs mb-6 space-y-3">
@@ -506,16 +576,31 @@ export function ApplicationsPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+      <WelcomeGreeting
+        role="STUDENT"
+        customSubtitle="Track the status of your internship applications, interview invitations, and job offers."
+        className="mb-6"
+      />
+
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">My Applications</h1>
-          <p className="text-xs text-slate-500 mt-1">Track the status of your internship submissions.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">My Applications</h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Track the status of your internship submissions.</p>
         </div>
         <Link to="/opportunities">
           <Button size="sm" variant="primary">
             Browse More Roles
           </Button>
         </Link>
+      </div>
+
+      {/* Desktop Visual Analysis Suite */}
+      <div className="hidden md:block mb-8">
+        <DesktopAnalysisVisuals
+          variant="student"
+          title="My Application Funnel & Recruitment Velocity"
+          subtitle="Track your submission progression, screening velocity, and ecosystem compensation insights"
+        />
       </div>
 
       {loading ? (
@@ -622,6 +707,7 @@ const profileSchema = z.object({
 })
 
 export function StudentProfilePage() {
+  const session = useAuthStore((state) => state.session)
   const [profileLoading, setProfileLoading] = useState(true)
   const [resume, setResume] = useState<any | null>(null)
   const [resumeLoading, setResumeLoading] = useState(true)
@@ -710,11 +796,14 @@ export function StudentProfilePage() {
 
   const [isQuizModalOpen, setIsQuizModalOpen] = useState(false)
   const [isRecModalOpen, setIsRecModalOpen] = useState(false)
+  const [isResumeEditorOpen, setIsResumeEditorOpen] = useState(false)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(session?.avatar_url || null)
 
   const {
     register,
     handleSubmit,
     setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<z.infer<typeof profileSchema>>({
     resolver: zodResolver(profileSchema),
@@ -732,6 +821,10 @@ export function StudentProfilePage() {
       setValue('graduation_year', data.graduation_year || 2026)
       setValue('skills', data.skills || '')
       setValue('bio', data.bio || '')
+      if (data.avatar_url) {
+        setAvatarUrl(data.avatar_url)
+        useAuthStore.getState().updateAvatar(data.avatar_url)
+      }
     } catch {
       setProfileError('Failed to load profile details.')
     } finally {
@@ -875,6 +968,14 @@ export function StudentProfilePage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left 2 Cols: Main Form & Developer Profiles */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Profile Picture Upload & Customization */}
+          <AvatarUploadCard
+            currentAvatarUrl={avatarUrl}
+            name={watch('full_name') || session?.name || 'Student Candidate'}
+            roleLabel="Student Candidate"
+            onAvatarUpdated={(newUrl) => setAvatarUrl(newUrl)}
+          />
+
           {/* Academic & Personal Details Card */}
           <Card className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
             <CardHeader>
@@ -1164,6 +1265,9 @@ export function StudentProfilePage() {
               )}
             </CardContent>
           </Card>
+
+          {/* Account Security & Password */}
+          <AccountSecurityCard userEmail={session?.email} role="Student" />
         </div>
 
         {/* Right Col: Verified Badges & Resume */}
@@ -1278,6 +1382,18 @@ export function StudentProfilePage() {
                 </div>
               )}
 
+              {/* In-App Resume Builder / Editor Trigger */}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full text-xs text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+                onClick={() => setIsResumeEditorOpen(true)}
+                leftIcon={<Sparkles className="w-3.5 h-3.5 text-indigo-500" />}
+              >
+                Build / Edit Resume in App
+              </Button>
+
               {/* Upload or Replace button */}
               <div>
                 <label className="block">
@@ -1290,7 +1406,7 @@ export function StudentProfilePage() {
                   />
                   <Button
                     type="button"
-                    variant={resume ? 'outline' : 'primary'}
+                    variant={resume ? 'outline' : 'secondary'}
                     size="sm"
                     className="w-full text-xs"
                     isLoading={uploading}
@@ -1300,7 +1416,7 @@ export function StudentProfilePage() {
                       input?.click()
                     }}
                   >
-                    {resume ? 'Replace Resume' : 'Upload Resume'}
+                    {resume ? 'Upload Alternate File' : 'Upload Existing File'}
                   </Button>
                 </label>
               </div>
@@ -1321,6 +1437,22 @@ export function StudentProfilePage() {
         isOpen={isRecModalOpen}
         onClose={() => setIsRecModalOpen(false)}
         onRecommendationAdded={handleRecommendationAdded}
+      />
+
+      {/* In-App Resume Builder & Editor Modal */}
+      <ResumeEditorModal
+        isOpen={isResumeEditorOpen}
+        onClose={() => setIsResumeEditorOpen(false)}
+        initialProfile={{
+          full_name: watch('full_name') || session?.name,
+          university: watch('university'),
+          major: watch('major'),
+          graduation_year: watch('graduation_year'),
+          skills: watch('skills'),
+          bio: watch('bio'),
+          email: session?.email,
+        }}
+        onSaveToProfile={loadProfile}
       />
     </div>
   )
