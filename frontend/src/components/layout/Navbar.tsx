@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../../store/auth'
-import { api } from '../../api/client'
+import { api, getFullMediaUrl } from '../../api/client'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
+import { Logo } from './Logo'
 import {
   Briefcase,
   Layers,
@@ -20,13 +21,16 @@ import {
   Users,
   Sun,
   Moon,
-  GraduationCap,
+  Smartphone,
+  Monitor,
 } from 'lucide-react'
 import { useThemeStore } from '../../store/theme'
+import { useViewModeStore } from '../../store/viewMode'
 
 export function Navbar() {
   const { session, logout } = useAuthStore()
   const { setTheme, isDark } = useThemeStore()
+  const { isMobileView, toggleMobileView } = useViewModeStore()
   const navigate = useNavigate()
   const location = useLocation()
   const [unreadCount, setUnreadCount] = useState(0)
@@ -64,17 +68,19 @@ export function Navbar() {
 
   const isActive = (path: string) => location.pathname === path
 
+  const mobileLinkClass = (path: string) =>
+    `px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+      isActive(path)
+        ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400 font-semibold'
+        : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+    }`
+
   return (
     <header className="sticky top-0 z-40 w-full border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xs shadow-2xs transition-colors">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
         {/* Brand */}
         <div className="flex items-center gap-3">
-          <Link to="/" className="flex items-center gap-2 text-slate-900 dark:text-white font-bold text-base tracking-tight hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-black text-sm shadow-xs">
-              IC
-            </div>
-            <span>InternshipHub</span>
-          </Link>
+          <Logo size="md" />
 
           {role && (
             <Badge status={role} className="hidden sm:inline-flex text-[11px] font-semibold py-0.5 px-2">
@@ -96,17 +102,6 @@ export function Navbar() {
                 }`}
               >
                 Browse Internships
-              </Link>
-              <Link
-                to="/college/dashboard"
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                  isActive('/college/dashboard')
-                    ? 'bg-indigo-50 text-indigo-700'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                <GraduationCap className="w-4 h-4 text-indigo-500" />
-                Campus TPO
               </Link>
               <Link
                 to="/login"
@@ -179,17 +174,6 @@ export function Navbar() {
                 <User className="w-4 h-4" />
                 My Profile
               </Link>
-              <Link
-                to="/college/dashboard"
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                  isActive('/college/dashboard')
-                    ? 'bg-indigo-50 text-indigo-700'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                <GraduationCap className="w-4 h-4 text-indigo-500" />
-                Campus TPO
-              </Link>
             </>
           )}
 
@@ -248,17 +232,6 @@ export function Navbar() {
               >
                 <Building className="w-4 h-4" />
                 Company Profile
-              </Link>
-              <Link
-                to="/college/dashboard"
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                  isActive('/college/dashboard')
-                    ? 'bg-indigo-50 text-indigo-700'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                <GraduationCap className="w-4 h-4 text-indigo-500" />
-                Campus TPO
               </Link>
             </>
           )}
@@ -326,10 +299,34 @@ export function Navbar() {
 
         {/* User Right Slot */}
         <div className="hidden md:flex items-center gap-2">
+          {/* Mobile View / Desktop View Simulator Button */}
+          <button
+            onClick={toggleMobileView}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all border cursor-pointer ${
+              isMobileView
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border-slate-200 dark:border-slate-700'
+            }`}
+            title={isMobileView ? 'Switch back to Full Desktop View' : 'Preview in Mobile Phone View'}
+            aria-label="Toggle mobile device view"
+          >
+            {isMobileView ? (
+              <>
+                <Monitor className="w-3.5 h-3.5" />
+                <span>Desktop View</span>
+              </>
+            ) : (
+              <>
+                <Smartphone className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" />
+                <span>Mobile View</span>
+              </>
+            )}
+          </button>
+
           {/* Theme Toggle Button */}
           <button
             onClick={() => setTheme(isDark ? 'light' : 'dark')}
-            className="p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-800 transition-colors"
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
             aria-label="Toggle theme"
           >
@@ -349,6 +346,35 @@ export function Navbar() {
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}
+              </Link>
+
+              {/* Profile Avatar Quick Link */}
+              <Link
+                to={role === 'STUDENT' ? '/profile/student' : role === 'COMPANY' ? '/profile/company' : '/admin'}
+                className="flex items-center gap-2 p-1 pl-1.5 pr-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition-colors group"
+                title="View & Edit Profile"
+              >
+                <div className="w-7 h-7 rounded-lg overflow-hidden bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-2xs">
+                  {getFullMediaUrl(session.avatar_url) ? (
+                    <img
+                      src={getFullMediaUrl(session.avatar_url)!}
+                      alt={session.name || 'User'}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        ;(e.currentTarget as HTMLElement).style.display = 'none'
+                      }}
+                    />
+                  ) : (
+                    <span>
+                      {session.name
+                        ? session.name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2)
+                        : (session.email ? session.email[0].toUpperCase() : 'U')}
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 max-w-[90px] truncate hidden xl:inline">
+                  {session.name?.split(' ')[0] || 'Profile'}
+                </span>
               </Link>
 
               <Button
@@ -438,19 +464,19 @@ export function Navbar() {
 
               {role === 'STUDENT' && (
                 <>
-                  <Link to="/opportunities" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/opportunities" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/opportunities')}>
                     Find Internships
                   </Link>
-                  <Link to="/applications" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/applications" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/applications')}>
                     My Applications
                   </Link>
-                  <Link to="/interviews" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/interviews" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/interviews')}>
                     Interviews
                   </Link>
-                  <Link to="/messages" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/messages" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/messages')}>
                     Messages
                   </Link>
-                  <Link to="/profile/student" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/profile/student" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/profile/student')}>
                     My Profile & Resume
                   </Link>
                 </>
@@ -458,19 +484,19 @@ export function Navbar() {
 
               {role === 'COMPANY' && (
                 <>
-                  <Link to="/company/jobs" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/company/jobs" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/company/jobs')}>
                     Our Job Listings
                   </Link>
-                  <Link to="/company/internships/new" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/company/internships/new" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/company/internships/new')}>
                     Post New Internship
                   </Link>
-                  <Link to="/interviews" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/interviews" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/interviews')}>
                     Scheduled Interviews
                   </Link>
-                  <Link to="/messages" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/messages" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/messages')}>
                     Messages
                   </Link>
-                  <Link to="/profile/company" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/profile/company" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/profile/company')}>
                     Company Profile
                   </Link>
                 </>
@@ -478,25 +504,25 @@ export function Navbar() {
 
               {role === 'ADMIN' && (
                 <>
-                  <Link to="/admin" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/admin" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/admin')}>
                     Console Overview
                   </Link>
-                  <Link to="/admin/users" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/admin/users" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/admin/users')}>
                     Users Management
                   </Link>
-                  <Link to="/admin/verifications" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/admin/verifications" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/admin/verifications')}>
                     Company Verifications
                   </Link>
-                  <Link to="/admin/moderation" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/admin/moderation" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/admin/moderation')}>
                     Job Moderation
                   </Link>
-                  <Link to="/admin/reports" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100">
+                  <Link to="/admin/reports" onClick={() => setMobileOpen(false)} className={mobileLinkClass('/admin/reports')}>
                     Dispute Reports
                   </Link>
                 </>
               )}
 
-              <Link to="/notifications" onClick={() => setMobileOpen(false)} className="px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-100 flex items-center justify-between">
+              <Link to="/notifications" onClick={() => setMobileOpen(false)} className={`flex items-center justify-between ${mobileLinkClass('/notifications')}`}>
                 <span>Notifications</span>
                 {unreadCount > 0 && <Badge status="REJECTED">{unreadCount} new</Badge>}
               </Link>
@@ -506,7 +532,7 @@ export function Navbar() {
                   setMobileOpen(false)
                   handleSignOut()
                 }}
-                className="w-full mt-2 px-3 py-2 text-left rounded-lg text-sm font-medium text-rose-600 hover:bg-rose-50 flex items-center gap-2"
+                className="w-full mt-2 px-3 py-2 text-left rounded-lg text-sm font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-2 cursor-pointer"
               >
                 <LogOut className="w-4 h-4" />
                 Sign out

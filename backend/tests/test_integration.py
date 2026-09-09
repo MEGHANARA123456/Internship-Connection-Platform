@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.v1.dependencies import get_db
@@ -30,6 +31,11 @@ async def test_complete_recruitment_lifecycle(monkeypatch: pytest.MonkeyPatch) -
         student = await client.post("/api/v1/auth/register/student", json=student_data)
         company = await client.post("/api/v1/auth/register/company", json=company_data)
         assert student.status_code == 201 and company.status_code == 201
+        async with sessions() as session:
+            users = (await session.scalars(select(User))).all()
+            for u in users:
+                u.is_verified = True
+            await session.commit()
         student_login = await client.post("/api/v1/auth/login", json={"email": student_data["email"], "password": student_data["password"]})
         company_login = await client.post("/api/v1/auth/login", json={"email": company_data["email"], "password": company_data["password"]})
         student_headers = {"Authorization": f"Bearer {student_login.json()['access_token']}"}

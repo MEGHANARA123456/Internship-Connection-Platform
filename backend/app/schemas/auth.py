@@ -30,6 +30,7 @@ class AdminRegister(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    portal: str | None = None
 
 
 class RefreshRequest(BaseModel):
@@ -44,9 +45,25 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 
+class VerifyOtpRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(min_length=6, max_length=6)
+
+
 class ResetPasswordRequest(BaseModel):
-    token: str
+    email: EmailStr | None = None
+    token: str | None = None
+    otp: str | None = None
     new_password: str = Field(min_length=8)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
 
 
 class TokenResponse(BaseModel):
@@ -55,10 +72,21 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     role: str
     user_id: int
+    name: str | None = None
+    email: str | None = None
+    avatar_url: str | None = None
 
 
 class CheckEmailRequest(BaseModel):
     email: EmailStr
+    role: str | None = None
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str | None = None
+    email: EmailStr | None = None
+    name: str | None = None
+    role: str = "STUDENT"
 
 
 class UserResponse(BaseModel):
@@ -67,4 +95,4 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: str
     is_verified: bool
-    verification_token: str | None = None
+    verification_token: str | None = None

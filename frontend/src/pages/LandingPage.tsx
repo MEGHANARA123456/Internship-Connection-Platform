@@ -15,6 +15,7 @@ import {
   MapPin,
   Sparkles,
 } from 'lucide-react'
+import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 
 export function LandingPage() {
   const navigate = useNavigate()
@@ -238,6 +239,15 @@ export function LandingPage() {
           </div>
         </section>
       )}
+
+      {/* Desktop Ecosystem Analysis Visuals Section */}
+      <section className="hidden md:block w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        <DesktopAnalysisVisuals
+          variant="public"
+          title="Transparent Ecosystem Analytics & Insights"
+          subtitle="Explore live recruitment metrics: placement progression, hiring speed, and role distributions"
+        />
+      </section>
     </div>
   )
 }

@@ -45,6 +45,7 @@ class StudentProfile(Base):
     graduation_year: Mapped[int] = mapped_column()
     bio: Mapped[str | None] = mapped_column(Text)
     skills: Mapped[str] = mapped_column(Text, default="")
+    avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     user: Mapped[User] = relationship(back_populates="student_profile")
 
 
@@ -57,6 +58,7 @@ class CompanyProfile(Base):
     website: Mapped[str | None] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(Text)
     verification_status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     user: Mapped[User] = relationship(back_populates="company_profile")
 
 

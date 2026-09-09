@@ -9,6 +9,13 @@ const getBaseUrl = () => {
   return raw.replace(':8000', ':8010')
 }
 
+export const getFullMediaUrl = (path?: string | null): string | null => {
+  if (!path) return null
+  if (path.startsWith('http://') || path.startsWith('https://')) return path
+  const base = getBaseUrl().replace('/api/v1', '')
+  return `${base}${path.startsWith('/') ? '' : '/'}${path}`
+}
+
 export const api = axios.create({
   baseURL: getBaseUrl(),
   headers: {

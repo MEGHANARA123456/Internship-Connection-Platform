@@ -14,6 +14,10 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { CardSkeleton, TableSkeleton } from '../components/ui/LoadingSkeleton'
 import { ErrorState } from '../components/ui/ErrorState'
 import { ScheduleInterviewModal } from '../components/modals/ScheduleInterviewModal'
+import { useAuthStore } from '../store/auth'
+import { AccountSecurityCard } from '../components/auth/AccountSecurityCard'
+import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
+import { AvatarUploadCard } from '../components/ui/AvatarUploadCard'
 import {
   Plus,
   Users,
@@ -31,6 +35,7 @@ import {
   XCircle,
   GripVertical,
 } from 'lucide-react'
+import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 
 // --- 1. Company Jobs Management ---
 
@@ -81,18 +86,45 @@ export function CompanyJobsPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+      <WelcomeGreeting
+        role="COMPANY"
+        customSubtitle="Welcome to your hiring command center. Review candidate applications, publish new roles, and coordinate interviews."
+        className="mb-6"
+      />
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Internship Postings</h1>
-          <p className="text-xs text-slate-500 mt-1">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Internship Postings</h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             Create, moderate, and track candidates across your open positions.
           </p>
         </div>
-        <Link to="/company/internships/new">
-          <Button size="sm" variant="primary" leftIcon={<Plus className="w-4 h-4" />}>
-            Post New Role
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <Link to="/interviews">
+            <Button
+              size="sm"
+              variant="outline"
+              leftIcon={<Calendar className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />}
+              className="border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50"
+            >
+              Interview Scheduling
+            </Button>
+          </Link>
+          <Link to="/company/internships/new">
+            <Button size="sm" variant="primary" leftIcon={<Plus className="w-4 h-4" />}>
+              Post New Role
+            </Button>
+          </Link>
+        </div>
+      </div>
+
+      {/* Desktop Hiring Pipeline & Conversion Visuals */}
+      <div className="hidden md:block mb-8">
+        <DesktopAnalysisVisuals
+          variant="company"
+          title="Company Hiring Pipeline & Conversion Analytics"
+          subtitle="Real-time candidate screening velocity, recruitment funnel progression, and market distribution"
+        />
       </div>
 
       {loading ? (
@@ -129,6 +161,17 @@ export function CompanyJobsPage() {
                   <Link to={`/company/jobs/${job.id}/applicants`}>
                     <Button size="sm" variant="outline" leftIcon={<Users className="w-3.5 h-3.5" />}>
                       View Applicants
+                    </Button>
+                  </Link>
+
+                  <Link to="/interviews">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      leftIcon={<Calendar className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+                      className="border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                    >
+                      Interview Scheduling
                     </Button>
                   </Link>
 
@@ -387,6 +430,7 @@ export function JobApplicantsPage() {
   const [selectedAppIds, setSelectedAppIds] = useState<Set<number>>(new Set())
   const [bulkProcessing, setBulkProcessing] = useState(false)
   const [draggedAppId, setDraggedAppId] = useState<number | null>(null)
+  const [mobileStageFilter, setMobileStageFilter] = useState<string>('ALL')
 
   const fetchApplicants = async () => {
     setLoading(true)
@@ -659,18 +703,52 @@ export function JobApplicantsPage() {
         />
       ) : viewMode === 'kanban' ? (
         /* KANBAN BOARD VIEW */
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-start overflow-x-auto pb-4">
-          {STAGES.map((stage) => {
-            const stageApps = applicants.filter((a) => a.status === stage.id)
-            return (
-              <div
-                key={stage.id}
-                onDragOver={handleDragOver}
-                onDrop={(e) => handleDrop(e, stage.id)}
-                className={`rounded-2xl border-t-4 border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 p-3 min-h-[500px] flex flex-col space-y-3 transition-colors ${
-                  stage.color
-                }`}
-              >
+        <div className="space-y-4">
+          {/* Mobile Stage Selector Pill Tabs */}
+          <div className="md:hidden flex items-center gap-1.5 overflow-x-auto pb-2 scrollbar-none">
+            <button
+              type="button"
+              onClick={() => setMobileStageFilter('ALL')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-colors cursor-pointer ${
+                mobileStageFilter === 'ALL'
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              All Stages ({applicants.length})
+            </button>
+            {STAGES.map((s) => {
+              const count = applicants.filter((a) => a.status === s.id).length
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setMobileStageFilter(s.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-colors flex items-center gap-1.5 cursor-pointer ${
+                    mobileStageFilter === s.id
+                      ? 'bg-indigo-600 text-white shadow-2xs'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  <span>{s.title}</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/10 dark:bg-white/10 font-bold">{count}</span>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="flex md:grid md:grid-cols-3 lg:grid-cols-6 gap-4 items-start overflow-x-auto pb-4 snap-x snap-mandatory">
+            {STAGES.filter((s) => mobileStageFilter === 'ALL' || s.id === mobileStageFilter).map((stage) => {
+              const stageApps = applicants.filter((a) => a.status === stage.id)
+              return (
+                <div
+                  key={stage.id}
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, stage.id)}
+                  className={`w-[86vw] sm:w-[320px] md:w-auto shrink-0 md:shrink snap-center rounded-2xl border-t-4 border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 p-3 min-h-[500px] flex flex-col space-y-3 transition-colors ${
+                    stage.color
+                  }`}
+                >
                 {/* Column Header */}
                 <div className="flex items-center justify-between pb-2 border-b border-slate-200/80 dark:border-slate-800">
                   <span className="text-xs font-bold tracking-tight">{stage.title}</span>
@@ -791,9 +869,10 @@ export function JobApplicantsPage() {
                     })
                   )}
                 </div>
-              </div>
-            )
-          })}
+                </div>
+              )
+            })}
+          </div>
         </div>
       ) : (
         /* TABLE VIEW */
@@ -935,10 +1014,12 @@ const companyProfileSchema = z.object({
 })
 
 export function CompanyProfilePage() {
+  const session = useAuthStore((state) => state.session)
   const [profile, setProfile] = useState<any | null>(null)
   const [loading, setLoading] = useState(true)
   const [saved, setSaved] = useState(false)
   const [serverError, setServerError] = useState('')
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(session?.avatar_url || null)
 
   const {
     register,
@@ -958,6 +1039,10 @@ export function CompanyProfilePage() {
         setValue('industry', res.data.industry)
         setValue('website', res.data.website || '')
         setValue('description', res.data.description || '')
+        if (res.data.avatar_url) {
+          setAvatarUrl(res.data.avatar_url)
+          useAuthStore.getState().updateAvatar(res.data.avatar_url)
+        }
       } catch {
         setServerError('Failed to load company profile.')
       } finally {
@@ -992,6 +1077,14 @@ export function CompanyProfilePage() {
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">Company Profile</h1>
         <p className="text-xs text-slate-500 mt-1">Manage public organization details and verification status.</p>
       </div>
+
+      {/* Company Brand Logo / Avatar Upload */}
+      <AvatarUploadCard
+        currentAvatarUrl={avatarUrl}
+        name={profile?.company_name || 'Organization'}
+        roleLabel="Hiring Employer"
+        onAvatarUpdated={(newUrl) => setAvatarUrl(newUrl)}
+      />
 
       {profile && (
         <div className="p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
@@ -1058,6 +1151,9 @@ export function CompanyProfilePage() {
           </form>
         </CardContent>
       </Card>
+
+      {/* Account Security & Password */}
+      <AccountSecurityCard userEmail={session?.email} role="Company" />
     </div>
   )
 }

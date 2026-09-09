@@ -20,7 +20,10 @@ import {
   ExternalLink,
   Ban,
   RotateCcw,
+  RefreshCw,
 } from 'lucide-react'
+import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
+import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 
 // --- 1. Admin Console Dashboard ---
 
@@ -39,6 +42,8 @@ export function AdminDashboardPage() {
   const [openReportsList, setOpenReportsList] = useState<any[]>([])
   const [apiOnline, setApiOnline] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [analysisRefreshKey, setAnalysisRefreshKey] = useState(0)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   const fetchDashboardData = async () => {
@@ -90,6 +95,13 @@ export function AdminDashboardPage() {
     fetchDashboardData()
   }, [])
 
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    setAnalysisRefreshKey((prev) => prev + 1)
+    await fetchDashboardData()
+    setRefreshing(false)
+  }
+
   const handleQuickVerify = async (userId: number, status: 'VERIFIED' | 'REJECTED') => {
     setActionLoading(`comp-${userId}`)
     try {
@@ -116,6 +128,11 @@ export function AdminDashboardPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-8">
+      <WelcomeGreeting
+        role="ADMIN"
+        customSubtitle="Platform operations dashboard. Oversee company verification, listing moderation, and ecosystem security."
+      />
+
       {/* Header & Status */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
@@ -145,7 +162,13 @@ export function AdminDashboardPage() {
               API Backend: {apiOnline === true ? 'Online (Port 8010)' : apiOnline === false ? 'Offline' : 'Connecting...'}
             </span>
           </div>
-          <Button size="sm" variant="outline" onClick={fetchDashboardData}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleRefresh}
+            isLoading={refreshing}
+            leftIcon={<RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />}
+          >
             Refresh
           </Button>
         </div>
@@ -218,6 +241,16 @@ export function AdminDashboardPage() {
             <p className="text-[11px] text-slate-400 mt-1">Student & recruiter reports</p>
           </Card>
         </Link>
+      </div>
+
+      {/* Desktop Ecosystem Analysis Visuals */}
+      <div className="hidden md:block">
+        <DesktopAnalysisVisuals
+          variant="admin"
+          refreshKey={analysisRefreshKey}
+          title="Platform Ecosystem & Placement Analytics"
+          subtitle="Real-time tracking of candidate pipeline throughput, monthly placement velocity, and role demands"
+        />
       </div>
 
       {/* Live Action Queues Preview */}

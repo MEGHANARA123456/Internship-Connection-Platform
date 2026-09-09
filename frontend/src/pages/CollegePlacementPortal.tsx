@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../api/client'
+import { useAuthStore } from '../store/auth'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { CardSkeleton } from '../components/ui/LoadingSkeleton'
@@ -13,9 +15,12 @@ import {
   Download,
   CheckCircle2,
   Sparkles,
+  ArrowRight,
 } from 'lucide-react'
+import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 
 export function CollegePlacementPortal() {
+  const { session } = useAuthStore()
   const [data, setData] = useState<any | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -38,6 +43,33 @@ export function CollegePlacementPortal() {
   useEffect(() => {
     fetchStats()
   }, [])
+
+  const handleExportReport = () => {
+    if (!data) return
+    const placements = data.recent_placements || []
+    const headers = ['Placement ID', 'Student Name', 'University', 'Major / Department', 'Company Partner', 'Job Role', 'Stipend ($/mo)', 'Placement Status', 'Date']
+    const rows = placements.map((p: any) => [
+      p.id,
+      `"${(p.student_name || '').replace(/"/g, '""')}"`,
+      `"${(p.university || '').replace(/"/g, '""')}"`,
+      `"${(p.major || '').replace(/"/g, '""')}"`,
+      `"${(p.company_name || '').replace(/"/g, '""')}"`,
+      `"${(p.role || '').replace(/"/g, '""')}"`,
+      p.stipend || 0,
+      p.status || 'SELECTED',
+      p.date || '',
+    ])
+
+    const csvContent = [headers.join(','), ...rows.map((r: any) => r.join(','))].join('\n')
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', `institutional_placement_report_${data.academic_year || 'batch'}.csv`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
 
   if (loading) {
     return (
@@ -72,6 +104,14 @@ export function CollegePlacementPortal() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-8">
+      {session && (
+        <WelcomeGreeting
+          role={session.role || 'COLLEGE'}
+          name={session.name}
+          customSubtitle={`Welcome to the ${data.institution_name} Placement Dashboard. Track campus recruitment drives and NIRF reporting.`}
+        />
+      )}
+
       {/* Collegiate Portal Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-6">
         <div>
@@ -93,13 +133,42 @@ export function CollegePlacementPortal() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => alert('Batch Placement Report downloaded as Excel/PDF.')}
+            onClick={handleExportReport}
             leftIcon={<Download className="w-3.5 h-3.5" />}
           >
             Export NIRF / NAAC Report
           </Button>
         </div>
       </div>
+
+      {/* Guest Invitation Banner */}
+      {!session && (
+        <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10 border border-indigo-200 dark:border-indigo-900/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">Join Campus Recruitment Season</h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400">
+                Are you a student looking for internship placements, or an employer seeking verified campus talent?
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Link to="/register-student">
+              <Button size="sm" variant="primary" rightIcon={<ArrowRight className="w-3.5 h-3.5" />}>
+                Join as Student
+              </Button>
+            </Link>
+            <Link to="/register-company">
+              <Button size="sm" variant="outline">
+                Recruiter Portal
+              </Button>
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* KPI Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

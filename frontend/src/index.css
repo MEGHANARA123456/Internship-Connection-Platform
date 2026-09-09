@@ -69,3 +69,27 @@ body {
 .dark ::-webkit-scrollbar-thumb:hover {
   background: #475569;
 }
+
+@media print {
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+  }
+  
+  /* Hide all elements during print except resume area */
+  nav, header, footer, .print\:hidden {
+    display: none !important;
+  }
+  
+  #resume-printable-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 24px !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+}
