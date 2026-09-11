@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = 60
     admin_signup_key: str = "change-admin-signup-key"
     gemini_api_key: str | None = None
-    require_email_verification: bool = False
+    require_email_verification: bool = True
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

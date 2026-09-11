@@ -26,8 +26,14 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    student_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    institution_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    organization_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    admin_approved: Mapped[bool] = mapped_column(Boolean, default=False)
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verification_token: Mapped[str | None] = mapped_column(String(255), unique=True)
+    verification_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reset_token: Mapped[str | None] = mapped_column(String(255), unique=True)
     reset_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     student_profile: Mapped["StudentProfile | None"] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -45,6 +51,7 @@ class StudentProfile(Base):
     graduation_year: Mapped[int] = mapped_column()
     bio: Mapped[str | None] = mapped_column(Text)
     skills: Mapped[str] = mapped_column(Text, default="")
+    institution_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     user: Mapped[User] = relationship(back_populates="student_profile")
 
@@ -70,6 +77,29 @@ class RefreshToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     user: Mapped[User] = relationship(back_populates="refresh_tokens")
+
+
+class EmailVerificationToken(Base):
+    __tablename__ = "email_verification_tokens"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    token_digest: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class EmailMessage(Base):
+    __tablename__ = "email_messages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    recipient_email: Mapped[str] = mapped_column(String(255), index=True)
+    sender_email: Mapped[str] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(255))
+    message_type: Mapped[str] = mapped_column(String(50), default="GENERAL")
+    body: Mapped[str] = mapped_column(Text)
+    html: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class Internship(Base):

@@ -1,4 +1,5 @@
 from typing import Annotated, Any
+import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
@@ -6,13 +7,12 @@ from urllib.parse import quote_plus
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from jose import jwt
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.api.v1.dependencies import DbSession, get_current_user
 from app.core.config import get_settings
 from app.core.security import create_token, decode_token, hash_password, verify_password
-from app.models import CompanyProfile, RefreshToken, StudentProfile, User, UserRole
+from app.models import CompanyProfile, EmailVerificationToken, RefreshToken, StudentProfile, User, UserRole
 from app.schemas.auth import (
     AdminRegister,
     ChangePasswordRequest,
@@ -31,31 +31,9 @@ from app.schemas.auth import (
     VerifyOtpRequest,
 )
 from app.services.mail import send_dev_email
+from app.services.email_validation import validate_email_format, validate_organization_email, validate_student_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-def is_academic_email(email: str) -> bool:
-    """
-    Identifies academic and student email domains (.edu, .ac, college/student portals)
-    to differentiate educational accounts from corporate recruiter accounts.
-    """
-    clean = email.strip().lower()
-    if "@" not in clean:
-        return False
-    domain = clean.split("@", 1)[1]
-    academic_indicators = (
-        ".edu",
-        ".edu.",
-        ".ac.",
-        ".res.in",
-        "student",
-        "campus",
-        "college",
-        "univ",
-        "scholar",
-    )
-    return any(indicator in domain for indicator in academic_indicators)
 
 
 def _is_expired(dt: datetime | None) -> bool:
@@ -104,23 +82,7 @@ async def verify_google_credential(
         except Exception:
             pass
 
-        # 3. Decode claims without signature check (supports mock/dev tokens)
-        try:
-            claims = jwt.get_unverified_claims(credential)
-            email = claims.get("email")
-            name = claims.get("name") or claims.get("given_name") or (email.split("@")[0] if email else "Google User")
-            if email:
-                return email.strip().lower(), name.strip()
-        except Exception:
-            pass
-
-    # 4. Direct email fallback for local development or sandbox SSO
-    if fallback_email:
-        clean_email = str(fallback_email).strip().lower()
-        clean_name = (fallback_name or clean_email.split("@")[0].capitalize()).strip()
-        return clean_email, clean_name
-
-    raise HTTPException(status_code=400, detail="Invalid Google token or credentials")
+    raise HTTPException(status_code=400, detail="A valid Google credential is required")
 
 
 async def issue_tokens(user: User, db: DbSession) -> TokenResponse:
@@ -163,22 +125,31 @@ async def issue_tokens(user: User, db: DbSession) -> TokenResponse:
 
 
 async def create_user(email: str, password: str, role: UserRole, db: DbSession, background_tasks: BackgroundTasks) -> User:
-    clean_email = email.strip().lower()
+    clean_email = validate_email_format(email)
     if await db.scalar(select(User).where(User.email == clean_email)):
         raise HTTPException(status_code=409, detail="Email is already registered")
-    user = User(email=clean_email, password_hash=hash_password(password), role=role, verification_token=token_urlsafe(32))
+    raw_token = token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    user = User(
+        email=clean_email,
+        password_hash=hash_password(password),
+        role=role,
+        verification_token=raw_token,
+        verification_token_expires_at=expires_at,
+    )
     db.add(user)
     await db.flush()
+    db.add(EmailVerificationToken(user_id=user.id, token_digest=hashlib.sha256(raw_token.encode()).hexdigest(), expires_at=expires_at))
 
     settings = get_settings()
     frontend_url = (settings.frontend_url or "http://localhost:5174").rstrip("/")
-    verify_url = f"{frontend_url}/verify/{user.verification_token}"
+    verify_url = f"{frontend_url}/verify/{raw_token}"
 
     plain_body = (
         f"Welcome to InternSphere!\n\n"
         f"Please verify your account to get started:\n"
         f"{verify_url}\n\n"
-        f"Verification Token: {user.verification_token}\n"
+        "This link expires in 24 hours and can only be used once.\n"
     )
     html_body = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
@@ -200,30 +171,38 @@ async def create_user(email: str, password: str, role: UserRole, db: DbSession, 
         </p>
     </div>
     """
-    background_tasks.add_task(send_dev_email, clean_email, "Verify your account", plain_body, html_body)
+    background_tasks.add_task(send_dev_email, clean_email, "Verify your account", plain_body, html_body, db=db)
     return user
 
 
 @router.post("/check-email")
 async def check_email(data: CheckEmailRequest, db: DbSession) -> dict[str, Any]:
-    clean_email = str(data.email).strip().lower()
-    if data.role and data.role.upper() == "COMPANY":
-        if is_academic_email(clean_email):
-            return {
-                "available": False,
-                "reason": "Academic and student email domains (.edu, .ac, etc.) cannot be used for company registration. Please use your corporate work email.",
-            }
+    try:
+        clean_email = validate_email_format(str(data.email))
+        result = validate_organization_email(clean_email) if data.role and data.role.upper() == "COMPANY" else validate_student_email(clean_email)
+    except ValueError as exc:
+        return {"available": False, "reason": str(exc), "classification": None}
     existing = await db.scalar(select(User.id).where(User.email == clean_email))
     return {
         "available": existing is None,
         "reason": "This email address is already registered." if existing else None,
+        "classification": result.classification,
     }
 
 
 @router.post("/register/student", response_model=UserResponse, status_code=201)
 async def register_student(data: StudentRegister, background_tasks: BackgroundTasks, db: DbSession) -> User:
-    user = await create_user(str(data.email), data.password, UserRole.STUDENT, db, background_tasks)
-    user.student_profile = StudentProfile(user_id=user.id, **data.model_dump(exclude={"email", "password"}))
+    try:
+        email_result = validate_student_email(str(data.email))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    clean_email = email_result.email
+    user = await create_user(clean_email, data.password, UserRole.STUDENT, db, background_tasks)
+    user.student_profile = StudentProfile(
+        user_id=user.id,
+        institution_email=clean_email if email_result.classification == "INSTITUTION_EMAIL" else None,
+        **data.model_dump(exclude={"email", "password"}),
+    )
     await db.commit()
     await db.refresh(user)
     return user
@@ -231,12 +210,10 @@ async def register_student(data: StudentRegister, background_tasks: BackgroundTa
 
 @router.post("/register/company", response_model=UserResponse, status_code=201)
 async def register_company(data: CompanyRegister, background_tasks: BackgroundTasks, db: DbSession) -> User:
-    clean_email = str(data.email).strip().lower()
-    if is_academic_email(clean_email):
-        raise HTTPException(
-            status_code=400,
-            detail="Academic and student email addresses (.edu, .ac) cannot be used for company registration. Please use your corporate work email or register as a student.",
-        )
+    try:
+        clean_email = validate_organization_email(str(data.email)).email
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     user = await create_user(clean_email, data.password, UserRole.COMPANY, db, background_tasks)
     user.company_profile = CompanyProfile(user_id=user.id, **data.model_dump(exclude={"email", "password"}))
     await db.commit()
@@ -317,6 +294,10 @@ async def google_auth(data: GoogleAuthRequest, db: DbSession) -> TokenResponse:
         if req_role == "ADMIN" or email in {"kamatammeghana.143@gmail.com", "meghanakamatam.143@gmail.com", "meghanakamatam25@gmail.com"}:
             role = UserRole.ADMIN
         elif req_role == "COMPANY":
+            try:
+                validate_organization_email(email)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             role = UserRole.COMPANY
         else:
             role = UserRole.STUDENT
@@ -326,6 +307,7 @@ async def google_auth(data: GoogleAuthRequest, db: DbSession) -> TokenResponse:
             password_hash=hash_password(token_urlsafe(32)),
             role=role,
             is_verified=True,
+            email_verified_at=datetime.now(timezone.utc),
             is_active=True,
         )
         db.add(user)
@@ -355,6 +337,7 @@ async def google_auth(data: GoogleAuthRequest, db: DbSession) -> TokenResponse:
             raise HTTPException(status_code=403, detail="Account has been suspended")
         if not user.is_verified:
             user.is_verified = True
+            user.email_verified_at = datetime.now(timezone.utc)
             await db.commit()
 
     return await issue_tokens(user, db)
@@ -391,11 +374,44 @@ async def logout(data: LogoutRequest, db: DbSession) -> None:
 
 @router.get("/verify/{token}")
 async def verify_email(token: str, db: DbSession) -> dict[str, str]:
-    user = await db.scalar(select(User).where(User.verification_token == token))
+    now = datetime.now(timezone.utc)
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    token_row = await db.scalar(
+        select(EmailVerificationToken).where(
+            EmailVerificationToken.token_digest == digest,
+            EmailVerificationToken.used_at.is_(None),
+            EmailVerificationToken.expires_at > now,
+        )
+    )
+    if token_row is None:
+        legacy_user = await db.scalar(select(User).where(User.verification_token == token))
+        if legacy_user is None or _is_expired(legacy_user.verification_token_expires_at):
+            raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+        legacy_user.is_verified = True
+        legacy_user.email_verified_at = now
+        legacy_user.verification_token = None
+        legacy_user.verification_token_expires_at = None
+        await db.commit()
+        return {"message": "Email verified"}
+    claimed = await db.execute(
+        update(EmailVerificationToken)
+        .execution_options(synchronize_session=False)
+        .where(
+            EmailVerificationToken.id == token_row.id,
+            EmailVerificationToken.used_at.is_(None),
+            EmailVerificationToken.expires_at > now,
+        )
+        .values(used_at=now)
+    )
+    if claimed.rowcount != 1:
+        raise HTTPException(status_code=400, detail="Invalid verification token")
+    user = await db.get(User, token_row.user_id)
     if user is None:
         raise HTTPException(status_code=400, detail="Invalid verification token")
     user.is_verified = True
+    user.email_verified_at = now
     user.verification_token = None
+    user.verification_token_expires_at = None
     await db.commit()
     return {"message": "Email verified"}
 
@@ -465,6 +481,7 @@ async def forgot_password(data: ForgotPasswordRequest, background_tasks: Backgro
         f"InternSphere Password Reset OTP: {otp}",
         plain_body,
         html_body,
+        db=db,
     )
     return {"message": f"Verification code and reset link have been dispatched to {user.email}."}
 
@@ -514,7 +531,7 @@ async def reset_password(data: ResetPasswordRequest, background_tasks: Backgroun
         f"Your password for {user.email} has been successfully updated.\n\n"
         f"If you performed this action, you can safely ignore this notification. If you did not make this change, please contact support immediately."
     )
-    background_tasks.add_task(send_dev_email, user.email, "Your password has been changed", conf_body)
+    background_tasks.add_task(send_dev_email, user.email, "Your password has been changed", conf_body, db=db)
 
     return {"message": "Password reset successfully"}
 
@@ -540,7 +557,7 @@ async def change_password(
         f"Your password for {current_user.email} was successfully changed.\n\n"
         f"If you performed this action, you can safely ignore this notification. If you did not authorize this change, please contact support immediately."
     )
-    background_tasks.add_task(send_dev_email, current_user.email, "Security Alert: Password Changed", conf_body)
+    background_tasks.add_task(send_dev_email, current_user.email, "Security Alert: Password Changed", conf_body, db=db)
     return {"message": "Password updated successfully"}
 
 
@@ -556,19 +573,27 @@ async def resend_verification(data: ResendVerificationRequest, background_tasks:
     if user.is_verified:
         return {"message": "Your email is already verified. You can log in directly."}
 
-    if not user.verification_token:
-        user.verification_token = token_urlsafe(32)
-        await db.commit()
+    raw_token = token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    await db.execute(
+        update(EmailVerificationToken)
+        .where(EmailVerificationToken.user_id == user.id, EmailVerificationToken.used_at.is_(None))
+        .values(used_at=datetime.now(timezone.utc))
+    )
+    user.verification_token = raw_token
+    user.verification_token_expires_at = expires_at
+    db.add(EmailVerificationToken(user_id=user.id, token_digest=hashlib.sha256(raw_token.encode()).hexdigest(), expires_at=expires_at))
+    await db.commit()
 
     settings = get_settings()
     frontend_url = (settings.frontend_url or "http://localhost:5174").rstrip("/")
-    verify_url = f"{frontend_url}/verify/{user.verification_token}"
+    verify_url = f"{frontend_url}/verify/{raw_token}"
 
     plain_body = (
         f"Welcome to InternSphere!\n\n"
         f"Please verify your account to get started:\n"
         f"{verify_url}\n\n"
-        f"Verification Token: {user.verification_token}\n"
+        "This link expires in 24 hours and can only be used once.\n"
     )
     html_body = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
@@ -590,7 +615,7 @@ async def resend_verification(data: ResendVerificationRequest, background_tasks:
         </p>
     </div>
     """
-    background_tasks.add_task(send_dev_email, clean_email, "Verify your account", plain_body, html_body)
+    background_tasks.add_task(send_dev_email, clean_email, "Verify your account", plain_body, html_body, db=db)
     return {"message": f"Verification link has been sent to {clean_email}."}
 
 
@@ -618,4 +643,4 @@ async def get_me(user: Annotated[User, Depends(get_current_user)], db: DbSession
         "role": user.role.value,
         "name": user_name,
         "is_verified": user.is_verified,
-    }
+    }

@@ -274,7 +274,7 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
     if student:
         db.add(Notification(user_id=student.id, notification_type="INTERVIEW_INVITE", title="Interview invitation", body=f"Interview scheduled for {data.scheduled_at.isoformat()}"))
         await db.commit()
-        await send_dev_email(student.email, "Interview invitation", f"Interview scheduled for {data.scheduled_at.isoformat()}")
+        await send_dev_email(student.email, "Interview invitation", f"Interview scheduled for {data.scheduled_at.isoformat()}", db=db)
         try:
             from app.api.v1.ws import manager
             await manager.send_personal_message(
