@@ -21,27 +21,27 @@ async def test_auth_guard_and_differentiations():
     app.dependency_overrides[get_db] = override_db
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # 1. Company registration should strictly reject academic emails (.edu, .ac, etc.)
+        # 1. Company registration should reject personal email domains.
         bad_company = await client.post(
             "/api/v1/auth/register/company",
             json={
-                "email": "student@stanford.edu",
+            "email": "recruiter@gmail.com",
                 "password": "Password123!",
                 "company_name": "Fake Tech",
                 "industry": "Technology",
             },
         )
         assert bad_company.status_code == 400
-        assert "Academic and student email addresses" in bad_company.json()["detail"]
+        assert "official company or institute email" in bad_company.json()["detail"]
 
-        # Check-email endpoint should indicate academic email cannot be used for company
+        # Institutional organization emails are valid for company/institute accounts.
         check_academic = await client.post(
             "/api/v1/auth/check-email",
             json={"email": "student@mit.edu", "role": "COMPANY"},
         )
         assert check_academic.status_code == 200
-        assert check_academic.json()["available"] is False
-        assert "Academic and student email domains" in check_academic.json()["reason"]
+        assert check_academic.json()["available"] is True
+        assert check_academic.json()["classification"] == "INSTITUTION_EMAIL"
 
         # 2. Forgot password for missing email should return 404 with clear reason
         missing_fp = await client.post(

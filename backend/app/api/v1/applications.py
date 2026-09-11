@@ -106,7 +106,7 @@ async def update_status(application_id: int, data: ApplicationStatusUpdate, back
         title = f"Application status: {data.status.replace('_', ' ').title()}"
         body = f"Your application has moved to {data.status.replace('_', ' ').title()}"
         db.add(Notification(user_id=recipient.id, notification_type="APPLICATION_STATUS", title=title, body=body))
-        background_tasks.add_task(send_dev_email, recipient.email, title, body)
+        background_tasks.add_task(send_dev_email, recipient.email, title, body, db=db)
         try:
             from app.api.v1.ws import manager
             await manager.send_personal_message(

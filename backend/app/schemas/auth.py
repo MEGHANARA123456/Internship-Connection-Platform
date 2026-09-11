@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -95,4 +97,4 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: str
     is_verified: bool
-    verification_token: str | None = None
+    email_verified_at: datetime | None = None

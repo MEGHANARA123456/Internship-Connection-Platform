@@ -1,6 +1,5 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.v1.dependencies import get_db
@@ -27,9 +26,18 @@ async def test_client():
     await engine.dispose()
 
 
+@pytest.fixture
+def google_identity(monkeypatch):
+    async def verify_google_credential(_credential, fallback_email, fallback_name):
+        return str(fallback_email).strip().lower(), fallback_name or "Google User"
+
+    monkeypatch.setattr("app.api.v1.auth.verify_google_credential", verify_google_credential)
+
+
 @pytest.mark.anyio
-async def test_google_auth_new_student(test_client: AsyncClient):
+async def test_google_auth_new_student(test_client: AsyncClient, google_identity):
     payload = {
+        "credential": "test-google-credential",
         "email": "alex.chen.google@gmail.com",
         "name": "Alex Chen",
         "role": "STUDENT",
@@ -44,8 +52,9 @@ async def test_google_auth_new_student(test_client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_google_auth_new_company(test_client: AsyncClient):
+async def test_google_auth_new_company(test_client: AsyncClient, google_identity):
     payload = {
+        "credential": "test-google-credential",
         "email": "hr.google.test@enterprise.org",
         "name": "Enterprise Labs",
         "role": "COMPANY",
@@ -58,7 +67,7 @@ async def test_google_auth_new_company(test_client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_google_auth_existing_user_login(test_client: AsyncClient):
+async def test_google_auth_existing_user_login(test_client: AsyncClient, google_identity):
     payload = {
         "email": "recurring.google@gmail.com",
         "name": "Recurring User",
@@ -69,16 +78,13 @@ async def test_google_auth_existing_user_login(test_client: AsyncClient):
     uid1 = res1.json()["user_id"]
 
     # Second sign in via Google with same email
-    res2 = await test_client.post("/api/v1/auth/google", json={"email": "recurring.google@gmail.com"})
+    res2 = await test_client.post("/api/v1/auth/google", json={"credential": "test-google-credential", "email": "recurring.google@gmail.com"})
     assert res2.status_code == 200
     assert res2.json()["user_id"] == uid1
 
 
 @pytest.mark.anyio
-async def test_google_auth_jwt_token(test_client: AsyncClient):
-    fake_jwt = jwt.encode({"email": "jwt.google.user@gmail.com", "name": "JWT User"}, "secret", algorithm="HS256")
-    res = await test_client.post("/api/v1/auth/google", json={"credential": fake_jwt, "role": "STUDENT"})
-    assert res.status_code == 200
-    data = res.json()
-    assert "access_token" in data
-    assert data["role"] == "STUDENT"
+async def test_google_auth_requires_google_credential(test_client: AsyncClient):
+    res = await test_client.post("/api/v1/auth/google", json={"email": "typed@example.com", "role": "STUDENT"})
+    assert res.status_code == 400
+    assert "valid Google credential" in res.json()["detail"]

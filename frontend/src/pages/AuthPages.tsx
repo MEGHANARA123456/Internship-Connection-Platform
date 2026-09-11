@@ -9,7 +9,7 @@ import { Input } from '../components/ui/Input'
 import { Textarea } from '../components/ui/Textarea'
 import { Button } from '../components/ui/Button'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/Card'
-import { CheckCircle2, AlertCircle, ShieldCheck, KeyRound, ExternalLink, RefreshCw } from 'lucide-react'
+import { CheckCircle2, AlertCircle, ShieldCheck, KeyRound } from 'lucide-react'
 import { GoogleSignInButton } from '../components/auth/GoogleSignInButton'
 import { Logo } from '../components/layout/Logo'
 
@@ -45,7 +45,6 @@ const adminRegisterSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters long'),
   signup_key: z.string().min(16, 'Bootstrap key must be at least 16 characters'),
 })
-
 
 // --- Auth Layout Wrapper ---
 
@@ -325,8 +324,8 @@ export function StudentRegisterPage() {
   })
 
   const [createdUser, setCreatedUser] = useState<any>(null)
-  const [verifying, setVerifying] = useState(false)
   const [emailStatus, setEmailStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle')
+  const [emailClassification, setEmailClassification] = useState('')
 
   const handleEmailBlur = async (e: React.FocusEvent<HTMLInputElement>) => {
     const val = e.target.value.trim()
@@ -336,7 +335,8 @@ export function StudentRegisterPage() {
     }
     setEmailStatus('checking')
     try {
-      const res = await api.post('/auth/check-email', { email: val })
+      const res = await api.post('/auth/check-email', { email: val, role: 'STUDENT' })
+      setEmailClassification(res.data.classification || '')
       setEmailStatus(res.data.available ? 'available' : 'taken')
     } catch {
       setEmailStatus('idle')
@@ -381,32 +381,11 @@ export function StudentRegisterPage() {
             We sent an email verification link to <strong>{createdUser.email}</strong>.
           </p>
           <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700 font-medium">
-            Local Mailbox: Check <a href="http://localhost:8025" target="_blank" rel="noreferrer" className="underline font-bold">Mailpit (Port 8025)</a> for local emails.
+            Your verification email has been sent. Check your registered inbox to continue.
           </div>
-          {createdUser.verification_token ? (
-            <Button
-              variant="primary"
-              className="w-full"
-              isLoading={verifying}
-              onClick={async () => {
-                setVerifying(true)
-                try {
-                  await api.get(`/auth/verify/${createdUser.verification_token}`)
-                  navigate('/login')
-                } catch {
-                  navigate('/login')
-                } finally {
-                  setVerifying(false)
-                }
-              }}
-            >
-              Instant 1-Click Email Verify & Continue
-            </Button>
-          ) : (
-            <Button variant="primary" className="w-full" onClick={() => navigate('/login')}>
-              Proceed to Sign In
-            </Button>
-          )}
+          <Button variant="primary" className="w-full" onClick={() => navigate('/login')}>
+            Proceed to Sign In
+          </Button>
         </div>
       ) : (
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-3.5">
@@ -437,7 +416,9 @@ export function StudentRegisterPage() {
               <p className="text-[11px] text-slate-400 mt-1">Checking email availability...</p>
             )}
             {emailStatus === 'available' && (
-              <p className="text-[11px] text-emerald-600 font-medium mt-1">✓ Email address is valid and available</p>
+              <p className="text-[11px] text-emerald-600 font-medium mt-1">
+                ✓ {emailClassification === 'INSTITUTION_EMAIL' ? 'Institutional email detected.' : 'Valid email address.'}
+              </p>
             )}
           </div>
 
@@ -511,41 +492,25 @@ export function StudentRegisterPage() {
 
 // --- 3. Company Registration ---
 
-const isAcademicEmail = (email: string) => {
-  const clean = email.toLowerCase().trim()
-  if (!clean.includes('@')) return false
-  const domain = clean.split('@')[1] || ''
-  return ['.edu', '.ac.', '.res.in', 'student', 'campus', 'college', 'univ', 'scholar'].some((ind) => domain.includes(ind))
-}
-
 export function CompanyRegisterPage() {
   const navigate = useNavigate()
   const [serverError, setServerError] = useState('')
   const [createdCompany, setCreatedCompany] = useState<any>(null)
-  const [verifying, setVerifying] = useState(false)
-  const [emailStatus, setEmailStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'academic_rejected'>('idle')
+  const [emailStatus, setEmailStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle')
+  const [emailClassification, setEmailClassification] = useState('')
 
   const {
     register,
     handleSubmit,
-    watch,
     formState: { errors, isSubmitting },
   } = useForm<z.infer<typeof companyRegisterSchema>>({
     resolver: zodResolver(companyRegisterSchema),
   })
 
-  const currentEmail = watch('email') || ''
-  const hasAcademicEmail = isAcademicEmail(currentEmail)
-
   const handleEmailBlur = async (e: React.FocusEvent<HTMLInputElement>) => {
     const val = e.target.value.trim()
     if (!val || !val.includes('@')) {
       setEmailStatus('idle')
-      return
-    }
-    if (isAcademicEmail(val)) {
-      setEmailStatus('academic_rejected')
-      setServerError('Academic and student email addresses (.edu, .ac) cannot be used for company registration. Please use your corporate business email or register as a student.')
       return
     }
     setEmailStatus('checking')
@@ -557,6 +522,7 @@ export function CompanyRegisterPage() {
           setServerError(res.data.reason)
         }
       } else {
+        setEmailClassification(res.data.classification || '')
         setEmailStatus('available')
         setServerError('')
       }
@@ -567,10 +533,6 @@ export function CompanyRegisterPage() {
 
   const onSubmit = async (data: z.infer<typeof companyRegisterSchema>) => {
     setServerError('')
-    if (isAcademicEmail(data.email)) {
-      setServerError('Academic and student email addresses (.edu, .ac) cannot be used for company registration. Please use your corporate work email or register as a student.')
-      return
-    }
     try {
       const res = await api.post('/auth/register/company', {
         ...data,
@@ -612,32 +574,11 @@ export function CompanyRegisterPage() {
             We sent an email verification link to <strong>{createdCompany.email}</strong>. Please check your corporate inbox to activate your recruiter account.
           </p>
           <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700 font-medium">
-            Local Mailbox: Check <a href="http://localhost:8025" target="_blank" rel="noreferrer" className="underline font-bold">Mailpit (Port 8025)</a> for local emails.
+            Your verification email has been sent. Check your registered inbox to continue.
           </div>
-          {createdCompany.verification_token ? (
-            <Button
-              variant="primary"
-              className="w-full"
-              isLoading={verifying}
-              onClick={async () => {
-                setVerifying(true)
-                try {
-                  await api.get(`/auth/verify/${createdCompany.verification_token}`)
-                  navigate('/login')
-                } catch {
-                  navigate('/login')
-                } finally {
-                  setVerifying(false)
-                }
-              }}
-            >
-              Instant 1-Click Email Verify & Continue
-            </Button>
-          ) : (
-            <Button variant="primary" className="w-full" onClick={() => navigate('/login')}>
-              Proceed to Sign In
-            </Button>
-          )}
+          <Button variant="primary" className="w-full" onClick={() => navigate('/login')}>
+            Proceed to Sign In
+          </Button>
         </div>
       ) : (
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-3.5">
@@ -662,32 +603,20 @@ export function CompanyRegisterPage() {
               placeholder="recruiter@acme.com"
               helperText="Must be your official corporate work email"
               error={
-                hasAcademicEmail || emailStatus === 'academic_rejected'
-                  ? 'Academic emails (.edu, .ac) are rejected for company accounts'
-                  : emailStatus === 'taken'
+                emailStatus === 'taken'
                   ? 'This email is already registered. Please sign in instead.'
                   : errors.email?.message
               }
               {...register('email')}
               onBlur={handleEmailBlur}
             />
-            {hasAcademicEmail && (
-              <div className="mt-1.5 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-                <span className="font-semibold block mb-0.5">⚠️ Educational email domain detected</span>
-                <span>
-                  Students must register through{' '}
-                  <Link to="/register-student" className="underline font-bold text-amber-900">
-                    Student Registration
-                  </Link>
-                  . Companies must provide a business or corporate work email domain.
-                </span>
-              </div>
-            )}
             {emailStatus === 'checking' && (
               <p className="text-[11px] text-slate-400 mt-1">Checking email availability and domain eligibility...</p>
             )}
-            {emailStatus === 'available' && !hasAcademicEmail && (
-              <p className="text-[11px] text-emerald-600 font-medium mt-1">✓ Corporate work email is valid and available</p>
+            {emailStatus === 'available' && (
+              <p className="text-[11px] text-emerald-600 font-medium mt-1">
+                ✓ {emailClassification === 'INSTITUTION_EMAIL' ? 'Institutional organization email detected.' : 'Organization email detected.'}
+              </p>
             )}
           </div>
 
@@ -841,32 +770,8 @@ export function ForgotPasswordPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [serverError, setServerError] = useState('')
   const [success, setSuccess] = useState(false)
-  const [recentOtpFound, setRecentOtpFound] = useState<string | null>(null)
-  const [checkingMailbox, setCheckingMailbox] = useState(false)
   const [resending, setResending] = useState(false)
   const [resendStatus, setResendStatus] = useState('')
-
-  // Poll/Check mailbox for the user's latest OTP
-  const checkMailboxForOtp = async (targetEmail: string) => {
-    if (!targetEmail) return
-    setCheckingMailbox(true)
-    try {
-      const res = await api.get(`/mailbox/public?email=${encodeURIComponent(targetEmail.trim().toLowerCase())}`)
-      const emails = res.data || []
-      if (emails.length > 0) {
-        // Look for 6-digit OTP in the latest email
-        const latest = emails[0]
-        const match = (latest.subject + ' ' + (latest.body || '')).match(/\b\d{6}\b/)
-        if (match) {
-          setRecentOtpFound(match[0])
-        }
-      }
-    } catch {
-      // mailbox check non-fatal
-    } finally {
-      setCheckingMailbox(false)
-    }
-  }
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -880,8 +785,6 @@ export function ForgotPasswordPage() {
     try {
       await api.post('/auth/forgot-password', { email: email.trim().toLowerCase() })
       setStep('verify')
-      // Auto-check mailbox
-      checkMailboxForOtp(email)
     } catch (err: any) {
       const detail = err.response?.data?.detail
       if (detail) {
@@ -904,7 +807,6 @@ export function ForgotPasswordPage() {
     try {
       const res = await api.post('/auth/forgot-password', { email: email.trim().toLowerCase() })
       setResendStatus(res.data?.message || 'A fresh verification code has been dispatched!')
-      checkMailboxForOtp(email)
       setTimeout(() => setResendStatus(''), 4000)
     } catch (err: any) {
       const detail = err.response?.data?.detail || 'Could not resend code. Please try again.'
@@ -1000,11 +902,7 @@ export function ForgotPasswordPage() {
               <span>Instant OTP Verification</span>
             </div>
             <p className="text-[11px] text-indigo-700 leading-relaxed">
-              We will generate a secure 6-digit verification code valid for 15 minutes. Check your email or Mailpit at{' '}
-              <a href="http://localhost:8025" target="_blank" rel="noreferrer" className="underline font-bold">
-                localhost:8025
-              </a>
-              .
+              We will generate a secure 6-digit verification code valid for 15 minutes. Check the inbox for your registered email address.
             </p>
           </div>
 
@@ -1028,7 +926,7 @@ export function ForgotPasswordPage() {
             </div>
           )}
 
-          {/* Target Email & Mailpit Banner */}
+          {/* Password reset delivery status */}
           <div className="p-3 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-xs space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-slate-600 dark:text-slate-300">
@@ -1046,42 +944,6 @@ export function ForgotPasswordPage() {
               </button>
             </div>
 
-            <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-700">
-              <a
-                href={`http://localhost:8025?search=${encodeURIComponent(email)}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 font-semibold"
-              >
-                <ExternalLink className="w-3 h-3" />
-                Open Mailpit (port 8025)
-              </a>
-
-              <button
-                type="button"
-                onClick={() => checkMailboxForOtp(email)}
-                disabled={checkingMailbox}
-                className="text-[11px] text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 flex items-center gap-1 cursor-pointer"
-              >
-                <RefreshCw className={`w-3 h-3 ${checkingMailbox ? 'animate-spin' : ''}`} />
-                Check Mailbox
-              </button>
-            </div>
-
-            {recentOtpFound && (
-              <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-md flex items-center justify-between text-xs text-emerald-800 mt-2">
-                <span>
-                  Detected OTP: <strong className="font-mono text-sm tracking-wider">{recentOtpFound}</strong>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setOtp(recentOtpFound)}
-                  className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold cursor-pointer"
-                >
-                  Auto-Fill
-                </button>
-              </div>
-            )}
           </div>
 
           {/* 6-Digit OTP Input */}
@@ -1341,7 +1203,7 @@ export function VerifyEmailPage() {
 
             <Input
               label="Verification token"
-              placeholder="Paste verification token from Mailpit"
+              placeholder="Paste the verification token from your email"
               value={tokenInput}
               onChange={(e) => setTokenInput(e.target.value)}
             />

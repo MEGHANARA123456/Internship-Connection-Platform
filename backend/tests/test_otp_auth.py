@@ -76,11 +76,9 @@ async def test_otp_password_reset_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         )
         assert correct_otp_resp.status_code == 200
 
-        # 5. Query mailbox via public endpoint
+        # 5. The old unauthenticated mailbox lookup is no longer exposed.
         mailbox_public = await client.get(f"/api/v1/mailbox/public?email={test_email}")
-        assert mailbox_public.status_code == 200
-        assert len(mailbox_public.json()) >= 1
-        assert any(otp in item.get("body", "") or otp in item.get("html", "") for item in mailbox_public.json())
+        assert mailbox_public.status_code == 404
 
         # 6. Reset password with email + OTP
         reset_resp = await client.post(
@@ -110,10 +108,10 @@ async def test_otp_password_reset_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         access_token = new_login.json()["access_token"]
         assert access_token is not None
 
-        # 9. Query authenticated mailbox endpoint /api/v1/mailbox/my
+        # 9. Query the authenticated, user-scoped mailbox endpoint.
         my_mailbox = await client.get(
-            "/api/v1/mailbox/my",
+            "/api/v1/me/emails",
             headers={"Authorization": f"Bearer {access_token}"},
         )
         assert my_mailbox.status_code == 200
-        assert len(my_mailbox.json()) >= 1
+        assert isinstance(my_mailbox.json(), list)

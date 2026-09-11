@@ -6,8 +6,11 @@ import smtplib
 from typing import Any
 
 import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.models import EmailMessage, User
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +75,36 @@ def _send_real_smtp(settings: Any, to: str, subject: str, body: str, html: str |
         logger.warning("Optional SMTP delivery failed: %s", exc)
 
 
-async def send_dev_email(to: str, subject: str, body: str, html: str | None = None) -> None:
+async def send_dev_email(
+    to: str,
+    subject: str,
+    body: str,
+    html: str | None = None,
+    message_type: str = "GENERAL",
+    db: AsyncSession | None = None,
+) -> None:
     settings = get_settings()
     clean_to = to.strip().lower()
     record_email_locally(clean_to, subject, body, html)
+
+    if db is not None:
+        try:
+            user = await db.scalar(select(User).where(User.email == clean_to))
+            if user is not None:
+                db.add(
+                    EmailMessage(
+                        user_id=user.id,
+                        recipient_email=clean_to,
+                        sender_email=settings.mail_from or "noreply@internship.local",
+                        subject=subject,
+                        message_type=message_type,
+                        body=body,
+                        html=html,
+                    )
+                )
+                await db.commit()
+        except Exception as exc:
+            logger.warning("Could not persist user email record for %s: %s", clean_to, exc)
 
     # 1. Send to Mailpit HTTP API (Try configured host, then fallback to 127.0.0.1)
     hosts_to_try = [settings.mailpit_host, "127.0.0.1", "localhost"]

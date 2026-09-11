@@ -1233,13 +1233,13 @@ export function NotificationsPage() {
     setLoadingEmails(true)
     setEmailError(null)
     try {
-      const res = await api.get('/mailbox/my')
+      const res = await api.get('/me/emails')
       setEmails(res.data || [])
       if (res.data && res.data.length > 0 && !expandedEmailId) {
         setExpandedEmailId(res.data[0].id)
       }
     } catch {
-      setEmailError('Failed to retrieve user emails from mailbox service.')
+      setEmailError('Failed to retrieve your emails.')
     } finally {
       setLoadingEmails(false)
     }
@@ -1312,20 +1312,6 @@ export function NotificationsPage() {
               >
                 Refresh
               </Button>
-              <a
-                href={userEmail ? `http://localhost:8025?search=${encodeURIComponent(userEmail)}` : 'http://localhost:8025'}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <Button
-                  size="sm"
-                  variant="primary"
-                  leftIcon={<ExternalLink className="w-3.5 h-3.5" />}
-                  className="bg-indigo-600 hover:bg-indigo-700"
-                >
-                  Mailpit Webmail (8025)
-                </Button>
-              </a>
             </div>
           )}
         </div>
@@ -1430,8 +1416,8 @@ export function NotificationsPage() {
                 <span className="font-mono font-bold underline">{userEmail || 'your email'}</span>.
               </span>
             </div>
-            <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold shrink-0 hidden sm:inline">
-              Mailpit Port 8025 Active
+              <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold shrink-0 hidden sm:inline">
+              Private application mailbox
             </span>
           </div>
 
