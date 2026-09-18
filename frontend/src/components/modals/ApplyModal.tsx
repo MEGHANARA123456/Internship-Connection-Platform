@@ -48,11 +48,13 @@ export function ApplyModal({
     register,
     handleSubmit,
     setValue,
+    watch,
     reset,
     formState: { errors, isSubmitting },
   } = useForm<ApplyFormData>({
     resolver: zodResolver(applySchema),
   })
+
 
   useEffect(() => {
     if (!isOpen) {
@@ -208,7 +210,25 @@ export function ApplyModal({
               error={errors.cover_note?.message}
               {...register('cover_note')}
             />
+
+            {/* Application Quality Nudge */}
+            {(() => {
+              const note = watch('cover_note') || ''
+              const words = note.trim() ? note.trim().split(/\s+/).length : 0
+              if (words > 0 && words < 25) {
+                return (
+                  <div className="p-2.5 rounded-lg bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-2">
+                    <Lightbulb className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold">Application Quality Nudge:</span> Your note is only {words} words. Candidates with specific project details get 3x more interview requests. Click <span className="font-semibold text-indigo-600 dark:text-indigo-400 cursor-pointer underline" onClick={handleGeneratePitch}>Generate with AI</span> to expand into a tailored pitch.
+                    </div>
+                  </div>
+                )
+              }
+              return null
+            })()}
           </div>
+
 
           {serverError && (
             <div className="flex items-center gap-1.5 text-xs text-rose-600 dark:text-rose-400 font-medium bg-rose-50 dark:bg-rose-950/40 p-2.5 rounded-lg border border-rose-200 dark:border-rose-900">

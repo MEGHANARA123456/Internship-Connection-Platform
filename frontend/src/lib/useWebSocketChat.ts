@@ -51,6 +51,11 @@ export function useWebSocketChat(userId?: number) {
               sendSystemNotification('New Message received', {
                 body: data.message?.body || 'You have received a new message.',
               })
+            } else if (data.type === 'notification_created') {
+              window.dispatchEvent(new CustomEvent('app:notification', { detail: data.notification }))
+              sendSystemNotification(data.notification?.title || 'New Notification', {
+                body: data.notification?.body || '',
+              })
             }
           } catch {
             // Ignored

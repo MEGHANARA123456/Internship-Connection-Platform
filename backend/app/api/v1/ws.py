@@ -70,6 +70,21 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+async def notify_user(user_id: int, notification_data: dict[str, Any]) -> None:
+    """Helper to dispatch real-time notifications to a connected user WebSocket."""
+    try:
+        await manager.send_personal_message(
+            user_id,
+            {
+                "type": "notification_created",
+                "notification": notification_data,
+            },
+        )
+    except Exception as exc:
+        logger.warning("Failed to broadcast real-time notification to user %s: %s", user_id, exc)
+
+
+
 @router.websocket("/chat/{user_id}")
 async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
     await manager.connect_user(user_id, websocket)

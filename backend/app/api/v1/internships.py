@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
 from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
-from app.models import CompanyProfile, Internship, User, UserRole
+from app.models import CompanyProfile, Internship, SavedInternship, StudentProfile, User, UserRole
 from app.schemas.internship import InternshipInput, InternshipPage, InternshipResponse
+from app.services.ai import compute_match_score_fast
 
 router = APIRouter(prefix="/internships", tags=["internships"])
 company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]
@@ -15,10 +16,19 @@ admin_only = Annotated[User, Depends(require_roles(UserRole.ADMIN))]
 optional_user = Annotated[User | None, Depends(get_current_user_optional)]
 
 
-def output(item: Internship, company_name: str | None = None) -> dict:
+def output(
+    item: Internship,
+    company_name: str | None = None,
+    is_saved: bool | None = None,
+    match_score: int | None = None,
+    matched_skills: list[str] | None = None,
+) -> dict:
     data = {key: getattr(item, key) for key in ("id", "company_id", "title", "description", "location", "industry", "duration_months", "stipend", "work_mode", "deadline", "status", "created_at")}
-    data["skills"] = [skill for skill in item.skills.split(",") if skill]
+    data["skills"] = [skill for skill in (item.skills or "").split(",") if skill]
     data["company_name"] = company_name or "Enterprise Partner"
+    data["is_saved"] = is_saved
+    data["match_score"] = match_score
+    data["matched_skills"] = matched_skills
     return data
 
 
@@ -46,13 +56,96 @@ async def list_company_internships(user: company_only, db: DbSession) -> list[di
     return [output(item, cname) for item in result]
 
 
+@router.get("/saved", response_model=list[InternshipResponse])
+async def list_saved_internships(user: student_only, db: DbSession) -> list[dict]:
+    query = (
+        select(Internship)
+        .join(SavedInternship, SavedInternship.internship_id == Internship.id)
+        .where(SavedInternship.student_id == user.id)
+        .order_by(SavedInternship.created_at.desc())
+    )
+    items = list(await db.scalars(query))
+    if not items:
+        return []
+
+    company_ids = {item.company_id for item in items}
+    comp_profiles = (await db.scalars(select(CompanyProfile).where(CompanyProfile.user_id.in_(company_ids)))).all() if company_ids else []
+    comp_map = {cp.user_id: cp.company_name for cp in comp_profiles if cp.company_name}
+
+    student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+    student_skills = [s.strip() for s in (student_prof.skills if student_prof else "").split(",") if s.strip()]
+
+    results = []
+    for item in items:
+        job_skills = [s.strip() for s in (item.skills or "").split(",") if s.strip()]
+        match_info = compute_match_score_fast(student_skills, job_skills, item.title)
+        results.append(
+            output(
+                item,
+                comp_map.get(item.company_id),
+                is_saved=True,
+                match_score=match_info["score"],
+                matched_skills=match_info["matched_skills"],
+            )
+        )
+    return results
+
+
+@router.post("/{internship_id}/save", status_code=200)
+async def save_internship(internship_id: int, user: student_only, db: DbSession) -> dict:
+    internship = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.status == "PUBLISHED"))
+    if internship is None:
+        raise HTTPException(404, "Internship not found or not published")
+
+    existing = await db.scalar(
+        select(SavedInternship).where(
+            SavedInternship.student_id == user.id,
+            SavedInternship.internship_id == internship_id,
+        )
+    )
+    if existing is None:
+        saved = SavedInternship(student_id=user.id, internship_id=internship_id)
+        db.add(saved)
+        await db.commit()
+    return {"is_saved": True, "internship_id": internship_id, "message": "Internship saved"}
+
+
+@router.delete("/{internship_id}/save", status_code=200)
+async def unsave_internship(internship_id: int, user: student_only, db: DbSession) -> dict:
+    saved = await db.scalar(
+        select(SavedInternship).where(
+            SavedInternship.student_id == user.id,
+            SavedInternship.internship_id == internship_id,
+        )
+    )
+    if saved is not None:
+        await db.delete(saved)
+        await db.commit()
+    return {"is_saved": False, "internship_id": internship_id, "message": "Internship unsaved"}
+
+
 @router.get("", response_model=InternshipPage)
-async def browse_internships(db: DbSession, user: optional_user, location: str | None = None, industry: str | None = None, duration: int | None = Query(None, ge=1), min_stipend: int | None = Query(None, ge=0), max_stipend: int | None = Query(None, ge=0), work_mode: str | None = None, skills: str | None = None, posted_after: date | None = None, deadline_before: date | None = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)) -> InternshipPage:
+async def browse_internships(
+    db: DbSession,
+    user: optional_user,
+    location: str | None = None,
+    industry: str | None = None,
+    duration: Annotated[int | None, Query(ge=1)] = None,
+    min_stipend: Annotated[int | None, Query(ge=0)] = None,
+    max_stipend: Annotated[int | None, Query(ge=0)] = None,
+    work_mode: str | None = None,
+    skills: str | None = None,
+    posted_after: date | None = None,
+    deadline_before: date | None = None,
+    sort_by: str | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> InternshipPage:
     query = select(Internship).where(Internship.status == "PUBLISHED")
     filters = []
     if location: filters.append(Internship.location.ilike(f"%{location}%"))
     if industry: filters.append(Internship.industry.ilike(f"%{industry}%"))
-    if duration: filters.append(Internship.duration_months == duration)
+    if duration is not None: filters.append(Internship.duration_months == duration)
     if min_stipend is not None: filters.append(Internship.stipend >= min_stipend)
     if max_stipend is not None: filters.append(Internship.stipend <= max_stipend)
     if work_mode: filters.append(Internship.work_mode == work_mode.upper())
@@ -65,7 +158,34 @@ async def browse_internships(db: DbSession, user: optional_user, location: str |
     company_ids = {item.company_id for item in items}
     comp_profiles = (await db.scalars(select(CompanyProfile).where(CompanyProfile.user_id.in_(company_ids)))).all() if company_ids else []
     comp_map = {cp.user_id: cp.company_name for cp in comp_profiles if cp.company_name}
-    return InternshipPage(items=[output(item, comp_map.get(item.company_id)) for item in items], page=page, page_size=page_size, total=total)
+
+    saved_ids = set()
+    student_skills: list[str] = []
+    if user and user.role == UserRole.STUDENT:
+        saved_ids = set((await db.scalars(select(SavedInternship.internship_id).where(SavedInternship.student_id == user.id))).all())
+        student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+        if student_prof and student_prof.skills:
+            student_skills = [s.strip() for s in student_prof.skills.split(",") if s.strip()]
+
+    output_items = []
+    for item in items:
+        is_saved = item.id in saved_ids if (user and user.role == UserRole.STUDENT) else None
+        job_skills = [s.strip() for s in (item.skills or "").split(",") if s.strip()]
+        match_info = compute_match_score_fast(student_skills, job_skills, item.title) if (user and user.role == UserRole.STUDENT) else {"score": None, "matched_skills": None}
+        output_items.append(
+            output(
+                item,
+                comp_map.get(item.company_id),
+                is_saved=is_saved,
+                match_score=match_info["score"],
+                matched_skills=match_info["matched_skills"],
+            )
+        )
+
+    if sort_by == "match" and user and user.role == UserRole.STUDENT:
+        output_items.sort(key=lambda x: x["match_score"] or 0, reverse=True)
+
+    return InternshipPage(items=output_items, page=page, page_size=page_size, total=total)
 
 
 @router.get("/{internship_id}", response_model=InternshipResponse)
@@ -81,7 +201,22 @@ async def get_internship(internship_id: int, db: DbSession, user: optional_user)
         else:
             raise HTTPException(404, "Internship not found")
     cname = await get_company_name(item.company_id, db)
-    return output(item, cname)
+
+    is_saved = None
+    match_score = None
+    matched_skills = None
+    if user and user.role == UserRole.STUDENT:
+        saved = await db.scalar(select(SavedInternship.id).where(SavedInternship.student_id == user.id, SavedInternship.internship_id == item.id))
+        is_saved = saved is not None
+        student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+        student_skills = [s.strip() for s in (student_prof.skills if student_prof else "").split(",") if s.strip()]
+        job_skills = [s.strip() for s in (item.skills or "").split(",") if s.strip()]
+        match_info = compute_match_score_fast(student_skills, job_skills, item.title)
+        match_score = match_info["score"]
+        matched_skills = match_info["matched_skills"]
+
+    return output(item, cname, is_saved=is_saved, match_score=match_score, matched_skills=matched_skills)
+
 
 
 @router.put("/{internship_id}", response_model=InternshipResponse)

@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { useThemeStore } from '../../store/theme'
 import { useViewModeStore } from '../../store/viewMode'
+import { useWebSocketChat } from '../../lib/useWebSocketChat'
 
 export function Navbar() {
   const { session, logout } = useAuthStore()
@@ -35,6 +36,9 @@ export function Navbar() {
   const location = useLocation()
   const [unreadCount, setUnreadCount] = useState(0)
   const [mobileOpen, setMobileOpen] = useState(false)
+
+  // Maintain real-time WebSocket connection for notifications & presence
+  useWebSocketChat(session?.userId)
 
   const role = session?.role
 
@@ -54,9 +58,21 @@ export function Navbar() {
     }
 
     fetchNotifications()
-    const interval = setInterval(fetchNotifications, 15000)
+
+    const handleRealtimeNotification = () => {
+      if (isMounted) {
+        setUnreadCount((prev) => prev + 1)
+        fetchNotifications()
+      }
+    }
+
+    window.addEventListener('app:notification', handleRealtimeNotification)
+    // Low frequency fallback interval (60 seconds)
+    const interval = setInterval(fetchNotifications, 60000)
+
     return () => {
       isMounted = false
+      window.removeEventListener('app:notification', handleRealtimeNotification)
       clearInterval(interval)
     }
   }, [session?.accessToken])

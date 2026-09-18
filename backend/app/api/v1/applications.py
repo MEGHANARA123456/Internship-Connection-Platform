@@ -6,7 +6,14 @@ from sqlalchemy import func, select
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
 from app.models import Application, CompanyProfile, Internship, Notification, Resume, StudentProfile, User, UserRole
 from app.services.mail import send_dev_email
-from app.schemas.application import ApplicationCreate, ApplicationDashboard, ApplicationResponse, ApplicationStatusUpdate
+from app.schemas.application import (
+    ApplicationCreate,
+    ApplicationDashboard,
+    ApplicationResponse,
+    ApplicationStatusUpdate,
+    BulkApplicationStatusResponse,
+    BulkApplicationStatusUpdate,
+)
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]
@@ -37,6 +44,7 @@ async def serialize(application: Application, db: DbSession) -> dict:
         "internship_id": application.internship_id,
         "internship_title": internship.title if internship else None,
         "company_name": comp.company_name if (comp and comp.company_name) else "Enterprise Partner",
+        "company_id": internship.company_id if internship else None,
         "student_id": application.student_id,
         "status": application.status,
         "cover_note": application.cover_note,
@@ -85,6 +93,69 @@ async def company_applications(internship_id: int, user: company_only, db: DbSes
     if internship is None: raise HTTPException(404, "Internship not found")
     applications = await db.scalars(select(Application).where(Application.internship_id == internship_id).order_by(Application.created_at.desc()))
     return [await serialize(application, db) for application in applications]
+
+
+@router.post("/bulk-status", response_model=BulkApplicationStatusResponse)
+async def bulk_update_status(
+    data: BulkApplicationStatusUpdate,
+    background_tasks: BackgroundTasks,
+    user: company_only,
+    db: DbSession,
+) -> dict:
+    if not data.application_ids:
+        return {"updated_count": 0, "success_ids": [], "failed_ids": []}
+
+    target_status = data.status
+    if target_status not in {"UNDER_REVIEW", "SHORTLISTED", "INTERVIEW_SCHEDULED", "SELECTED", "REJECTED"}:
+        raise HTTPException(400, f"Invalid target status for company: {target_status}")
+
+    success_ids = []
+    failed_ids = []
+
+    for app_id in data.application_ids:
+        app = await db.scalar(select(Application).where(Application.id == app_id))
+        if app is None:
+            failed_ids.append(app_id)
+            continue
+        internship = await db.scalar(select(Internship).where(Internship.id == app.internship_id))
+        if internship is None or internship.company_id != user.id:
+            failed_ids.append(app_id)
+            continue
+        if not application_transition_allowed(app.status, target_status):
+            failed_ids.append(app_id)
+            continue
+
+        app.status = target_status
+        success_ids.append(app_id)
+
+        title = f"Application status: {target_status.replace('_', ' ').title()}"
+        body = f"Your application has moved to {target_status.replace('_', ' ').title()}"
+        db.add(Notification(user_id=app.student_id, notification_type="APPLICATION_STATUS", title=title, body=body))
+        student_user = await db.scalar(select(User).where(User.id == app.student_id))
+        if student_user:
+            background_tasks.add_task(send_dev_email, student_user.email, title, body, db=db)
+        try:
+            from app.api.v1.ws import manager
+            await manager.send_personal_message(
+                app.student_id,
+                {
+                    "type": "application_status_updated",
+                    "application_id": app.id,
+                    "status": target_status,
+                    "internship_id": app.internship_id,
+                    "title": title,
+                    "body": body,
+                },
+            )
+        except Exception:
+            pass
+
+    await db.commit()
+    return {
+        "updated_count": len(success_ids),
+        "success_ids": success_ids,
+        "failed_ids": failed_ids,
+    }
 
 
 @router.patch("/{application_id}/status", response_model=ApplicationResponse)

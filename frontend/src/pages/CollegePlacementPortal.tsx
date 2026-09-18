@@ -18,6 +18,7 @@ import {
   ArrowRight,
 } from 'lucide-react'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
+import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 
 export function CollegePlacementPortal() {
   const { session } = useAuthStore()
@@ -244,6 +245,13 @@ export function CollegePlacementPortal() {
           </div>
         </Card>
       </div>
+
+      {/* Ecosystem Visual Analytics with Options Menu */}
+      <DesktopAnalysisVisuals
+        variant="institution"
+        title="Collegiate Hiring & Placement Velocity Visuals"
+        subtitle="Live funnel progression, domain concentrations, and monthly hiring velocity for TPO reporting"
+      />
 
       {/* Department Breakdown Section */}
       <Card className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs">

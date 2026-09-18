@@ -159,6 +159,83 @@ async def delete_resume(resume_id: int, user: student_only, db: DbSession) -> No
     await db.commit()
 
 
+@router.post("/student/resume/parse")
+async def parse_student_resume(user: student_only, db: DbSession) -> dict[str, Any]:
+    resume = await db.scalar(select(Resume).where(Resume.student_id == user.id))
+    if resume is None:
+        raise HTTPException(404, "No resume uploaded yet. Please upload a resume first.")
+
+    path = Path(get_settings().resume_storage_path) / resume.stored_filename
+    if not path.is_file():
+        raise HTTPException(404, "Resume file not found on disk")
+
+    from app.services.resume_parser import parse_resume_pdf
+    parsed = parse_resume_pdf(path)
+    return {
+        "success": True,
+        "filename": resume.original_filename,
+        "extracted_skills": parsed["skills"],
+        "extracted_education": {
+            "university": parsed["university"],
+            "major": parsed["major"],
+            "graduation_year": parsed["graduation_year"],
+        },
+        "extracted_bio": parsed["bio"],
+        "raw_text_length": parsed["raw_length"],
+    }
+
+
+@router.post("/student/resume/apply-parsed")
+async def apply_parsed_resume_to_profile(user: student_only, db: DbSession) -> dict[str, Any]:
+    resume = await db.scalar(select(Resume).where(Resume.student_id == user.id))
+    if resume is None:
+        raise HTTPException(404, "No resume uploaded yet")
+
+    path = Path(get_settings().resume_storage_path) / resume.stored_filename
+    if not path.is_file():
+        raise HTTPException(404, "Resume file not found on disk")
+
+    from app.services.resume_parser import parse_resume_pdf
+    parsed = parse_resume_pdf(path)
+
+    profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+    if profile is None:
+        raise HTTPException(404, "Student profile not found")
+
+    updated_fields = []
+    if parsed["skills"]:
+        current_skills = {s.strip() for s in profile.skills.split(",") if s.strip()}
+        merged_skills = sorted(list(current_skills.union(set(parsed["skills"]))))
+        profile.skills = ", ".join(merged_skills)
+        updated_fields.append("skills")
+
+    if parsed["university"] and (not profile.university or profile.university in ("University", "")):
+        profile.university = parsed["university"]
+        updated_fields.append("university")
+
+    if parsed["major"] and (not profile.major or profile.major in ("Student", "")):
+        profile.major = parsed["major"]
+        updated_fields.append("major")
+
+    if parsed["graduation_year"]:
+        profile.graduation_year = parsed["graduation_year"]
+        updated_fields.append("graduation_year")
+
+    if parsed["bio"] and not profile.bio:
+        profile.bio = parsed["bio"]
+        updated_fields.append("bio")
+
+    await db.commit()
+    await db.refresh(profile)
+
+    return {
+        "success": True,
+        "updated_fields": updated_fields,
+        "profile": profile_response(profile),
+    }
+
+
+
 ALLOWED_AVATAR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".svg", ".gif"}
 ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp", "image/svg+xml", "image/gif"}
 MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024

@@ -22,6 +22,11 @@ from app.schemas.auth import (
     GoogleAuthRequest,
     LoginRequest,
     LogoutRequest,
+    MFADisableRequest,
+    MFAEnableRequest,
+    MFALoginChallengeResponse,
+    MFALoginVerifyRequest,
+    MFAStatusResponse,
     RefreshRequest,
     ResendVerificationRequest,
     ResetPasswordRequest,
@@ -233,8 +238,8 @@ async def register_admin(data: AdminRegister, background_tasks: BackgroundTasks,
     return user
 
 
-@router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest, db: DbSession) -> TokenResponse:
+@router.post("/login", response_model=TokenResponse | MFALoginChallengeResponse)
+async def login(data: LoginRequest, db: DbSession) -> Any:
     clean_email = str(data.email).strip().lower()
     user = await db.scalar(select(User).where(User.email == clean_email))
     
@@ -273,7 +278,162 @@ async def login(data: LoginRequest, db: DbSession) -> TokenResponse:
             detail="Incorrect password. Please verify your credentials or use 'Forgot password' to reset.",
         )
 
+    # Opt-in MFA challenge flow
+    if getattr(user, "mfa_enabled", False):
+        otp = f"{secrets.randbelow(900000) + 100000:06d}"
+        user.mfa_otp = otp
+        user.mfa_otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        await db.commit()
+
+        user_role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
+        mfa_ticket = create_token(str(user.id), user_role_str, "mfa_challenge", timedelta(minutes=10))
+
+        email_body = (
+            f"Hello,\n\n"
+            f"Your 6-digit Multi-Factor Authentication (MFA) security code is:\n\n"
+            f"    {otp}\n\n"
+            f"This code will expire in 10 minutes. If you did not initiate this login attempt, please change your password immediately.\n\n"
+            f"— The Internship Connection Security Team"
+        )
+        await send_dev_email(
+            to=user.email,
+            subject="Two-Factor Authentication (MFA) Security Code",
+            body=email_body,
+            db=db,
+        )
+
+        return MFALoginChallengeResponse(
+            mfa_required=True,
+            mfa_ticket=mfa_ticket,
+            email=user.email,
+            message="Two-factor authentication code sent to your email",
+        )
+
     return await issue_tokens(user, db)
+
+
+@router.post("/mfa/verify-login", response_model=TokenResponse)
+async def verify_mfa_login(data: MFALoginVerifyRequest, db: DbSession) -> TokenResponse:
+    """
+    Validates MFA ticket and OTP code, returning access & refresh tokens upon success.
+    """
+    try:
+        payload = decode_token(data.mfa_ticket)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired MFA session. Please sign in again.")
+
+    if payload.get("type") != "mfa_challenge":
+        raise HTTPException(status_code=401, detail="Invalid authentication token type.")
+
+    try:
+        user_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid user identifier in token.")
+
+    user = await db.scalar(select(User).where(User.id == user_id))
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=404, detail="User account not found or deactivated.")
+
+    if not user.mfa_enabled:
+        return await issue_tokens(user, db)
+
+    clean_otp = data.otp.strip()
+    if not user.mfa_otp or user.mfa_otp != clean_otp:
+        raise HTTPException(status_code=400, detail="Invalid two-factor authentication code. Please try again.")
+
+    if _is_expired(user.mfa_otp_expires_at):
+        raise HTTPException(status_code=400, detail="Two-factor authentication code has expired. Please sign in again.")
+
+    user.mfa_otp = None
+    user.mfa_otp_expires_at = None
+    await db.commit()
+
+    return await issue_tokens(user, db)
+
+
+@router.get("/mfa/status", response_model=MFAStatusResponse)
+async def get_mfa_status(user: Annotated[User, Depends(get_current_user)]) -> MFAStatusResponse:
+    """
+    Returns current MFA status for the authenticated user.
+    """
+    return MFAStatusResponse(mfa_enabled=bool(user.mfa_enabled), email=user.email)
+
+
+@router.post("/mfa/setup-request")
+async def request_mfa_setup(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict[str, str]:
+    """
+    Generates and emails a 6-digit confirmation code to verify email ownership before enabling 2FA.
+    """
+    otp = f"{secrets.randbelow(900000) + 100000:06d}"
+    user.mfa_otp = otp
+    user.mfa_otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    await db.commit()
+
+    email_body = (
+        f"Hello,\n\n"
+        f"Your 6-digit confirmation code to enable Two-Factor Authentication (MFA) is:\n\n"
+        f"    {otp}\n\n"
+        f"This code will expire in 10 minutes.\n\n"
+        f"— The Internship Connection Security Team"
+    )
+    await send_dev_email(
+        to=user.email,
+        subject="MFA Setup Confirmation Code",
+        body=email_body,
+        db=db,
+    )
+    return {"message": f"Verification code dispatched to {user.email}"}
+
+
+@router.post("/mfa/enable", response_model=MFAStatusResponse)
+async def enable_mfa(data: MFAEnableRequest, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict[str, Any]:
+    """
+    Verifies setup OTP and activates 2FA for the account.
+    """
+    clean_otp = data.otp.strip()
+    if not user.mfa_otp or user.mfa_otp != clean_otp:
+        raise HTTPException(status_code=400, detail="Invalid verification code. Please check the code sent to your email.")
+
+    if _is_expired(user.mfa_otp_expires_at):
+        raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new code.")
+
+    user.mfa_enabled = True
+    user.mfa_otp = None
+    user.mfa_otp_expires_at = None
+    await db.commit()
+
+    await send_dev_email(
+        to=user.email,
+        subject="Two-Factor Authentication Activated",
+        body="Two-Factor Authentication (MFA) has been successfully activated on your account.",
+        db=db,
+    )
+
+    return {"mfa_enabled": True, "email": user.email, "message": "Two-factor authentication successfully enabled on your account."}
+
+
+@router.post("/mfa/disable", response_model=MFAStatusResponse)
+async def disable_mfa(data: MFADisableRequest, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict[str, Any]:
+    """
+    Requires password verification and deactivates 2FA for the account.
+    """
+    if not verify_password(data.password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Incorrect password. Password verification is required to disable 2FA.")
+
+    user.mfa_enabled = False
+    user.mfa_otp = None
+    user.mfa_otp_expires_at = None
+    await db.commit()
+
+    await send_dev_email(
+        to=user.email,
+        subject="Two-Factor Authentication Deactivated",
+        body="Two-Factor Authentication (MFA) has been turned off on your account.",
+        db=db,
+    )
+
+    return {"mfa_enabled": False, "email": user.email, "message": "Two-factor authentication has been disabled."}
+
 
 
 @router.post("/google", response_model=TokenResponse)
