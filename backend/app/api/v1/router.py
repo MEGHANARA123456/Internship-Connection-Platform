@@ -14,6 +14,7 @@ from app.api.v1.ws import router as ws_router
 from app.api.v1.institution import router as institution_router
 from app.api.v1.mailbox import router as mailbox_router
 from app.api.v1.analytics import router as analytics_router
+from app.api.v1.reviews import router as reviews_router
 from app.api.v1.dependencies import DbSession, require_roles
 from app.models import CompanyProfile, StudentProfile, User, UserRole
 
@@ -30,6 +31,8 @@ api_router.include_router(ws_router)
 api_router.include_router(institution_router)
 api_router.include_router(mailbox_router)
 api_router.include_router(analytics_router)
+api_router.include_router(reviews_router)
+
 
 
 @api_router.get("/health", tags=["health"])

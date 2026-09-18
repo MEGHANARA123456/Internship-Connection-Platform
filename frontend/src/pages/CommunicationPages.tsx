@@ -82,6 +82,23 @@ export function InterviewsPage() {
     }
   }
 
+  const getGoogleCalendarUrl = (item: any) => {
+    try {
+      const start = new Date(item.scheduled_at).toISOString().replace(/-|:|\.\d\d\d/g, '')
+      const end = new Date(new Date(item.scheduled_at).getTime() + 45 * 60000).toISOString().replace(/-|:|\.\d\d\d/g, '')
+      const title = encodeURIComponent(`${item.interview_type || 'Internship'} Interview - InternSphere`)
+      const details = encodeURIComponent(
+        item.notes
+          ? `${item.notes}\n\nMeeting link: ${item.meeting_link || 'InternSphere Video Room'}`
+          : `Scheduled Interview on InternSphere\nMeeting link: ${item.meeting_link || 'InternSphere Video Room'}`
+      )
+      const location = encodeURIComponent(item.meeting_link || 'InternSphere In-App Video Call')
+      return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}&location=${location}`
+    } catch {
+      return '#'
+    }
+  }
+
   const fetchInterviews = async () => {
     setLoading(true)
     setError(null)
@@ -338,6 +355,22 @@ export function InterviewsPage() {
                     >
                       Sync .ics
                     </Button>
+
+                    <a
+                      href={getGoogleCalendarUrl(item)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-block"
+                      title="Add to Google Calendar"
+                    >
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        leftIcon={<Calendar className="w-3.5 h-3.5 text-indigo-500" />}
+                      >
+                        Google Cal
+                      </Button>
+                    </a>
 
                     {item.meeting_link && (
                       <a

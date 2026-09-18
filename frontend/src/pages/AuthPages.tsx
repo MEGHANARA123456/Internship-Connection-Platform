@@ -88,6 +88,14 @@ export function LoginPage() {
   const [resendingVerification, setResendingVerification] = useState(false)
   const [resendStatus, setResendStatus] = useState('')
 
+  // Two-Factor Authentication (MFA) challenge state
+  const [mfaChallenge, setMfaChallenge] = useState<{ ticket: string; email: string } | null>(null)
+  const [mfaOtp, setMfaOtp] = useState('')
+  const [mfaLoading, setMfaLoading] = useState(false)
+  const [mfaError, setMfaError] = useState('')
+  const [resendMfaLoading, setResendMfaLoading] = useState(false)
+  const [resendMfaStatus, setResendMfaStatus] = useState('')
+
   const {
     register,
     handleSubmit,
@@ -116,6 +124,67 @@ export function LoginPage() {
     }
   }
 
+  const handleMfaVerify = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!mfaChallenge) return
+    if (!mfaOtp || mfaOtp.trim().length !== 6) {
+      setMfaError('Please enter the complete 6-digit security code.')
+      return
+    }
+    setMfaLoading(true)
+    setMfaError('')
+    try {
+      const res = await api.post('/auth/mfa/verify-login', {
+        mfa_ticket: mfaChallenge.ticket,
+        otp: mfaOtp.trim(),
+      })
+      const { access_token, refresh_token, role, user_id, name } = res.data
+      setSession({
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        role: role ?? portal,
+        userId: user_id,
+        email: mfaChallenge.email,
+        name: name,
+      })
+
+      // Route according to role
+      if (role === 'ADMIN') navigate('/admin')
+      else if (role === 'COMPANY') navigate('/company/jobs')
+      else navigate('/opportunities')
+    } catch (err: any) {
+      setMfaError(err.response?.data?.detail || 'Invalid or expired 2FA code. Please try again.')
+    } finally {
+      setMfaLoading(false)
+    }
+  }
+
+  const handleResendMfaCode = async () => {
+    setResendMfaLoading(true)
+    setResendMfaStatus('')
+    setMfaError('')
+    try {
+      const rawValues = getValues()
+      const res = await api.post('/auth/login', {
+        ...rawValues,
+        email: (mfaChallenge?.email || rawValues.email || '').trim().toLowerCase(),
+        portal,
+      })
+      if (res.data?.mfa_ticket) {
+        setMfaChallenge({
+          ticket: res.data.mfa_ticket,
+          email: res.data.email || mfaChallenge?.email || '',
+        })
+        setResendMfaStatus('A fresh security code has been sent to your email.')
+        setTimeout(() => setResendMfaStatus(''), 6000)
+      }
+    } catch (err: any) {
+      setMfaError(err.response?.data?.detail || 'Failed to resend code. Please return to login.')
+    } finally {
+      setResendMfaLoading(false)
+    }
+  }
+
   const onSubmit = async (data: z.infer<typeof loginSchema>) => {
     setServerError('')
     setResendStatus('')
@@ -125,6 +194,18 @@ export function LoginPage() {
         email: data.email.trim().toLowerCase(),
         portal,
       })
+
+      // Check if MFA is required for this account
+      if (response.data?.mfa_required) {
+        setMfaChallenge({
+          ticket: response.data.mfa_ticket,
+          email: response.data.email,
+        })
+        setMfaOtp('')
+        setMfaError('')
+        return
+      }
+
       const { access_token, refresh_token, role, user_id, name } = response.data
       setSession({
         accessToken: access_token,
@@ -153,6 +234,92 @@ export function LoginPage() {
         setServerError('Sign in failed. Please check your credentials and try again.')
       }
     }
+  }
+
+  // Render dedicated Two-Factor Authentication challenge UI if active
+  if (mfaChallenge) {
+    const maskedEmail = mfaChallenge.email.replace(/(.{2})(.*)(?=@)/, (_, a, b) => a + '*'.repeat(Math.max(1, b.length)))
+    return (
+      <AuthCardLayout
+        title="Two-Factor Authentication"
+        description="A 6-digit security code was sent to your registered email. Enter it below to complete sign in."
+        footer={
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => {
+                setMfaChallenge(null)
+                setMfaOtp('')
+                setMfaError('')
+              }}
+              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-semibold cursor-pointer"
+            >
+              ← Back to password sign in
+            </button>
+          </div>
+        }
+      >
+        <form onSubmit={handleMfaVerify} className="space-y-4">
+          <div className="p-3 bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <KeyRound className="w-5 h-5" />
+            </div>
+            <div className="text-xs space-y-0.5">
+              <p className="font-semibold text-slate-900 dark:text-white">Security Verification</p>
+              <p className="text-slate-500 dark:text-slate-400">
+                Code dispatched to <span className="font-mono font-medium text-slate-800 dark:text-slate-200">{maskedEmail}</span>
+              </p>
+            </div>
+          </div>
+
+          {mfaError && (
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-lg flex items-center gap-2 text-xs text-rose-700 dark:text-rose-400 font-medium">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{mfaError}</span>
+            </div>
+          )}
+
+          {resendMfaStatus && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span>{resendMfaStatus}</span>
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+              6-Digit Security Code
+            </label>
+            <Input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="123456"
+              value={mfaOtp}
+              onChange={(e) => setMfaOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              className="text-center font-mono text-xl tracking-widest uppercase font-bold"
+              autoFocus
+            />
+          </div>
+
+          <Button type="submit" variant="primary" size="lg" className="w-full" isLoading={mfaLoading}>
+            Verify Code & Sign In
+          </Button>
+
+          <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100 dark:border-slate-800">
+            <span className="text-slate-500 dark:text-slate-400">Didn't receive the code?</span>
+            <button
+              type="button"
+              disabled={resendMfaLoading}
+              onClick={handleResendMfaCode}
+              className="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-50 cursor-pointer"
+            >
+              {resendMfaLoading ? 'Sending...' : 'Resend Code'}
+            </button>
+          </div>
+        </form>
+      </AuthCardLayout>
+    )
   }
 
   return (

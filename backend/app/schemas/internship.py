@@ -24,6 +24,10 @@ class InternshipResponse(InternshipInput):
     status: Status
     created_at: datetime
     company_name: str | None = None
+    is_saved: bool | None = None
+    match_score: int | None = None
+    matched_skills: list[str] | None = None
+
 
 
 class InternshipPage(BaseModel):

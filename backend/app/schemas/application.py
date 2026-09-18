@@ -14,6 +14,18 @@ class ApplicationStatusUpdate(BaseModel):
     status: ApplicationStatus
 
 
+class BulkApplicationStatusUpdate(BaseModel):
+    application_ids: list[int]
+    status: ApplicationStatus
+
+
+class BulkApplicationStatusResponse(BaseModel):
+    updated_count: int
+    success_ids: list[int]
+    failed_ids: list[int]
+
+
+
 class ApplicationResponse(BaseModel):
     id: int
     internship_id: int
@@ -28,6 +40,7 @@ class ApplicationResponse(BaseModel):
     resume_id: int | None = None
     internship_title: str | None = None
     company_name: str | None = None
+    company_id: int | None = None
 
 
 class ApplicationDashboard(BaseModel):

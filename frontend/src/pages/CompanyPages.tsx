@@ -513,15 +513,14 @@ export function JobApplicantsPage() {
     if (selectedAppIds.size === 0) return
     setBulkProcessing(true)
     try {
-      for (const appId of selectedAppIds) {
-        try {
-          await api.patch(`/applications/${appId}/shortlist`)
-        } catch {
-          // Continue with others
-        }
-      }
+      await api.post('/applications/bulk-status', {
+        application_ids: Array.from(selectedAppIds),
+        status: 'SHORTLISTED',
+      })
       setSelectedAppIds(new Set())
       await fetchApplicants()
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to bulk shortlist candidates')
     } finally {
       setBulkProcessing(false)
     }
@@ -532,15 +531,14 @@ export function JobApplicantsPage() {
     if (!confirm(`Are you sure you want to reject ${selectedAppIds.size} selected candidate(s)?`)) return
     setBulkProcessing(true)
     try {
-      for (const appId of selectedAppIds) {
-        try {
-          await api.patch(`/applications/${appId}/reject`)
-        } catch {
-          // Continue
-        }
-      }
+      await api.post('/applications/bulk-status', {
+        application_ids: Array.from(selectedAppIds),
+        status: 'REJECTED',
+      })
       setSelectedAppIds(new Set())
       await fetchApplicants()
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to bulk reject candidates')
     } finally {
       setBulkProcessing(false)
     }

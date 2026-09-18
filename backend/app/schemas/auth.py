@@ -77,6 +77,32 @@ class TokenResponse(BaseModel):
     name: str | None = None
     email: str | None = None
     avatar_url: str | None = None
+    mfa_required: bool = False
+
+
+class MFALoginChallengeResponse(BaseModel):
+    mfa_required: bool = True
+    mfa_ticket: str
+    email: str
+    message: str = "Two-factor authentication code sent to your email"
+
+
+class MFALoginVerifyRequest(BaseModel):
+    mfa_ticket: str
+    otp: str = Field(min_length=6, max_length=6)
+
+
+class MFAStatusResponse(BaseModel):
+    mfa_enabled: bool
+    email: str | None = None
+
+
+class MFAEnableRequest(BaseModel):
+    otp: str = Field(min_length=6, max_length=6)
+
+
+class MFADisableRequest(BaseModel):
+    password: str
 
 
 class CheckEmailRequest(BaseModel):
@@ -98,3 +124,4 @@ class UserResponse(BaseModel):
     role: str
     is_verified: bool
     email_verified_at: datetime | None = None
+    mfa_enabled: bool = False

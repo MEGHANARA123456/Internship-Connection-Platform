@@ -93,12 +93,19 @@ async def send_dev_email(
             if user is not None:
                 db.add(
                     EmailMessage(
+                        # pyrefly: ignore [unexpected-keyword]
                         user_id=user.id,
+                        # pyrefly: ignore [unexpected-keyword]
                         recipient_email=clean_to,
+                        # pyrefly: ignore [unexpected-keyword]
                         sender_email=settings.mail_from or "noreply@internship.local",
+                        # pyrefly: ignore [unexpected-keyword]
                         subject=subject,
+                        # pyrefly: ignore [unexpected-keyword]
                         message_type=message_type,
+                        # pyrefly: ignore [unexpected-keyword]
                         body=body,
+                        # pyrefly: ignore [unexpected-keyword]
                         html=html,
                     )
                 )

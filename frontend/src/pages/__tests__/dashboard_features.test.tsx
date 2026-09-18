@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { DesktopAnalysisVisuals } from '../../components/analytics/DesktopAnalysisVisuals'
@@ -146,5 +146,92 @@ describe('Dashboard Features & Buttons', () => {
     // Top dashboard refresh button
     const refreshButtons = screen.getAllByRole('button', { name: /refresh/i })
     expect(refreshButtons.length).toBeGreaterThan(0)
+  })
+
+  it('opens and closes Visual Options & Actions menu and handles view switching, time ranges, and empty data exports', async () => {
+    // Mock zero-activity / empty data analytics response
+    vi.mocked(api.get).mockResolvedValueOnce({
+      data: {
+        role: 'STUDENT',
+        has_activity: false,
+        funnel: { applied: 0, screened: 0, interviews: 0, offers: 0 },
+        domains: [],
+        monthly_trends: [],
+        total_active_internships: 0,
+        total_verified_students: 0,
+        total_companies: 0,
+      },
+    })
+
+    // Mock clipboard and URL createObjectURL for exports
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockImplementation(() => Promise.resolve()),
+      },
+    })
+    window.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url')
+    window.URL.revokeObjectURL = vi.fn()
+
+    render(
+      <BrowserRouter>
+        <DesktopAnalysisVisuals
+          variant="student"
+          title="Career Journey & Opportunity Insights"
+        />
+      </BrowserRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Career Journey & Opportunity Insights')).toBeDefined()
+    })
+
+    // Initial funnel view rendered with 0 counts without error
+    expect(screen.getByText('Pipeline Funnel')).toBeDefined()
+    expect(screen.getAllByText('Applications Filed').length).toBeGreaterThan(0)
+
+    // 1. Menu button is present and opens the dropdown
+    const menuButton = screen.getByText('Options & Menu').closest('button')!
+    expect(menuButton).toBeDefined()
+    fireEvent.click(menuButton)
+
+    // Dropdown is open
+    await waitFor(() => {
+      expect(screen.getByText('Visual Controls & Actions')).toBeDefined()
+    })
+    expect(screen.getByText('Quick View Switcher')).toBeDefined()
+    expect(screen.getByText(/Time Range Filter/i)).toBeDefined()
+    expect(screen.getByText(/Display Toggles/i)).toBeDefined()
+    expect(screen.getByText(/Export & Snapshots/i)).toBeDefined()
+
+    // 2. View Switcher - switch to Velocity Trends via dropdown
+    const velocityBtn = screen.getByText('Velocity').closest('button')!
+    fireEvent.click(velocityBtn)
+
+    // Re-open menu to continue interacting
+    fireEvent.click(menuButton)
+
+    // 3. Time Range Filter - select Last 30 Days
+    const thirtyDaysBtn = screen.getByText('Last 30 Days').closest('button')!
+    fireEvent.click(thirtyDaysBtn)
+
+    // 4. Export CSV button does not throw on empty data
+    const exportCsvBtn = screen.getByText('Export Data to CSV').closest('button')!
+    expect(() => fireEvent.click(exportCsvBtn)).not.toThrow()
+
+    // 5. Copy summary button does not throw on empty data
+    fireEvent.click(menuButton)
+    const copySummaryBtn = screen.getByText('Copy Summary to Clipboard').closest('button')!
+    expect(() => fireEvent.click(copySummaryBtn)).not.toThrow()
+
+    // 6. Student role deep links are present
+    fireEvent.click(menuButton)
+    await waitFor(() => {
+      expect(screen.getByText(/My Applications Pipeline/i)).toBeDefined()
+    })
+    expect(screen.getByText(/Saved Jobs & Bookmarks/i)).toBeDefined()
+    expect(screen.getByText(/Skill Quizzes & Badges/i)).toBeDefined()
+
+    // 7. Display Customization toggle test
+    expect(screen.getByText('Conversion Percentages')).toBeDefined()
   })
 })

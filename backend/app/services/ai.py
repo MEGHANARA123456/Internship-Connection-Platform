@@ -58,6 +58,21 @@ def compute_ats_score(
     }
 
 
+def compute_match_score_fast(student_skills: list[str], job_skills: list[str], job_title: str = "") -> dict[str, Any]:
+    normalized_job_skills = [s.strip().lower() for s in job_skills if s.strip()]
+    normalized_student_skills = [s.strip().lower() for s in student_skills if s.strip()]
+
+    if not normalized_job_skills:
+        return {"score": 85 if normalized_student_skills else 70, "matched_skills": []}
+
+    matched = [s for s in normalized_job_skills if s in normalized_student_skills]
+    ratio = len(matched) / len(normalized_job_skills)
+
+    score = min(max(int(45 + ratio * 53), 45), 98)
+    return {"score": score, "matched_skills": [s.title() for s in matched]}
+
+
+
 def generate_tailored_pitch(
     student_name: str,
     university: str,

@@ -6,7 +6,7 @@ except ImportError:
     class StrEnum(str, Enum):
         pass
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -36,6 +36,10 @@ class User(Base):
     verification_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reset_token: Mapped[str | None] = mapped_column(String(255), unique=True)
     reset_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mfa_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mfa_otp: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mfa_otp_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     student_profile: Mapped["StudentProfile | None"] = relationship(back_populates="user", cascade="all, delete-orphan")
     company_profile: Mapped["CompanyProfile | None"] = relationship(back_populates="user", cascade="all, delete-orphan")
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -192,3 +196,33 @@ class Report(Base):
     resolution_notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class SavedInternship(Base):
+    __tablename__ = "saved_internships"
+    __table_args__ = (UniqueConstraint("student_id", "internship_id", name="uq_saved_internship"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    internship_id: Mapped[int] = mapped_column(ForeignKey("internships.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    student: Mapped["User"] = relationship()
+    internship: Mapped["Internship"] = relationship()
+
+
+class CompanyReview(Base):
+    __tablename__ = "company_reviews"
+    __table_args__ = (UniqueConstraint("student_id", "internship_id", name="uq_company_review"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    internship_id: Mapped[int] = mapped_column(ForeignKey("internships.id"), index=True)
+    rating: Mapped[int] = mapped_column(Integer)
+    review_text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    student: Mapped["User"] = relationship(foreign_keys=[student_id])
+    company: Mapped["User"] = relationship(foreign_keys=[company_id])
+    internship: Mapped["Internship"] = relationship(foreign_keys=[internship_id])

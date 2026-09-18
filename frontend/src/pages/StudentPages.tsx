@@ -20,6 +20,7 @@ import { MockInterviewModal } from '../components/modals/MockInterviewModal'
 import { SkillQuizModal } from '../components/modals/SkillQuizModal'
 import { RecommendationModal } from '../components/modals/RecommendationModal'
 import { OfferLetterModal } from '../components/modals/OfferLetterModal'
+import { ReviewCompanyModal } from '../components/modals/ReviewCompanyModal'
 import { AccountSecurityCard } from '../components/auth/AccountSecurityCard'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 import { ResumeEditorModal } from '../components/resume/ResumeEditorModal'
@@ -49,8 +50,12 @@ import {
   GraduationCap,
   BarChart3,
   Building2,
+  Bookmark,
+  BookmarkCheck,
+  Star,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
+
 
 // --- 1. Opportunities Page (Browse Internships) ---
 
@@ -69,6 +74,8 @@ export function OpportunitiesPage() {
   const [skills, setSkills] = useState(searchParams.get('skills') || '')
   const [page, setPage] = useState(1)
   const [showVisuals, setShowVisuals] = useState(false)
+  const [activeTab, setActiveTab] = useState<'all' | 'saved'>('all')
+  const [sortBy, setSortBy] = useState<string>('newest')
 
   // Keep state in sync with URL search params changes
   useEffect(() => {
@@ -95,24 +102,45 @@ export function OpportunitiesPage() {
   const [applyModalJob, setApplyModalJob] = useState<any | null>(null)
   const [reportModalJob, setReportModalJob] = useState<any | null>(null)
   const [mockInterviewJob, setMockInterviewJob] = useState<any | null>(null)
+  const [companyReviewsSummary, setCompanyReviewsSummary] = useState<{ average_rating: number; total_reviews: number } | null>(null)
+
+  useEffect(() => {
+    if (selectedJob?.company_id) {
+      api
+        .get(`/companies/${selectedJob.company_id}/reviews`)
+        .then((res) => setCompanyReviewsSummary(res.data))
+        .catch(() => setCompanyReviewsSummary(null))
+    } else {
+      setCompanyReviewsSummary(null)
+    }
+  }, [selectedJob?.company_id])
 
   const fetchInternships = async () => {
     setLoading(true)
     setError(null)
     try {
-      const params = new URLSearchParams()
-      if (location) params.append('location', location)
-      if (industry) params.append('industry', industry)
-      if (workMode) params.append('work_mode', workMode)
-      if (minStipend) params.append('min_stipend', minStipend)
-      if (skills) params.append('skills', skills)
-      params.append('page', page.toString())
-      params.append('page_size', '10')
+      if (activeTab === 'saved') {
+        const res = await api.get('/internships/saved')
+        const items = res.data || []
+        setInternships(items)
+        setTotal(items.length)
+      } else {
+        const params = new URLSearchParams()
+        if (location) params.append('location', location)
+        if (industry) params.append('industry', industry)
+        if (workMode) params.append('work_mode', workMode)
+        if (minStipend) params.append('min_stipend', minStipend)
+        if (skills) params.append('skills', skills)
+        if (sortBy === 'match') params.append('sort_by', 'match')
+        params.append('page', page.toString())
+        params.append('page_size', '10')
 
-      const res = await api.get(`/internships?${params.toString()}`)
-      setInternships(res.data.items || [])
-      setTotal(res.data.total || 0)
+        const res = await api.get(`/internships?${params.toString()}`)
+        setInternships(res.data.items || [])
+        setTotal(res.data.total || 0)
+      }
     } catch (err) {
+      console.error('Failed to fetch internships:', err)
       setError('Failed to fetch internships. Please check your connection and try again.')
     } finally {
       setLoading(false)
@@ -121,7 +149,46 @@ export function OpportunitiesPage() {
 
   useEffect(() => {
     fetchInternships()
-  }, [page, location, industry, workMode, minStipend, skills])
+  }, [page, location, industry, workMode, minStipend, skills, activeTab, sortBy])
+
+  const handleToggleSave = async (e: React.MouseEvent, job: any) => {
+    e.stopPropagation()
+    if (!session) {
+      navigate('/login')
+      return
+    }
+    if (session.role !== 'STUDENT') {
+      alert('Only students can bookmark internships.')
+      return
+    }
+
+    const isSaved = !!job.is_saved
+    // Optimistic local state update
+    setInternships((prev) =>
+      prev.map((j) => (j.id === job.id ? { ...j, is_saved: !isSaved } : j))
+    )
+    if (selectedJob && selectedJob.id === job.id) {
+      setSelectedJob((prev: any) => ({ ...prev, is_saved: !isSaved }))
+    }
+
+    try {
+      if (isSaved) {
+        await api.delete(`/internships/${job.id}/save`)
+      } else {
+        await api.post(`/internships/${job.id}/save`)
+      }
+      if (activeTab === 'saved' && isSaved) {
+        setInternships((prev) => prev.filter((j) => j.id !== job.id))
+        setTotal((prev) => Math.max(prev - 1, 0))
+      }
+    } catch {
+      // Revert if request failed
+      setInternships((prev) =>
+        prev.map((j) => (j.id === job.id ? { ...j, is_saved: isSaved } : j))
+      )
+    }
+  }
+
 
   // Auto-open selected job if :id route param is present (e.g. /opportunities/:id or /internships/:id)
   useEffect(() => {
@@ -197,9 +264,46 @@ export function OpportunitiesPage() {
         </div>
       )}
 
+      {/* Tabs: All Opportunities vs Saved Roles */}
+      {session?.role === 'STUDENT' && (
+        <div className="flex items-center gap-2 mb-4 border-b border-slate-200 dark:border-slate-800 pb-2">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('all')
+              setPage(1)
+            }}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'all'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+            <span>All Opportunities</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('saved')
+              setPage(1)
+            }}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'saved'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Bookmark className="w-3.5 h-3.5" />
+            <span>Saved Roles</span>
+          </button>
+        </div>
+      )}
+
       {/* Filter Toolbar */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-2xs mb-6 space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200/90 dark:border-slate-800 shadow-2xs mb-6 space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
             <input
@@ -249,13 +353,27 @@ export function OpportunitiesPage() {
             }}
             className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
+
+          <select
+            value={sortBy}
+            onChange={(e) => {
+              setSortBy(e.target.value)
+              setPage(1)
+            }}
+            className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-200"
+          >
+            <option value="newest">Sort: Newest</option>
+            {session?.role === 'STUDENT' && (
+              <option value="match">Sort: Best Match (% Score)</option>
+            )}
+          </select>
         </div>
 
         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs text-slate-500">
           <span>
             Found <strong className="text-slate-900">{total}</strong> opportunities
           </span>
-          {(location || industry || workMode || minStipend || skills || searchTerm) && (
+          {(location || industry || workMode || minStipend || skills || searchTerm || sortBy !== 'newest') && (
             <button
               onClick={() => {
                 setLocation('')
@@ -264,6 +382,7 @@ export function OpportunitiesPage() {
                 setMinStipend('')
                 setSkills('')
                 setSearchTerm('')
+                setSortBy('newest')
                 setPage(1)
               }}
               className="text-indigo-600 hover:underline font-medium"
@@ -285,8 +404,12 @@ export function OpportunitiesPage() {
         <ErrorState message={error} onRetry={fetchInternships} />
       ) : displayedJobs.length === 0 ? (
         <EmptyState
-          title="No internships found"
-          description="Try broadening your search criteria or clearing active filters to see more results."
+          title={activeTab === 'saved' ? 'No saved internships' : 'No internships found'}
+          description={
+            activeTab === 'saved'
+              ? 'You have not bookmarked any internships yet. Click the bookmark icon on any opportunity to save it here.'
+              : 'Try broadening your search criteria or clearing active filters to see more results.'
+          }
         />
       ) : (
         <div className="space-y-3">
@@ -304,6 +427,20 @@ export function OpportunitiesPage() {
                     </h3>
                     <Badge status={job.work_mode}>{job.work_mode}</Badge>
                     <Badge variant="slate">{job.industry}</Badge>
+                    {job.match_score !== null && job.match_score !== undefined && (
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[11px] font-bold inline-flex items-center gap-1 ${
+                          job.match_score >= 80
+                            ? 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                            : job.match_score >= 60
+                            ? 'bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                            : 'bg-indigo-100 dark:bg-indigo-950/70 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
+                        }`}
+                      >
+                        <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        {job.match_score}% Match
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
@@ -321,20 +458,36 @@ export function OpportunitiesPage() {
                     {job.stipend > 0 ? `$${job.stipend}/mo` : 'Unpaid / Experience'}
                   </div>
                   <div className="flex sm:flex-col items-center sm:items-end gap-1.5">
-                    {session?.role === 'STUDENT' && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setMockInterviewJob(job)
-                        }}
-                        leftIcon={<Bot className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
-                        className="text-xs"
-                      >
-                        AI Practice
-                      </Button>
-                    )}
+                    <div className="flex items-center gap-1.5">
+                      {session?.role === 'STUDENT' && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleToggleSave(e, job)}
+                          className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-indigo-600 hover:border-indigo-300 hover:bg-indigo-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                          title={job.is_saved ? 'Remove from saved' : 'Save internship'}
+                        >
+                          {job.is_saved ? (
+                            <BookmarkCheck className="w-4 h-4 text-indigo-600 fill-indigo-100 dark:fill-indigo-950" />
+                          ) : (
+                            <Bookmark className="w-4 h-4" />
+                          )}
+                        </button>
+                      )}
+                      {session?.role === 'STUDENT' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setMockInterviewJob(job)
+                          }}
+                          leftIcon={<Bot className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+                          className="text-xs"
+                        >
+                          AI Practice
+                        </Button>
+                      )}
+                    </div>
                     <Button
                       size="sm"
                       variant="primary"
@@ -348,6 +501,7 @@ export function OpportunitiesPage() {
                   </div>
                 </div>
               </div>
+
 
               <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
                 <div className="flex items-center gap-4 flex-wrap">
@@ -432,9 +586,20 @@ export function OpportunitiesPage() {
                   <Building2 className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-slate-900 dark:text-white">
-                    {selectedJob.company_name || 'Enterprise Partner'}
-                  </h4>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                      {selectedJob.company_name || 'Enterprise Partner'}
+                    </h4>
+                    {companyReviewsSummary && companyReviewsSummary.total_reviews > 0 && (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800/60">
+                        <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                        <span>{companyReviewsSummary.average_rating.toFixed(1)}</span>
+                        <span className="text-[10px] text-slate-400 font-normal">
+                          ({companyReviewsSummary.total_reviews} verified)
+                        </span>
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
                     {selectedJob.industry} • {selectedJob.location}
                   </p>
@@ -503,7 +668,23 @@ export function OpportunitiesPage() {
                 Report listing
               </Button>
 
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
+                {session?.role === 'STUDENT' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={(e) => handleToggleSave(e, selectedJob)}
+                    leftIcon={
+                      selectedJob.is_saved ? (
+                        <BookmarkCheck className="w-3.5 h-3.5 text-indigo-600 fill-indigo-100" />
+                      ) : (
+                        <Bookmark className="w-3.5 h-3.5" />
+                      )
+                    }
+                  >
+                    {selectedJob.is_saved ? 'Saved' : 'Save'}
+                  </Button>
+                )}
                 <Button variant="outline" size="sm" onClick={() => setSelectedJob(null)}>
                   Close
                 </Button>
@@ -519,6 +700,7 @@ export function OpportunitiesPage() {
                   Apply Now
                 </Button>
               </div>
+
             </div>
           </div>
         </Modal>
@@ -568,6 +750,7 @@ export function ApplicationsPage() {
   const [error, setError] = useState<string | null>(null)
   const [withdrawingId, setWithdrawingId] = useState<number | null>(null)
   const [selectedOfferApp, setSelectedOfferApp] = useState<any | null>(null)
+  const [selectedReviewApp, setSelectedReviewApp] = useState<any | null>(null)
 
   const fetchApplications = async () => {
     setLoading(true)
@@ -676,15 +859,28 @@ export function ApplicationsPage() {
 
                   <div className="flex items-center gap-2 shrink-0 flex-wrap">
                     {app.status === 'SELECTED' && (
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                        leftIcon={<FileCheck className="w-3.5 h-3.5" />}
-                        onClick={() => setSelectedOfferApp(app)}
-                      >
-                        Offer Letter & E-Sign
-                      </Button>
+                      <>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                          leftIcon={<FileCheck className="w-3.5 h-3.5" />}
+                          onClick={() => setSelectedOfferApp(app)}
+                        >
+                          Offer Letter & E-Sign
+                        </Button>
+                        {app.company_id && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-amber-600 dark:text-amber-400 border-amber-300 dark:border-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+                            leftIcon={<Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />}
+                            onClick={() => setSelectedReviewApp(app)}
+                          >
+                            Review Employer
+                          </Button>
+                        )}
+                      </>
                     )}
 
                     <Link to="/messages">
@@ -723,6 +919,18 @@ export function ApplicationsPage() {
           stipend={selectedOfferApp.stipend || 1800}
         />
       )}
+
+      {/* Verified Company Review Modal */}
+      {selectedReviewApp && selectedReviewApp.company_id && (
+        <ReviewCompanyModal
+          isOpen={!!selectedReviewApp}
+          onClose={() => setSelectedReviewApp(null)}
+          companyId={selectedReviewApp.company_id}
+          internshipId={selectedReviewApp.internship_id}
+          companyName={selectedReviewApp.company_name || 'Enterprise Employer'}
+          internshipTitle={selectedReviewApp.internship_title}
+        />
+      )}
     </div>
   )
 }
@@ -746,10 +954,36 @@ export function StudentProfilePage() {
   const [uploading, setUploading] = useState(false)
   const [profileSaved, setProfileSaved] = useState(false)
   const [profileError, setProfileError] = useState('')
+  const [isParsingResume, setIsParsingResume] = useState(false)
+  const [parseSuccessMsg, setParseSuccessMsg] = useState('')
+
+  const handleAutoFillFromResume = async () => {
+    if (!resume) return
+    setIsParsingResume(true)
+    setParseSuccessMsg('')
+    try {
+      const res = await api.post('/profiles/student/resume/apply-parsed')
+      if (res.data?.success) {
+        const fields = res.data.updated_fields || []
+        setParseSuccessMsg(
+          fields.length > 0
+            ? `Extracted from resume: ${fields.join(', ')}`
+            : 'Profile is already in sync with resume'
+        )
+        await loadProfile()
+        setTimeout(() => setParseSuccessMsg(''), 5000)
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Unable to parse resume. Please ensure a valid PDF is uploaded.')
+    } finally {
+      setIsParsingResume(false)
+    }
+  }
 
   // Developer Social Proof & Badges State
   const [githubHandle, setGithubHandle] = useState(() => localStorage.getItem('student_github_handle') || '')
   const [leetcodeHandle, setLeetcodeHandle] = useState(() => localStorage.getItem('student_leetcode_handle') || '')
+
   const [editingHandles, setEditingHandles] = useState(false)
   const [tempGithub, setTempGithub] = useState(githubHandle)
   const [tempLeetcode, setTempLeetcode] = useState(leetcodeHandle)
@@ -1406,7 +1640,25 @@ export function StudentProfilePage() {
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </div>
+
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full text-xs text-indigo-700 dark:text-indigo-300 bg-indigo-50/60 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60"
+                    onClick={handleAutoFillFromResume}
+                    isLoading={isParsingResume}
+                    leftIcon={<Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+                  >
+                    Auto-Fill Profile from Resume
+                  </Button>
+                  {parseSuccessMsg && (
+                    <p className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-[11px] font-medium text-center">
+                      {parseSuccessMsg}
+                    </p>
+                  )}
                 </div>
+
               ) : (
                 <div className="p-4 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-center space-y-2">
                   <FileText className="w-8 h-8 text-slate-400 mx-auto" />
