@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../../store/auth'
 import { api, getFullMediaUrl } from '../../api/client'
@@ -23,6 +23,12 @@ import {
   Moon,
   Smartphone,
   Monitor,
+  LayoutGrid,
+  ChevronDown,
+  Bookmark,
+  GraduationCap,
+  BarChart3,
+  PlusCircle,
 } from 'lucide-react'
 import { useThemeStore } from '../../store/theme'
 import { useViewModeStore } from '../../store/viewMode'
@@ -36,6 +42,42 @@ export function Navbar() {
   const location = useLocation()
   const [unreadCount, setUnreadCount] = useState(0)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [navMenuOpen, setNavMenuOpen] = useState(false)
+  const navMenuRef = useRef<HTMLDivElement>(null)
+
+  // Handle click outside and Escape key to close navigation menu
+  useEffect(() => {
+    if (!navMenuOpen) return
+
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as Node | null
+      if (!target || !navMenuRef.current) return
+      const path = e.composedPath ? e.composedPath() : []
+      if (path.length > 0) {
+        if (path.includes(navMenuRef.current)) return
+      } else if (navMenuRef.current.contains(target)) {
+        return
+      }
+      setNavMenuOpen(false)
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setNavMenuOpen(false)
+      }
+    }
+
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleOutsideClick)
+      document.addEventListener('keydown', handleKeyDown)
+    }, 0)
+
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('mousedown', handleOutsideClick)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [navMenuOpen])
 
   // Maintain real-time WebSocket connection for notifications & presence
   useWebSocketChat(session?.userId)
@@ -105,8 +147,404 @@ export function Navbar() {
           )}
         </div>
 
-        {/* Desktop Navigation Links */}
-        <nav className="hidden md:flex items-center gap-1">
+        {/* Desktop Navigation Links & Menu Dropdown */}
+        <nav className="hidden md:flex items-center gap-1.5">
+          {/* Interactive Navigation Menu Dropdown */}
+          <div className="relative" ref={navMenuRef}>
+            <button
+              type="button"
+              onClick={() => setNavMenuOpen((prev) => !prev)}
+              title="Quick Navigation & Features Menu"
+              className={`px-3 py-1.5 rounded-xl text-sm font-semibold transition-all cursor-pointer flex items-center gap-1.5 border shadow-2xs ${
+                navMenuOpen
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-indigo-200 dark:shadow-none'
+                  : 'bg-indigo-50/70 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60'
+              }`}
+              aria-label="Portal Navigation Menu"
+              aria-expanded={navMenuOpen}
+            >
+              <LayoutGrid className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              <span>Menu</span>
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${navMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Dropdown Floating Drawer */}
+            {navMenuOpen && (
+              <div className="absolute left-0 top-full mt-2 w-80 sm:w-96 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl z-50 p-3.5 space-y-3 animate-in fade-in zoom-in-95 duration-150">
+                {/* Menu Header */}
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5 px-1">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                    </span>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-white">Portal Navigation</h4>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400">Direct access to all platform workflows</p>
+                    </div>
+                  </div>
+                  {role ? (
+                    <Badge status={role} className="text-[10px] py-0.5 px-1.5">
+                      {role}
+                    </Badge>
+                  ) : (
+                    <span className="text-[10px] text-slate-400 font-medium">Guest</span>
+                  )}
+                </div>
+
+                {/* Role-Specific Links */}
+                <div className="space-y-1">
+                  {role === 'STUDENT' && (
+                    <>
+                      <Link
+                        to="/applications"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/applications')
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5">
+                          <Layers className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">My Applications</span>
+                            <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400">Active Pipeline</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Track recruitment stages, status changes & offers</p>
+                        </div>
+                      </Link>
+
+                      <Link
+                        to="/opportunities"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/opportunities')
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/60 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5">
+                          <Briefcase className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">Find Internships</span>
+                            <span className="text-[10px] text-slate-400">Verified</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Browse verified opportunities with direct applications</p>
+                        </div>
+                      </Link>
+
+                      <Link
+                        to="/interviews"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/interviews')
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5">
+                          <Calendar className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">Interviews</span>
+                            <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Meetings</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">View scheduled timeslots and recruiter meetings</p>
+                        </div>
+                      </Link>
+
+                      <Link
+                        to="/messages"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/messages')
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-violet-100 dark:bg-violet-900/60 text-violet-600 dark:text-violet-400 shrink-0 mt-0.5">
+                          <MessageSquare className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">Messages & Chat</span>
+                            <span className="text-[10px] text-violet-600 dark:text-violet-400">Live</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Real-time chat with employers and recruiters</p>
+                        </div>
+                      </Link>
+
+                      <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800/80">
+                        <Link
+                          to="/saved"
+                          onClick={() => setNavMenuOpen(false)}
+                          className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                        >
+                          <Bookmark className="w-3.5 h-3.5 text-amber-500" />
+                          <span>Saved Jobs</span>
+                        </Link>
+                        <Link
+                          to="/college"
+                          onClick={() => setNavMenuOpen(false)}
+                          className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                        >
+                          <GraduationCap className="w-3.5 h-3.5 text-indigo-500" />
+                          <span>Placement Hub</span>
+                        </Link>
+                        <Link
+                          to="/profile/student"
+                          onClick={() => setNavMenuOpen(false)}
+                          className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                        >
+                          <User className="w-3.5 h-3.5 text-blue-500" />
+                          <span>My Profile</span>
+                        </Link>
+                        <Link
+                          to="/student"
+                          onClick={() => setNavMenuOpen(false)}
+                          className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                        >
+                          <BarChart3 className="w-3.5 h-3.5 text-emerald-500" />
+                          <span>Analytics</span>
+                        </Link>
+                      </div>
+                    </>
+                  )}
+
+                  {role === 'COMPANY' && (
+                    <>
+                      <Link
+                        to="/company/jobs"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/company/jobs')
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5">
+                          <Briefcase className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">Our Job Listings</span>
+                            <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400">Postings</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Manage active postings, applicants and drafts</p>
+                        </div>
+                      </Link>
+
+                      <Link
+                        to="/company/internships/new"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/company/internships/new')
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5">
+                          <PlusCircle className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">Post an Internship</span>
+                            <span className="text-[10px] text-emerald-600 dark:text-emerald-400">+ New</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Create and publish verified internship opportunities</p>
+                        </div>
+                      </Link>
+
+                      <Link
+                        to="/interviews"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/interviews')
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/60 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5">
+                          <Calendar className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">Interviews</span>
+                            <span className="text-[10px] text-blue-600 dark:text-blue-400">Scheduling</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Manage and coordinate candidate interview meetings</p>
+                        </div>
+                      </Link>
+
+                      <Link
+                        to="/messages"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/messages')
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-violet-100 dark:bg-violet-900/60 text-violet-600 dark:text-violet-400 shrink-0 mt-0.5">
+                          <MessageSquare className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">Messages</span>
+                            <span className="text-[10px] text-violet-600 dark:text-violet-400">Chat</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Communicate directly with shortlisted students</p>
+                        </div>
+                      </Link>
+
+                      <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800/80">
+                        <Link
+                          to="/profile/company"
+                          onClick={() => setNavMenuOpen(false)}
+                          className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                        >
+                          <Building className="w-3.5 h-3.5 text-indigo-500" />
+                          <span>Company Profile</span>
+                        </Link>
+                        <Link
+                          to="/company"
+                          onClick={() => setNavMenuOpen(false)}
+                          className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                        >
+                          <BarChart3 className="w-3.5 h-3.5 text-emerald-500" />
+                          <span>Analytics</span>
+                        </Link>
+                      </div>
+                    </>
+                  )}
+
+                  {role === 'ADMIN' && (
+                    <>
+                      <Link
+                        to="/admin"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/admin')
+                            ? 'bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-400 shrink-0 mt-0.5">
+                          <Layers className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">Admin Console</span>
+                            <span className="text-[10px] text-purple-600 dark:text-purple-400">Overview</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Platform ecosystem metrics & system health</p>
+                        </div>
+                      </Link>
+
+                      <Link
+                        to="/admin/users"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/admin/users')
+                            ? 'bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/60 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5">
+                          <Users className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">Users Management</span>
+                            <span className="text-[10px] text-blue-600 dark:text-blue-400">Vetting</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Manage students, recruiters and admin accounts</p>
+                        </div>
+                      </Link>
+
+                      <Link
+                        to="/admin/verifications"
+                        onClick={() => setNavMenuOpen(false)}
+                        className={`flex items-start gap-2.5 p-2 rounded-xl transition-all ${
+                          isActive('/admin/verifications')
+                            ? 'bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5">
+                          <CheckCircle2 className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold">Company Verifications</span>
+                            <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Approvals</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Review and approve employer documentation</p>
+                        </div>
+                      </Link>
+
+                      <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800/80">
+                        <Link
+                          to="/admin/moderation"
+                          onClick={() => setNavMenuOpen(false)}
+                          className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                        >
+                          <Briefcase className="w-3.5 h-3.5 text-purple-500" />
+                          <span>Jobs Queue</span>
+                        </Link>
+                        <Link
+                          to="/admin/reports"
+                          onClick={() => setNavMenuOpen(false)}
+                          className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                        >
+                          <ShieldAlert className="w-3.5 h-3.5 text-rose-500" />
+                          <span>Disputes</span>
+                        </Link>
+                      </div>
+                    </>
+                  )}
+
+                  {!session && (
+                    <>
+                      <Link
+                        to="/opportunities"
+                        onClick={() => setNavMenuOpen(false)}
+                        className="flex items-start gap-2.5 p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200"
+                      >
+                        <div className="p-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5">
+                          <Briefcase className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs font-bold">Browse Internships</span>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Explore openings across top employers</p>
+                        </div>
+                      </Link>
+
+                      <Link
+                        to="/college"
+                        onClick={() => setNavMenuOpen(false)}
+                        className="flex items-start gap-2.5 p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200"
+                      >
+                        <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/60 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5">
+                          <GraduationCap className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs font-bold">College Placement Portal</span>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Institutional campus placements</p>
+                        </div>
+                      </Link>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
           {!session && (
             <>
               <Link
