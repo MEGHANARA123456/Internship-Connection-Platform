@@ -1,8 +1,10 @@
 import asyncio
 from datetime import datetime, timezone
-from email.message import EmailMessage
+from email.message import EmailMessage as SmtpEmailMessage
+from email.utils import formataddr
 import logging
 import smtplib
+import ssl
 from typing import Any
 
 import httpx
@@ -10,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models import EmailMessage, User
+from app.models import EmailMessage as DbEmailMessage, User
 
 logger = logging.getLogger(__name__)
 
@@ -58,21 +60,39 @@ def _send_real_smtp(settings: Any, to: str, subject: str, body: str, html: str |
         return
 
     try:
-        msg = EmailMessage()
+        msg = SmtpEmailMessage()
         msg["Subject"] = subject
-        msg["From"] = settings.mail_from or settings.mail_username
+        sender_display_name = getattr(settings, "mail_from_name", "Internship Platform") or "Internship Platform"
+        sender_email = settings.mail_from or settings.mail_username
+        msg["From"] = formataddr((sender_display_name, sender_email))
         msg["To"] = to
         msg.set_content(body)
         if html:
             msg.add_alternative(html, subtype="html")
 
-        with smtplib.SMTP(settings.mail_server, settings.mail_port, timeout=5) as server:
-            server.starttls()
-            server.login(settings.mail_username, settings.mail_password)
-            server.send_message(msg)
-            logger.info("Real email successfully sent to %s via SMTP", to)
+        port = int(getattr(settings, "mail_port", 587) or 587)
+        timeout_sec = int(getattr(settings, "mail_timeout", 15) or 15)
+        use_ssl = getattr(settings, "mail_use_ssl", False) or port == 465
+
+        if use_ssl:
+            ssl_context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(settings.mail_server, port, timeout=timeout_sec, context=ssl_context) as server:
+                server.login(settings.mail_username, settings.mail_password)
+                server.send_message(msg)
+                logger.info("Real email successfully sent to %s via SMTP SSL (port %s)", to, port)
+        else:
+            with smtplib.SMTP(settings.mail_server, port, timeout=timeout_sec) as server:
+                server.ehlo()
+                if getattr(settings, "mail_use_tls", True) or port == 587:
+                    ssl_context = ssl.create_default_context()
+                    server.starttls(context=ssl_context)
+                    server.ehlo()
+                if settings.mail_username and settings.mail_password:
+                    server.login(settings.mail_username, settings.mail_password)
+                server.send_message(msg)
+                logger.info("Real email successfully sent to %s via SMTP TLS (port %s)", to, port)
     except Exception as exc:
-        logger.warning("Optional SMTP delivery failed: %s", exc)
+        logger.warning("SMTP delivery failed for recipient %s: %s", to, exc)
 
 
 async def send_dev_email(
@@ -92,7 +112,7 @@ async def send_dev_email(
             user = await db.scalar(select(User).where(User.email == clean_to))
             if user is not None:
                 db.add(
-                    EmailMessage(
+                    DbEmailMessage(
                         # pyrefly: ignore [unexpected-keyword]
                         user_id=user.id,
                         # pyrefly: ignore [unexpected-keyword]
