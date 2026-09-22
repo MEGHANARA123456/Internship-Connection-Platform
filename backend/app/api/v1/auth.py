@@ -295,10 +295,31 @@ async def login(data: LoginRequest, db: DbSession) -> Any:
             f"This code will expire in 10 minutes. If you did not initiate this login attempt, please change your password immediately.\n\n"
             f"— The Internship Connection Security Team"
         )
+        html_body = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.04);">
+            <div style="margin-bottom: 20px;">
+                <span style="font-weight: 800; font-size: 22px; color: #4338ca; letter-spacing: -0.5px;">InternSphere</span>
+            </div>
+            <h2 style="font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 12px 0;">Two-Factor Security Code</h2>
+            <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px 0;">
+                Use the following 6-digit security code to complete your login:
+            </p>
+            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px; margin: 20px 0; text-align: center;">
+                <div style="display: inline-block; padding: 10px 24px; background: #eef2ff; border: 1px dashed #6366f1; border-radius: 6px; font-family: monospace; font-size: 28px; font-weight: 800; letter-spacing: 6px; color: #4338ca;">
+                    {otp}
+                </div>
+            </div>
+            <p style="font-size: 12px; color: #64748b; line-height: 1.5; margin: 16px 0 0 0;">
+                &#9201; This code expires in <strong>10 minutes</strong>. If you did not initiate this sign-in, change your password immediately.
+            </p>
+        </div>
+        """
         await send_dev_email(
             to=user.email,
             subject="Two-Factor Authentication (MFA) Security Code",
             body=email_body,
+            html=html_body,
+            message_type="MFA_CHALLENGE",
             db=db,
         )
 
@@ -376,10 +397,31 @@ async def request_mfa_setup(user: Annotated[User, Depends(get_current_user)], db
         f"This code will expire in 10 minutes.\n\n"
         f"— The Internship Connection Security Team"
     )
+    html_body = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.04);">
+        <div style="margin-bottom: 20px;">
+            <span style="font-weight: 800; font-size: 22px; color: #4338ca; letter-spacing: -0.5px;">InternSphere</span>
+        </div>
+        <h2 style="font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 12px 0;">Confirm Two-Factor Authentication Setup</h2>
+        <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px 0;">
+            Enter the 6-digit confirmation code below in your account security settings to activate 2FA:
+        </p>
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px; margin: 20px 0; text-align: center;">
+            <div style="display: inline-block; padding: 10px 24px; background: #ecfdf5; border: 1px dashed #10b981; border-radius: 6px; font-family: monospace; font-size: 28px; font-weight: 800; letter-spacing: 6px; color: #065f46;">
+                {otp}
+            </div>
+        </div>
+        <p style="font-size: 12px; color: #64748b; line-height: 1.5; margin: 16px 0 0 0;">
+            &#9201; This code expires in <strong>10 minutes</strong>.
+        </p>
+    </div>
+    """
     await send_dev_email(
         to=user.email,
         subject="MFA Setup Confirmation Code",
         body=email_body,
+        html=html_body,
+        message_type="MFA_SETUP",
         db=db,
     )
     return {"message": f"Verification code dispatched to {user.email}"}
@@ -402,10 +444,23 @@ async def enable_mfa(data: MFAEnableRequest, user: Annotated[User, Depends(get_c
     user.mfa_otp_expires_at = None
     await db.commit()
 
+    html_body = """
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.04);">
+        <div style="margin-bottom: 20px;">
+            <span style="font-weight: 800; font-size: 22px; color: #4338ca; letter-spacing: -0.5px;">InternSphere</span>
+        </div>
+        <h2 style="font-size: 18px; font-weight: 700; color: #059669; margin: 0 0 12px 0;">✓ Two-Factor Authentication Activated</h2>
+        <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px 0;">
+            Two-Factor Authentication (MFA) has been successfully activated on your InternSphere account. On your next login, you will receive a 6-digit security code sent to this email address.
+        </p>
+    </div>
+    """
     await send_dev_email(
         to=user.email,
         subject="Two-Factor Authentication Activated",
         body="Two-Factor Authentication (MFA) has been successfully activated on your account.",
+        html=html_body,
+        message_type="MFA_STATUS_CHANGE",
         db=db,
     )
 
@@ -425,10 +480,23 @@ async def disable_mfa(data: MFADisableRequest, user: Annotated[User, Depends(get
     user.mfa_otp_expires_at = None
     await db.commit()
 
+    html_body = """
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.04);">
+        <div style="margin-bottom: 20px;">
+            <span style="font-weight: 800; font-size: 22px; color: #4338ca; letter-spacing: -0.5px;">InternSphere</span>
+        </div>
+        <h2 style="font-size: 18px; font-weight: 700; color: #e11d48; margin: 0 0 12px 0;">⚠ Two-Factor Authentication Deactivated</h2>
+        <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px 0;">
+            Two-Factor Authentication (MFA) has been turned off on your account. If you did not make this change, please contact support and change your account password immediately.
+        </p>
+    </div>
+    """
     await send_dev_email(
         to=user.email,
         subject="Two-Factor Authentication Deactivated",
         body="Two-Factor Authentication (MFA) has been turned off on your account.",
+        html=html_body,
+        message_type="MFA_STATUS_CHANGE",
         db=db,
     )
 

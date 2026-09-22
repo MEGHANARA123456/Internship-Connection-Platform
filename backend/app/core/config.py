@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     mail_port: int = 587
     mail_server: str | None = None
     mail_from_name: str = "Internship Platform"
+    mail_use_tls: bool = True
+    mail_use_ssl: bool = False
+    mail_timeout: int = 15
     max_resume_size_mb: int = 5
     resume_storage_path: str = "storage/resumes"
     rate_limit_requests: int = 120
