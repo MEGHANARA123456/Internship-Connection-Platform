@@ -10,6 +10,7 @@ class UserAdminResponse(BaseModel):
     role: str
     is_active: bool
     is_verified: bool
+    mfa_enabled: bool = False
     suspended_at: datetime | None
 
 

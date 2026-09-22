@@ -25,10 +25,13 @@ import {
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
+import { useAuthStore } from '../store/auth'
+import { AccountSecurityCard } from '../components/auth/AccountSecurityCard'
 
 // --- 1. Admin Console Dashboard ---
 
 export function AdminDashboardPage() {
+  const { session } = useAuthStore()
   const [stats, setStats] = useState({
     usersCount: 0,
     studentsCount: 0,
@@ -433,6 +436,11 @@ export function AdminDashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Admin Account Security & Two-Factor Authentication */}
+      <div className="pt-2">
+        <AccountSecurityCard userEmail={session?.email} role="Admin" />
+      </div>
     </div>
   )
 }
@@ -542,6 +550,7 @@ export function AdminUsersPage() {
                   <th className="p-3.5">Role</th>
                   <th className="p-3.5">Status</th>
                   <th className="p-3.5">Email Verified</th>
+                  <th className="p-3.5">2FA / MFA</th>
                   <th className="p-3.5 text-right">Actions</th>
                 </tr>
               </thead>
@@ -564,6 +573,11 @@ export function AdminUsersPage() {
                       ) : (
                         <span className="text-slate-400">Pending</span>
                       )}
+                    </td>
+                    <td className="p-3.5">
+                      <Badge variant={u.mfa_enabled ? 'emerald' : 'slate'}>
+                        {u.mfa_enabled ? 'Active' : 'Disabled'}
+                      </Badge>
                     </td>
                     <td className="p-3.5 text-right">
                       {u.role !== 'ADMIN' && (
