@@ -48,6 +48,9 @@ import {
   AdminVerificationsPage,
   AdminModerationPage,
   AdminReportsPage,
+  AdminCompaniesPage,
+  AdminCompanyPostingsPage,
+  AdminAuditLogsPage,
 } from './pages/AdminPages'
 
 import { CollegePlacementPortal } from './pages/CollegePlacementPortal'
@@ -122,6 +125,9 @@ export default function App() {
               <Route path="/admin/verifications" element={<AdminVerificationsPage />} />
               <Route path="/admin/moderation" element={<AdminModerationPage />} />
               <Route path="/admin/reports" element={<AdminReportsPage />} />
+              <Route path="/admin/companies" element={<AdminCompaniesPage />} />
+              <Route path="/admin/companies/:companyId/postings" element={<AdminCompanyPostingsPage />} />
+              <Route path="/admin/audit-logs" element={<AdminAuditLogsPage />} />
             </Route>
 
             {/* Fallback */}
