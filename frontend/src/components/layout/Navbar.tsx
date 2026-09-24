@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/auth'
 import { api, getFullMediaUrl } from '../../api/client'
 import { Badge } from '../ui/Badge'
 import { Logo } from './Logo'
+import { BottomTabBar } from './BottomTabBar'
 import {
   Briefcase,
   Layers,
@@ -125,8 +126,9 @@ export function Navbar() {
     }`
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xs shadow-2xs transition-colors">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
+    <>
+    <header className="sticky top-0 z-40 w-full border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xs shadow-2xs transition-colors pt-[env(safe-area-inset-top)]">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between min-h-[4rem]">
         {/* Brand */}
         <div className="flex items-center gap-3">
           <Logo size="md" />
@@ -441,5 +443,7 @@ export function Navbar() {
         </div>
       </div>
     </header>
+    <BottomTabBar />
+    </>
   )
 }

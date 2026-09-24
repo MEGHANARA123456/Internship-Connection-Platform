@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -11,6 +11,7 @@ import { Modal } from '../components/ui/Modal'
 import { Textarea } from '../components/ui/Textarea'
 import {
   Users,
+  TrendingUp,
   ShieldCheck,
   Briefcase,
   AlertTriangle,
@@ -22,6 +23,12 @@ import {
   RotateCcw,
   RefreshCw,
   Building2,
+  X,
+  ClipboardList,
+  BarChart2,
+  ChevronDown,
+  ChevronUp,
+  Activity,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
@@ -257,6 +264,8 @@ export function AdminDashboardPage() {
         />
       </div>
 
+      <AdminAnalyticsCharts refreshKey={analysisRefreshKey} />
+
       {/* Live Action Queues Preview */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Company Verifications Queue */}
@@ -445,6 +454,39 @@ export function AdminDashboardPage() {
   )
 }
 
+function AdminAnalyticsCharts({ refreshKey }: { refreshKey: number }) {
+  const [growth, setGrowth] = useState<any[]>([])
+  const [actions, setActions] = useState<any[]>([])
+
+  useEffect(() => {
+    Promise.all([
+      api.get('/analytics/admin/user-growth?granularity=month&periods=6'),
+      api.get('/analytics/admin/admin-action-volume?days=14'),
+    ]).then(([growthRes, actionsRes]) => {
+      setGrowth(growthRes.data || [])
+      setActions(actionsRes.data || [])
+    }).catch(() => {
+      setGrowth([])
+      setActions([])
+    })
+  }, [refreshKey])
+
+  const maxGrowth = Math.max(...growth.map((item) => item.students + item.companies), 1)
+  const maxAction = Math.max(...actions.map((item) => item.count), 1)
+  return (
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <Card className="bg-white p-6">
+        <div className="mb-5 flex items-center gap-2"><TrendingUp className="h-4 w-4 text-indigo-600" /><h2 className="text-sm font-bold text-slate-900">User growth</h2></div>
+        {growth.length === 0 ? <p className="text-xs text-slate-500">No signup data for this period.</p> : <div className="space-y-3">{growth.map((item) => <div key={item.period} className="flex items-center gap-3 text-xs"><span className="w-16 text-slate-500">{item.period}</span><div className="h-6 flex-1 overflow-hidden rounded bg-slate-100"><div className="h-full rounded bg-indigo-500" style={{ width: `${Math.max(3, ((item.students + item.companies) / maxGrowth) * 100)}%` }} /></div><span className="w-12 text-right font-semibold text-slate-700">{item.students + item.companies}</span></div>)}</div>}
+      </Card>
+      <Card className="bg-white p-6">
+        <div className="mb-5 flex items-center gap-2"><BarChart2 className="h-4 w-4 text-amber-600" /><h2 className="text-sm font-bold text-slate-900">Admin action volume</h2></div>
+        {actions.length === 0 ? <p className="text-xs text-slate-500">No admin actions for this period.</p> : <div className="space-y-3">{actions.slice(-8).map((item, index) => <div key={`${item.period}-${item.action}-${index}`} className="flex items-center gap-3 text-xs"><span className="w-28 truncate text-slate-500">{item.action}</span><div className="h-6 flex-1 overflow-hidden rounded bg-slate-100"><div className="h-full rounded bg-amber-500" style={{ width: `${Math.max(5, (item.count / maxAction) * 100)}%` }} /></div><span className="w-8 text-right font-semibold text-slate-700">{item.count}</span></div>)}</div>}
+      </Card>
+    </div>
+  )
+}
+
 // --- 2. User Management ---
 
 export function AdminUsersPage() {
@@ -454,6 +496,8 @@ export function AdminUsersPage() {
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState('')
   const [actionId, setActionId] = useState<number | null>(null)
+  const [selectedUser, setSelectedUser] = useState<any | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
 
   const fetchUsers = async () => {
     setLoading(true)
@@ -485,6 +529,18 @@ export function AdminUsersPage() {
       alert('Failed to update user status.')
     } finally {
       setActionId(null)
+    }
+  }
+
+  const openUserDetail = async (userId: number) => {
+    setDetailLoading(true)
+    try {
+      const res = await api.get(`/admin/users/${userId}`)
+      setSelectedUser(res.data)
+    } catch {
+      alert('Failed to load user details.')
+    } finally {
+      setDetailLoading(false)
     }
   }
 
@@ -556,7 +612,7 @@ export function AdminUsersPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((u) => (
-                  <tr key={u.id} className="hover:bg-slate-50/50">
+                  <tr key={u.id} className="hover:bg-slate-50/50 cursor-pointer" onClick={() => openUserDetail(u.id)}>
                     <td className="p-3.5 font-medium text-slate-900">#{u.id}</td>
                     <td className="p-3.5 font-semibold text-slate-800">{u.email}</td>
                     <td className="p-3.5">
@@ -579,7 +635,7 @@ export function AdminUsersPage() {
                         {u.mfa_enabled ? 'Active' : 'Disabled'}
                       </Badge>
                     </td>
-                    <td className="p-3.5 text-right">
+                    <td className="p-3.5 text-right" onClick={(event) => event.stopPropagation()}>
                       {u.role !== 'ADMIN' && (
                         <Button
                           size="sm"
@@ -598,6 +654,42 @@ export function AdminUsersPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {selectedUser && (
+        <div className="fixed inset-0 z-40 bg-slate-950/30" onClick={() => setSelectedUser(null)}>
+          <aside className="absolute right-0 top-0 h-full w-full max-w-xl overflow-y-auto bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">User detail</p>
+                <h2 className="mt-1 text-xl font-bold text-slate-900">{selectedUser.email}</h2>
+                <Badge status={selectedUser.role}>{selectedUser.role}</Badge>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setSelectedUser(null)} leftIcon={<X className="h-4 w-4" />}>Close</Button>
+            </div>
+            {detailLoading ? <CardSkeleton /> : <div className="space-y-6 py-5">
+              {selectedUser.student_profile && <section>
+                <h3 className="mb-2 text-sm font-bold text-slate-900">Profile</h3>
+                <p className="text-sm text-slate-700">{selectedUser.student_profile.full_name}</p>
+                <p className="text-xs text-slate-500">{selectedUser.student_profile.university} · {selectedUser.student_profile.major}</p>
+              </section>}
+              {selectedUser.company_profile && <section>
+                <h3 className="mb-2 text-sm font-bold text-slate-900">Company</h3>
+                <p className="text-sm text-slate-700">{selectedUser.company_profile.company_name}</p>
+                <p className="text-xs text-slate-500">{selectedUser.company_profile.industry} · {selectedUser.company_profile.posting_count} postings</p>
+                <Badge status={selectedUser.company_profile.verification_status}>{selectedUser.company_profile.verification_status}</Badge>
+              </section>}
+              {selectedUser.applications && <section>
+                <h3 className="mb-2 text-sm font-bold text-slate-900">Applications</h3>
+                {selectedUser.applications.length === 0 ? <p className="text-xs text-slate-500">No applications.</p> : <div className="space-y-2">{selectedUser.applications.map((item: any) => <div key={item.id} className="rounded-lg border border-slate-200 p-3"><p className="text-sm font-semibold text-slate-800">{item.internship_title}</p><p className="text-xs text-slate-500">{item.company_name} · {item.status}</p></div>)}</div>}
+              </section>}
+              <section>
+                <h3 className="mb-2 flex items-center gap-2 text-sm font-bold text-slate-900"><Activity className="h-4 w-4" /> Recent actions</h3>
+                {selectedUser.recent_audit_events?.length ? <div className="space-y-2">{selectedUser.recent_audit_events.map((item: any) => <div key={item.id} className="border-l-2 border-indigo-200 pl-3"><p className="text-xs font-semibold text-slate-800">{item.action}</p><p className="text-[11px] text-slate-500">{new Date(item.created_at).toLocaleString()}</p></div>)}</div> : <p className="text-xs text-slate-500">No audit events.</p>}
+              </section>
+            </div>}
+          </aside>
         </div>
       )}
     </div>
@@ -1023,6 +1115,96 @@ export function AdminReportsPage() {
           </div>
         </Modal>
       )}
+    </div>
+  )
+}
+
+// --- 6. Company Directory ---
+
+export function AdminCompaniesPage() {
+  const [companies, setCompanies] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const fetchCompanies = async () => {
+    setLoading(true)
+    try {
+      const res = await api.get('/admin/companies')
+      setCompanies(res.data || [])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { fetchCompanies() }, [])
+
+  const verify = async (userId: number, status: 'VERIFIED' | 'REJECTED') => {
+    await api.post(`/admin/companies/${userId}/verification`, { status })
+    fetchCompanies()
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
+      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Company Directory</h1><p className="mt-1 text-xs text-slate-500">Review verification status and posting activity.</p></div><Link to="/admin"><Button variant="outline" size="sm">Console</Button></Link></div>
+      {loading ? <TableSkeleton /> : companies.length === 0 ? <EmptyState title="No companies found" description="Registered companies will appear here." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Company</th><th className="p-3">Industry</th><th className="p-3">Verification</th><th className="p-3">Postings</th><th className="p-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map((company) => <tr key={company.id}><td className="p-3 font-semibold text-slate-800"><Link className="hover:text-indigo-600" to={`/admin/companies/${company.user_id}/postings`}>{company.company_name}</Link></td><td className="p-3 text-slate-600">{company.industry}</td><td className="p-3"><Badge status={company.verification_status}>{company.verification_status}</Badge></td><td className="p-3 text-slate-600">{company.posting_count}</td><td className="p-3 text-right"><div className="flex justify-end gap-2">{company.verification_status !== 'VERIFIED' && <Button size="sm" variant="primary" onClick={() => verify(company.user_id, 'VERIFIED')} leftIcon={<CheckCircle2 className="h-3.5 w-3.5" />}>Verify</Button>}{company.verification_status !== 'REJECTED' && <Button size="sm" variant="outline" className="text-rose-600" onClick={() => verify(company.user_id, 'REJECTED')} leftIcon={<XCircle className="h-3.5 w-3.5" />}>Reject</Button>}</div></td></tr>)}</tbody></table></div>}
+    </div>
+  )
+}
+
+// --- 7. Company Postings ---
+
+export function AdminCompanyPostingsPage() {
+  const { companyId } = useParams()
+  const [postings, setPostings] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const fetchPostings = async () => {
+    if (!companyId) return
+    setLoading(true)
+    try { const res = await api.get(`/admin/companies/${companyId}/postings`); setPostings(res.data || []) } finally { setLoading(false) }
+  }
+  useEffect(() => { fetchPostings() }, [companyId])
+
+  const moderate = async (id: number, status: 'PUBLISHED' | 'REJECTED' | 'CLOSED') => {
+    await api.post(`/admin/companies/${companyId}/postings/${id}/moderate`, { status })
+    fetchPostings()
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
+      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Company Postings</h1><p className="mt-1 text-xs text-slate-500">Inspect applicant volume and moderate listings.</p></div><Link to="/admin/companies"><Button variant="outline" size="sm">Back to companies</Button></Link></div>
+      {loading ? <TableSkeleton /> : postings.length === 0 ? <EmptyState title="No postings found" description="This company has no internship postings." /> : <div className="space-y-3">{postings.map((posting) => <Card key={posting.id} className="flex flex-col gap-3 bg-white p-5 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><h2 className="font-bold text-slate-900">{posting.title}</h2><Badge status={posting.status}>{posting.status}</Badge></div><p className="mt-1 text-xs text-slate-500">{posting.applicant_count} applicants · Created {new Date(posting.created_at).toLocaleDateString()}</p></div><div className="flex gap-2">{posting.status !== 'PUBLISHED' && <Button size="sm" variant="primary" onClick={() => moderate(posting.id, 'PUBLISHED')}>Approve</Button>}{posting.status !== 'REJECTED' && <Button size="sm" variant="outline" className="text-rose-600" onClick={() => moderate(posting.id, 'REJECTED')}>Reject</Button>}{posting.status !== 'CLOSED' && <Button size="sm" variant="outline" onClick={() => moderate(posting.id, 'CLOSED')}>Remove</Button>}</div></Card>)}</div>}
+    </div>
+  )
+}
+
+// --- 8. Audit Log Explorer ---
+
+export function AdminAuditLogsPage() {
+  const [logs, setLogs] = useState<any[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [actor, setActor] = useState('')
+  const [action, setAction] = useState('')
+  const [targetType, setTargetType] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [expanded, setExpanded] = useState<number | null>(null)
+  const pageSize = 25
+
+  const fetchLogs = async () => {
+    const params = { page, page_size: pageSize, actor: actor || undefined, action: action || undefined, target_type: targetType || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined }
+    const res = await api.get('/admin/audit-logs', { params })
+    setLogs(res.data.items || [])
+    setTotal(res.data.total || 0)
+  }
+  useEffect(() => { fetchLogs() }, [page, actor, action, targetType, dateFrom, dateTo])
+
+  return (
+    <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
+      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Audit Logs</h1><p className="mt-1 text-xs text-slate-500">Search administrative actions and inspect their metadata.</p></div><Link to="/admin"><Button variant="outline" size="sm">Console</Button></Link></div>
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:flex-wrap"><input value={actor} onChange={(event) => { setPage(1); setActor(event.target.value) }} placeholder="Actor email" className="rounded-lg border border-slate-300 px-3 py-2 text-xs" /><select value={action} onChange={(event) => { setPage(1); setAction(event.target.value) }} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="">All actions</option><option value="user_suspended">User suspended</option><option value="user_reinstated">User reinstated</option><option value="company_verified">Company verified</option><option value="company_rejected">Company rejected</option><option value="posting_approved">Posting approved</option><option value="posting_rejected">Posting rejected</option><option value="posting_removed">Posting removed</option><option value="report_resolved">Report resolved</option></select><select value={targetType} onChange={(event) => { setPage(1); setTargetType(event.target.value) }} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="">All targets</option><option value="user">User</option><option value="company">Company</option><option value="posting">Posting</option></select><label className="flex items-center gap-2 text-xs text-slate-500">From<input type="date" value={dateFrom} onChange={(event) => { setPage(1); setDateFrom(event.target.value) }} className="rounded-lg border border-slate-300 px-2 py-2 text-xs text-slate-700" /></label><label className="flex items-center gap-2 text-xs text-slate-500">To<input type="date" value={dateTo} onChange={(event) => { setPage(1); setDateTo(event.target.value) }} className="rounded-lg border border-slate-300 px-2 py-2 text-xs text-slate-700" /></label></div>
+      {logs.length === 0 ? <EmptyState icon={ClipboardList} title="No audit events" description="No actions match the current filters." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Actor</th><th className="p-3">Action</th><th className="p-3">Target</th><th className="p-3">Timestamp</th><th className="p-3" /></tr></thead><tbody className="divide-y divide-slate-100">{logs.map((log) => <tr key={log.id}><td className="p-3 text-slate-700">{log.actor_email || 'System'}</td><td className="p-3"><Badge status="ADMIN">{log.action}</Badge></td><td className="p-3 text-slate-600">{log.target_type || '—'} #{log.target_id || '—'}</td><td className="p-3 text-slate-500">{new Date(log.created_at).toLocaleString()}</td><td className="p-3 text-right"><Button size="sm" variant="outline" onClick={() => setExpanded(expanded === log.id ? null : log.id)} leftIcon={expanded === log.id ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}>Metadata</Button>{expanded === log.id && <pre className="mt-2 max-w-xs overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-left text-[10px] text-emerald-300">{JSON.stringify(log.metadata || {}, null, 2)}</pre>}</td></tr>)}</tbody></table></div>}
+      <div className="flex items-center justify-between text-xs text-slate-500"><span>{total} total events</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</Button><span className="px-2 py-2">Page {page}</span><Button size="sm" variant="outline" disabled={page * pageSize >= total} onClick={() => setPage((current) => current + 1)}>Next</Button></div></div>
     </div>
   )
 }
