@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Alembic migration: creates the email message table for outbound communication records.
+# -----------------------------------------------------------------------------
+
 """add user-scoped email message records
 
 Revision ID: 0003_email_messages

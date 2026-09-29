@@ -38,6 +38,10 @@ export function AccountSecurityCard({ userEmail, role: _role = 'User' }: Account
   const [isSubmittingDisable, setIsSubmittingDisable] = useState(false)
   const [mfaSuccess, setMfaSuccess] = useState('')
   const [mfaError, setMfaError] = useState('')
+  const [totpSecret, setTotpSecret] = useState('')
+  const [totpCode, setTotpCode] = useState('')
+  const [isSettingUpTotp, setIsSettingUpTotp] = useState(false)
+  const [totpUrl, setTotpUrl] = useState('')
 
   // Fetch initial MFA status
   useEffect(() => {
@@ -132,6 +136,49 @@ export function AccountSecurityCard({ userEmail, role: _role = 'User' }: Account
     }
   }
 
+  const handleStartTotpSetup = async () => {
+    setMfaError('')
+    setMfaSuccess('')
+    setIsSubmittingSetup(true)
+    try {
+      const res = await api.post('/auth/mfa/setup-totp')
+      setTotpSecret(res.data?.secret || '')
+      setTotpUrl(res.data?.otpauth_url || '')
+      setIsSettingUpTotp(true)
+      setMfaSuccess(res.data?.message || 'Authenticator setup is ready. Confirm the generated code below.')
+      setTimeout(() => setMfaSuccess(''), 8000)
+    } catch (err: any) {
+      setMfaError(err.response?.data?.detail || 'Failed to start authenticator setup.')
+    } finally {
+      setIsSubmittingSetup(false)
+    }
+  }
+
+  const handleConfirmTotpSetup = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setMfaError('')
+    setMfaSuccess('')
+    if (!totpCode || totpCode.trim().length !== 6) {
+      setMfaError('Please enter the full 6-digit authenticator code.')
+      return
+    }
+    setIsSubmittingSetup(true)
+    try {
+      const res = await api.post('/auth/mfa/verify-totp', { otp: totpCode.trim() })
+      setMfaEnabled(true)
+      setIsSettingUpTotp(false)
+      setTotpCode('')
+      setTotpUrl('')
+      setTotpSecret('')
+      setMfaSuccess(res.data?.message || 'Authenticator app enabled successfully.')
+      setTimeout(() => setMfaSuccess(''), 8000)
+    } catch (err: any) {
+      setMfaError(err.response?.data?.detail || 'Invalid authenticator code. Please try again.')
+    } finally {
+      setIsSubmittingSetup(false)
+    }
+  }
+
   const handleConfirmMfaSetup = async (e: React.FormEvent) => {
     e.preventDefault()
     setMfaError('')
@@ -219,19 +266,31 @@ export function AccountSecurityCard({ userEmail, role: _role = 'User' }: Account
               </p>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
-              {!mfaEnabled && !isSettingUpMfa && (
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  onClick={handleStartMfaSetup}
-                  isLoading={isSubmittingSetup}
-                  className="gap-1.5 cursor-pointer"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  Enable 2FA
-                </Button>
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              {!mfaEnabled && !isSettingUpMfa && !isSettingUpTotp && (
+                <>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    onClick={handleStartMfaSetup}
+                    isLoading={isSubmittingSetup}
+                    className="gap-1.5 cursor-pointer"
+                  >
+                    <KeyRound className="w-3.5 h-3.5" />
+                    Enable Email 2FA
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleStartTotpSetup}
+                    isLoading={isSubmittingSetup}
+                    className="cursor-pointer"
+                  >
+                    Enable Authenticator
+                  </Button>
+                </>
               )}
 
               {mfaEnabled && !isDisablingMfa && (
@@ -303,6 +362,62 @@ export function AccountSecurityCard({ userEmail, role: _role = 'User' }: Account
                     onClick={() => {
                       setIsSettingUpMfa(false)
                       setSetupOtp('')
+                      setMfaError('')
+                    }}
+                    className="w-full sm:w-auto"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </form>
+          )}
+
+          {isSettingUpTotp && !mfaEnabled && (
+            <form onSubmit={handleConfirmTotpSetup} className="p-3.5 bg-white dark:bg-slate-900 rounded-lg border border-violet-200 dark:border-violet-800/80 space-y-3 animate-in fade-in">
+              <div className="text-xs space-y-1">
+                <p className="font-semibold text-slate-800 dark:text-slate-200">Set up your authenticator app</p>
+                <p className="text-slate-500 dark:text-slate-400 text-[11px]">
+                  Use Microsoft Authenticator, Google Authenticator, or a similar app and enter the code below.
+                </p>
+              </div>
+
+              {totpSecret && (
+                <div className="rounded-md border border-violet-200 bg-violet-50/80 p-2 text-[11px] text-violet-700 dark:text-violet-300 break-all">
+                  Secret: <span className="font-mono font-bold">{totpSecret}</span>
+                </div>
+              )}
+
+              {totpUrl && (
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600 dark:text-slate-300 break-all">
+                  Setup URL: <span className="font-mono">{totpUrl}</span>
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row items-center gap-2">
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="123456"
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  className="font-mono text-center text-lg tracking-widest font-bold max-w-xs"
+                  autoFocus
+                />
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <Button type="submit" variant="primary" size="sm" isLoading={isSubmittingSetup} className="w-full sm:w-auto">
+                    Verify & Enable
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setIsSettingUpTotp(false)
+                      setTotpCode('')
+                      setTotpUrl('')
+                      setTotpSecret('')
                       setMfaError('')
                     }}
                     className="w-full sm:w-auto"

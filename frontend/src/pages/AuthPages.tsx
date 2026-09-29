@@ -89,7 +89,7 @@ export function LoginPage() {
   const [resendStatus, setResendStatus] = useState('')
 
   // Two-Factor Authentication (MFA) challenge state
-  const [mfaChallenge, setMfaChallenge] = useState<{ ticket: string; email: string } | null>(null)
+  const [mfaChallenge, setMfaChallenge] = useState<{ ticket: string; email: string; mfa_type?: string } | null>(null)
   const [mfaOtp, setMfaOtp] = useState('')
   const [mfaLoading, setMfaLoading] = useState(false)
   const [mfaError, setMfaError] = useState('')
@@ -138,7 +138,7 @@ export function LoginPage() {
         mfa_ticket: mfaChallenge.ticket,
         otp: mfaOtp.trim(),
       })
-      const { access_token, refresh_token, role, user_id, name } = res.data
+      const { access_token, refresh_token, role, user_id, name, access_token_expires_in, refresh_token_expires_in, access_token_expires_at, refresh_token_expires_at } = res.data
       setSession({
         accessToken: access_token,
         refreshToken: refresh_token,
@@ -146,6 +146,10 @@ export function LoginPage() {
         userId: user_id,
         email: mfaChallenge.email,
         name: name,
+        accessTokenExpiresAt: access_token_expires_at ?? null,
+        refreshTokenExpiresAt: refresh_token_expires_at ?? null,
+        accessTokenExpiresIn: access_token_expires_in ?? null,
+        refreshTokenExpiresIn: refresh_token_expires_in ?? null,
       })
 
       // Route according to role
@@ -174,6 +178,7 @@ export function LoginPage() {
         setMfaChallenge({
           ticket: res.data.mfa_ticket,
           email: res.data.email || mfaChallenge?.email || '',
+          mfa_type: res.data.mfa_type || 'EMAIL',
         })
         setResendMfaStatus('A fresh security code has been sent to your email.')
         setTimeout(() => setResendMfaStatus(''), 6000)
@@ -200,13 +205,14 @@ export function LoginPage() {
         setMfaChallenge({
           ticket: response.data.mfa_ticket,
           email: response.data.email,
+          mfa_type: response.data.mfa_type || 'EMAIL',
         })
         setMfaOtp('')
         setMfaError('')
         return
       }
 
-      const { access_token, refresh_token, role, user_id, name } = response.data
+      const { access_token, refresh_token, role, user_id, name, access_token_expires_in, refresh_token_expires_in, access_token_expires_at, refresh_token_expires_at } = response.data
       setSession({
         accessToken: access_token,
         refreshToken: refresh_token,
@@ -214,6 +220,10 @@ export function LoginPage() {
         userId: user_id,
         email: data.email,
         name: name,
+        accessTokenExpiresAt: access_token_expires_at ?? null,
+        refreshTokenExpiresAt: refresh_token_expires_at ?? null,
+        accessTokenExpiresIn: access_token_expires_in ?? null,
+        refreshTokenExpiresIn: refresh_token_expires_in ?? null,
       })
 
       // Route according to role
@@ -239,10 +249,15 @@ export function LoginPage() {
   // Render dedicated Two-Factor Authentication challenge UI if active
   if (mfaChallenge) {
     const maskedEmail = mfaChallenge.email.replace(/(.{2})(.*)(?=@)/, (_, a, b) => a + '*'.repeat(Math.max(1, b.length)))
+    const isTotpChallenge = mfaChallenge.mfa_type === 'TOTP'
     return (
       <AuthCardLayout
         title="Two-Factor Authentication"
-        description="A 6-digit security code was sent to your registered email. Enter it below to complete sign in."
+        description={
+          isTotpChallenge
+            ? 'Use the 6-digit code from your authenticator app to complete sign in.'
+            : 'A 6-digit security code was sent to your registered email. Enter it below to complete sign in.'
+        }
         footer={
           <div className="text-center">
             <button
@@ -267,7 +282,9 @@ export function LoginPage() {
             <div className="text-xs space-y-0.5">
               <p className="font-semibold text-slate-900 dark:text-white">Security Verification</p>
               <p className="text-slate-500 dark:text-slate-400">
-                Code dispatched to <span className="font-mono font-medium text-slate-800 dark:text-slate-200">{maskedEmail}</span>
+                {isTotpChallenge
+                  ? 'Authenticator app verification is required.'
+                  : <>Code dispatched to <span className="font-mono font-medium text-slate-800 dark:text-slate-200">{maskedEmail}</span></>}
               </p>
             </div>
           </div>

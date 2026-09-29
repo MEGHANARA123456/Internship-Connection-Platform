@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Service for sending email messages through the configured SMTP backend.
+# -----------------------------------------------------------------------------
+
 import asyncio
 from datetime import datetime, timezone
 from email.message import EmailMessage as SmtpEmailMessage
@@ -152,7 +156,8 @@ async def send_dev_email(
                 if resp.status_code < 400:
                     mailpit_sent = True
                     break
-            except Exception:
+            except Exception as exc:
+                logger.warning("Mailpit delivery attempt failed for %s via %s: %s", clean_to, host, exc)
                 continue
 
     if not mailpit_sent:

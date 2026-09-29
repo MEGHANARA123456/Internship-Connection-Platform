@@ -38,7 +38,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_email_verification_tokens_token_digest", table_name="email_verification_tokens")
     op.drop_index("ix_email_verification_tokens_user_id", table_name="email_verification_tokens")
-    op.drop_table("email_verification_tokens")
+    op.drop_table("email_verification_tokens") 
     op.drop_column("student_profiles", "institution_email")
     op.drop_column("users", "verification_token_expires_at")
     op.drop_column("users", "admin_approved")

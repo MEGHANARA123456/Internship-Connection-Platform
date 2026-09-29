@@ -55,7 +55,7 @@ export function ReportModal({
         reset()
         onClose()
       }, 1500)
-    } catch (err: unknown) {
+    } catch {
       setServerError('Failed to submit report. Please try again.')
     }
   }

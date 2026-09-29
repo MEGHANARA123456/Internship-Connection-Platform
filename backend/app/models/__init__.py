@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Package initializer for all SQLAlchemy models used by the backend application.
+# -----------------------------------------------------------------------------
+
 from app.models.user import (
     Application,
     AuditLog,
@@ -39,4 +43,4 @@ __all__ = [
     "User",
     "UserRole",
 ]
-
+

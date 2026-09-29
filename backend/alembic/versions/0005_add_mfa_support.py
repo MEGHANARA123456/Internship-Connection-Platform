@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Alembic migration: adds MFA-related fields and support for stronger authentication.
+# -----------------------------------------------------------------------------
+
 """add mfa support to users table
 
 Revision ID: 0005_add_mfa_support

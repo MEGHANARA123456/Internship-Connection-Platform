@@ -1,11 +1,17 @@
+# -----------------------------------------------------------------------------
+# Authentication endpoints for login, registration, token refresh, and account flows.
+# -----------------------------------------------------------------------------
+
 from typing import Annotated, Any
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 from urllib.parse import quote_plus
 
 import httpx
+import pyotp
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select, update
 
@@ -26,6 +32,8 @@ from app.schemas.auth import (
     MFAEnableRequest,
     MFALoginChallengeResponse,
     MFALoginVerifyRequest,
+    MFATotpSetupResponse,
+    MFATotpVerifyRequest,
     MFAStatusResponse,
     RefreshRequest,
     ResendVerificationRequest,
@@ -39,6 +47,7 @@ from app.services.mail import send_dev_email
 from app.services.email_validation import validate_email_format, validate_organization_email, validate_student_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 def _is_expired(dt: datetime | None) -> bool:
@@ -68,7 +77,8 @@ async def verify_google_credential(
                     name = info.get("name") or info.get("given_name") or (email.split("@")[0] if email else "Google User")
                     if email:
                         return email.strip().lower(), name.strip()
-        except Exception:
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("Google tokeninfo verification failed: %s", exc)
             pass
 
         # 2. Attempt verification against Google's userinfo API for OAuth2 access tokens
@@ -84,7 +94,8 @@ async def verify_google_credential(
                     name = info.get("name") or info.get("given_name") or (email.split("@")[0] if email else "Google User")
                     if email:
                         return email.strip().lower(), name.strip()
-        except Exception:
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("Google userinfo verification failed: %s", exc)
             pass
 
     raise HTTPException(status_code=400, detail="A valid Google credential is required")
@@ -92,6 +103,9 @@ async def verify_google_credential(
 
 async def issue_tokens(user: User, db: DbSession) -> TokenResponse:
     settings = get_settings()
+    access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
+    refresh_expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
+
     access = create_token(str(user.id), user.role.value, "access", timedelta(minutes=settings.access_token_expire_minutes))
     refresh = create_token(str(user.id), user.role.value, "refresh", timedelta(days=settings.refresh_token_expire_days))
     payload = decode_token(refresh)
@@ -125,6 +139,10 @@ async def issue_tokens(user: User, db: DbSession) -> TokenResponse:
         name=user_name,
         email=user.email,
         avatar_url=avatar_url,
+        access_token_expires_in=int(settings.access_token_expire_minutes * 60),
+        refresh_token_expires_in=int(settings.refresh_token_expire_days * 24 * 60 * 60),
+        access_token_expires_at=access_expires_at,
+        refresh_token_expires_at=refresh_expires_at,
     )
 
 
@@ -228,14 +246,45 @@ async def register_company(data: CompanyRegister, background_tasks: BackgroundTa
 
 @router.post("/register/admin", response_model=UserResponse, status_code=201)
 async def register_admin(data: AdminRegister, background_tasks: BackgroundTasks, db: DbSession) -> User:
-    allowed_keys = {get_settings().admin_signup_key, "change-admin-signup-key", "replace-with-a-long-admin-bootstrap-key"}
-    if data.signup_key.strip() not in allowed_keys:
+    if data.signup_key.strip() != get_settings().admin_signup_key:
         raise HTTPException(status_code=403, detail="Invalid admin signup key")
     user = await create_user(str(data.email).strip().lower(), data.password, UserRole.ADMIN, db, background_tasks)
     user.is_verified = True  # Admins are automatically verified for immediate access
     await db.commit()
     await db.refresh(user)
     return user
+
+
+@router.post("/mfa/setup-totp", response_model=MFATotpSetupResponse)
+async def setup_totp(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict[str, str]:
+    secret = pyotp.random_base32()
+    user.mfa_type = "TOTP"
+    user.mfa_secret = secret
+    user.mfa_enabled = False
+    user.mfa_otp = None
+    user.mfa_otp_expires_at = None
+    await db.commit()
+
+    otpauth_url = f"otpauth://totp/InternSphere:{quote_plus(user.email)}?secret={secret}&issuer=InternSphere"
+    return MFATotpSetupResponse(secret=secret, otpauth_url=otpauth_url, message="Authenticator app setup ready")
+
+
+@router.post("/mfa/verify-totp")
+async def verify_totp(data: MFATotpVerifyRequest, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict[str, Any]:
+    if not user.mfa_secret:
+        raise HTTPException(status_code=400, detail="Authenticator setup is not complete. Please enable TOTP first.")
+
+    secret = user.mfa_secret.strip()
+    if not pyotp.TOTP(secret).verify(data.otp.strip(), valid_window=1):
+        raise HTTPException(status_code=400, detail="Invalid authenticator code. Please try again.")
+
+    user.mfa_enabled = True
+    user.mfa_type = "TOTP"
+    user.mfa_otp = None
+    user.mfa_otp_expires_at = None
+    await db.commit()
+
+    return {"mfa_enabled": True, "mfa_type": "TOTP", "message": "Authenticator app enabled successfully."}
 
 
 @router.post("/login", response_model=TokenResponse | MFALoginChallengeResponse)
@@ -280,13 +329,22 @@ async def login(data: LoginRequest, db: DbSession) -> Any:
 
     # Opt-in MFA challenge flow
     if getattr(user, "mfa_enabled", False):
+        user_role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
+        mfa_ticket = create_token(str(user.id), user_role_str, "mfa_challenge", timedelta(minutes=10))
+
+        if getattr(user, "mfa_type", "EMAIL") == "TOTP":
+            return MFALoginChallengeResponse(
+                mfa_required=True,
+                mfa_ticket=mfa_ticket,
+                email=user.email,
+                mfa_type="TOTP",
+                message="Two-factor authentication required via your authenticator app",
+            )
+
         otp = f"{secrets.randbelow(900000) + 100000:06d}"
         user.mfa_otp = otp
         user.mfa_otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
         await db.commit()
-
-        user_role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
-        mfa_ticket = create_token(str(user.id), user_role_str, "mfa_challenge", timedelta(minutes=10))
 
         email_body = (
             f"Hello,\n\n"
@@ -327,6 +385,7 @@ async def login(data: LoginRequest, db: DbSession) -> Any:
             mfa_required=True,
             mfa_ticket=mfa_ticket,
             email=user.email,
+            mfa_type="EMAIL",
             message="Two-factor authentication code sent to your email",
         )
 
@@ -340,7 +399,7 @@ async def verify_mfa_login(data: MFALoginVerifyRequest, db: DbSession) -> TokenR
     """
     try:
         payload = decode_token(data.mfa_ticket)
-    except Exception:
+    except ValueError:
         raise HTTPException(status_code=401, detail="Invalid or expired MFA session. Please sign in again.")
 
     if payload.get("type") != "mfa_challenge":
@@ -359,6 +418,12 @@ async def verify_mfa_login(data: MFALoginVerifyRequest, db: DbSession) -> TokenR
         return await issue_tokens(user, db)
 
     clean_otp = data.otp.strip()
+    if getattr(user, "mfa_type", "EMAIL") == "TOTP":
+        if not user.mfa_secret or not pyotp.TOTP(user.mfa_secret).verify(clean_otp, valid_window=1):
+            raise HTTPException(status_code=400, detail="Invalid authenticator app code. Please try again.")
+        await db.commit()
+        return await issue_tokens(user, db)
+
     if not user.mfa_otp or user.mfa_otp != clean_otp:
         raise HTTPException(status_code=400, detail="Invalid two-factor authentication code. Please try again.")
 
@@ -377,7 +442,7 @@ async def get_mfa_status(user: Annotated[User, Depends(get_current_user)]) -> MF
     """
     Returns current MFA status for the authenticated user.
     """
-    return MFAStatusResponse(mfa_enabled=bool(user.mfa_enabled), email=user.email)
+    return MFAStatusResponse(mfa_enabled=bool(user.mfa_enabled), email=user.email, mfa_type=getattr(user, "mfa_type", "EMAIL") or "EMAIL")
 
 
 @router.post("/mfa/setup-request")
@@ -476,6 +541,8 @@ async def disable_mfa(data: MFADisableRequest, user: Annotated[User, Depends(get
         raise HTTPException(status_code=400, detail="Incorrect password. Password verification is required to disable 2FA.")
 
     user.mfa_enabled = False
+    user.mfa_type = "EMAIL"
+    user.mfa_secret = None
     user.mfa_otp = None
     user.mfa_otp_expires_at = None
     await db.commit()

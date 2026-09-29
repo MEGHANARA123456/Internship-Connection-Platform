@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Resume parsing logic for extracting structured data from uploaded documents.
+# -----------------------------------------------------------------------------
+
 import logging
 import re
 from pathlib import Path

@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Endpoints for AI-assisted features and AI-related backend actions.
+# -----------------------------------------------------------------------------
+
 from pathlib import Path
 from typing import Annotated
 
@@ -5,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.api.v1.dependencies import DbSession, get_current_user, require_roles
+from app.api.v1.dependencies import DbSession, require_roles
 from app.core.config import get_settings
 from app.models import CompanyProfile, Internship, Resume, StudentProfile, User, UserRole
 from app.services.ai import (

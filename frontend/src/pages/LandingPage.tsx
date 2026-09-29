@@ -72,21 +72,34 @@ export function LandingPage() {
           </Button>
         </form>
 
-        {/* Action Buttons if not logged in */}
-        {!session && (
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-xs">
-            <Link to="/register-student">
+        {/* Action Buttons */}
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-xs">
+          <Link to="/opportunities">
+            <Button variant="primary" size="sm" className="shadow-sm">
+              Browse Internships
+            </Button>
+          </Link>
+          {!session ? (
+            <>
+              <Link to="/register-student">
+                <Button variant="outline" size="sm">
+                  Register as Student
+                </Button>
+              </Link>
+              <Link to="/register-company">
+                <Button variant="ghost" size="sm" className="text-slate-600">
+                  Post an Internship &rarr;
+                </Button>
+              </Link>
+            </>
+          ) : (
+            <Link to="/dashboard">
               <Button variant="outline" size="sm">
-                Register as Student
+                Go to Dashboard &rarr;
               </Button>
             </Link>
-            <Link to="/register-company">
-              <Button variant="ghost" size="sm" className="text-slate-600">
-                Post an Internship &rarr;
-              </Button>
-            </Link>
-          </div>
-        )}
+          )}
+        </div>
       </section>
 
       {/* Role Pillars Section */}

@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Logging configuration for backend requests, errors, and operational events.
+# -----------------------------------------------------------------------------
+
 import json
 import logging
 import sys

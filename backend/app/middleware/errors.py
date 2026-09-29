@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Custom error handling middleware for consistent API error responses.
+# -----------------------------------------------------------------------------
+
 import logging
 
 from fastapi import Request

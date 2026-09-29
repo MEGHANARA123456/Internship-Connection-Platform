@@ -1,6 +1,10 @@
+# -----------------------------------------------------------------------------
+# User and authentication model definitions for accounts, roles, and related profile data.
+# -----------------------------------------------------------------------------
+
 from datetime import date, datetime, timezone
 try:
-    from enum import StrEnum
+    from enum import StrEnum # type: ignore
 except ImportError:
     from enum import Enum
     class StrEnum(str, Enum):
@@ -12,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 
-class UserRole(StrEnum):
+class UserRole(StrEnum):# type: ignore
     STUDENT = "STUDENT"
     COMPANY = "COMPANY"
     ADMIN = "ADMIN"
@@ -37,6 +41,7 @@ class User(Base):
     reset_token: Mapped[str | None] = mapped_column(String(255), unique=True)
     reset_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mfa_type: Mapped[str] = mapped_column(String(20), default="EMAIL", nullable=False)
     mfa_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     mfa_otp: Mapped[str | None] = mapped_column(String(64), nullable=True)
     mfa_otp_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -239,4 +244,4 @@ class AuditLog(Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
-
+

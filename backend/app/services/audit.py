@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Audit logging service for important changes and user activity tracking.
+# -----------------------------------------------------------------------------
+
 """Audit log write helper.
 
 Call ``write_audit`` inside any admin mutation *before* the session commit so

@@ -1,8 +1,12 @@
+# -----------------------------------------------------------------------------
+# Admin-only endpoints for managing users, reports, and system-wide operations.
+# -----------------------------------------------------------------------------
+
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 
 from app.api.v1.dependencies import DbSession, require_roles
 from app.models import Application, AuditLog, CompanyProfile, Internship, Report, User, UserRole

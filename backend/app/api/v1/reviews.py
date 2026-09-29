@@ -1,12 +1,16 @@
-from datetime import datetime, timezone
+# -----------------------------------------------------------------------------
+# Review and rating endpoints for internships and companies.
+# -----------------------------------------------------------------------------
+
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.api.v1.dependencies import DbSession, get_current_user_optional, require_roles
-from app.models import Application, CompanyProfile, CompanyReview, Internship, StudentProfile, User, UserRole
+from app.models import Application, CompanyReview, Internship, StudentProfile, User, UserRole
 
 router = APIRouter(prefix="/companies", tags=["reviews"])
 student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]

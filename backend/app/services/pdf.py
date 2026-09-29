@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# PDF generation and processing helpers for documents and reports.
+# -----------------------------------------------------------------------------
+
 import logging
 from pathlib import Path
 

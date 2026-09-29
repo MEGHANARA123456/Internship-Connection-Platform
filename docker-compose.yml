@@ -1,4 +1,7 @@
+# Docker Compose file for the whole application stack.
+# This starts the database, backend API, Mailpit email testing tool, and frontend together.
 services:
+  # PostgreSQL database for the internship platform.
   db:
     image: postgres:16-alpine
     environment:
@@ -12,6 +15,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # FastAPI backend service.
+  # The backend Dockerfile runs Alembic migrations before the app starts.
   backend:
     build: ./backend
     environment:
@@ -35,11 +41,15 @@ services:
     volumes:
       - ./backend:/app
       - resume_storage:/var/lib/internship-platform/resumes
+
+  # Mailpit is used to inspect outbound emails during development.
   mailpit:
     image: axllent/mailpit:latest
     ports:
       - "8025:8025"
       - "1025:1025"
+
+  # React frontend application.
   frontend:
     image: node:22-alpine
     working_dir: /app
@@ -53,6 +63,8 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+# Named volumes used to persist data across container restarts.
 volumes:
   postgres_data:
   frontend_node_modules:

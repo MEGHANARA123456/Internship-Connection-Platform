@@ -138,30 +138,30 @@ export function AdminDashboardPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-8">
+    <div className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 py-4 sm:py-8 w-full space-y-5 sm:space-y-8">
       <WelcomeGreeting
         role="ADMIN"
         customSubtitle="Platform operations dashboard. Oversee company verification, listing moderation, and ecosystem security."
       />
 
       {/* Header & Status */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
         <div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Platform Admin Console</h1>
-            <Badge status="ADMIN" className="text-[11px] font-semibold">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Platform Admin Console</h1>
+            <Badge status="ADMIN" className="text-[10px] sm:text-[11px] font-semibold py-0.5 px-2">
               Super Admin
             </Badge>
           </div>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-2 sm:line-clamp-none">
             Real-time ecosystem oversight, compliance enforcement, moderation, and user management.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100 border border-slate-200 text-xs">
+        <div className="flex items-center justify-between sm:justify-end gap-2.5 flex-wrap">
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] sm:text-xs">
             <span
-              className={`w-2.5 h-2.5 rounded-full ${
+              className={`w-2 h-2 rounded-full ${
                 apiOnline === true
                   ? 'bg-emerald-500 animate-pulse'
                   : apiOnline === false
@@ -169,8 +169,8 @@ export function AdminDashboardPage() {
                   : 'bg-amber-400'
               }`}
             />
-            <span className="font-medium text-slate-700">
-              API Backend: {apiOnline === true ? 'Online (Port 8010)' : apiOnline === false ? 'Offline' : 'Connecting...'}
+            <span className="font-medium text-slate-700 dark:text-slate-300">
+              API: {apiOnline === true ? 'Online (8010)' : apiOnline === false ? 'Offline' : 'Connecting...'}
             </span>
           </div>
           <Button
@@ -179,6 +179,7 @@ export function AdminDashboardPage() {
             onClick={handleRefresh}
             isLoading={refreshing}
             leftIcon={<RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />}
+            className="text-xs py-1 px-2.5 h-auto"
           >
             Refresh
           </Button>
@@ -186,70 +187,75 @@ export function AdminDashboardPage() {
       </div>
 
       {/* KPI Metrics Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <Link to="/admin/users">
-          <Card className="p-5 bg-white hover:border-purple-300 transition-all group">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Total Users
-              </span>
-              <Users className="w-4 h-4 text-purple-600 group-hover:scale-110 transition-transform" />
+          <Card className="p-3.5 sm:p-5 bg-white dark:bg-slate-900 hover:border-purple-300 dark:hover:border-purple-600 transition-all group h-full flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">
+                  Total Users
+                </span>
+                <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-purple-600 group-hover:scale-110 transition-transform shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 sm:mt-2">
+                {loading ? '...' : stats.usersCount}
+              </p>
             </div>
-            <p className="text-2xl font-black text-slate-900 mt-2">
-              {loading ? '...' : stats.usersCount}
-            </p>
-            <div className="flex items-center gap-2 mt-2 text-[11px] text-slate-500 font-medium">
-              <span className="text-emerald-700">{stats.studentsCount} Students</span>
+            <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 mt-2 text-[10px] sm:text-[11px] text-slate-500 font-medium">
+              <span className="text-emerald-700 dark:text-emerald-400">{stats.studentsCount} Students</span>
               <span>•</span>
-              <span className="text-indigo-700">{stats.companiesCount} Companies</span>
-              <span>•</span>
-              <span className="text-purple-700">{stats.adminsCount} Admins</span>
+              <span className="text-indigo-700 dark:text-indigo-400">{stats.companiesCount} Comp</span>
             </div>
           </Card>
         </Link>
 
         <Link to="/admin/verifications">
-          <Card className="p-5 bg-white hover:border-amber-300 transition-all group">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Company Verifications
-              </span>
-              <ShieldCheck className="w-4 h-4 text-amber-600 group-hover:scale-110 transition-transform" />
+          <Card className="p-3.5 sm:p-5 bg-white dark:bg-slate-900 hover:border-amber-300 dark:hover:border-amber-600 transition-all group h-full flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">
+                  Verifications
+                </span>
+                <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-600 group-hover:scale-110 transition-transform shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 sm:mt-2">
+                {loading ? '...' : stats.unverifiedCompanies}
+              </p>
             </div>
-            <p className="text-2xl font-black text-slate-900 mt-2">
-              {loading ? '...' : stats.unverifiedCompanies}
-            </p>
-            <p className="text-[11px] text-slate-400 mt-1">Pending vetting review</p>
+            <p className="text-[10px] sm:text-[11px] text-slate-400 mt-2 truncate">Pending review</p>
           </Card>
         </Link>
 
         <Link to="/admin/moderation">
-          <Card className="p-5 bg-white hover:border-indigo-300 transition-all group">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Job Moderation Queue
-              </span>
-              <Briefcase className="w-4 h-4 text-indigo-600 group-hover:scale-110 transition-transform" />
+          <Card className="p-3.5 sm:p-5 bg-white dark:bg-slate-900 hover:border-indigo-300 dark:hover:border-indigo-600 transition-all group h-full flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">
+                  Job Queue
+                </span>
+                <Briefcase className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-600 group-hover:scale-110 transition-transform shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 sm:mt-2">
+                {loading ? '...' : stats.pendingJobs}
+              </p>
             </div>
-            <p className="text-2xl font-black text-slate-900 mt-2">
-              {loading ? '...' : stats.pendingJobs}
-            </p>
-            <p className="text-[11px] text-slate-400 mt-1">Pending approval before publishing</p>
+            <p className="text-[10px] sm:text-[11px] text-slate-400 mt-2 truncate">Pending approval</p>
           </Card>
         </Link>
 
         <Link to="/admin/reports">
-          <Card className="p-5 bg-white hover:border-rose-300 transition-all group">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Open Disputes & Reports
-              </span>
-              <AlertTriangle className="w-4 h-4 text-rose-600 group-hover:scale-110 transition-transform" />
+          <Card className="p-3.5 sm:p-5 bg-white dark:bg-slate-900 hover:border-rose-300 dark:hover:border-rose-600 transition-all group h-full flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">
+                  Disputes
+                </span>
+                <AlertTriangle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-600 group-hover:scale-110 transition-transform shrink-0" />
+              </div>
+              <p className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 sm:mt-2">
+                {loading ? '...' : stats.openReports}
+              </p>
             </div>
-            <p className="text-2xl font-black text-slate-900 mt-2">
-              {loading ? '...' : stats.openReports}
-            </p>
-            <p className="text-[11px] text-slate-400 mt-1">Student & recruiter reports</p>
           </Card>
         </Link>
       </div>

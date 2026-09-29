@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Endpoints for institution and college-related data and operations.
+# -----------------------------------------------------------------------------
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends

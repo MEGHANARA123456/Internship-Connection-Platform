@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Pydantic models for communication-related data validation.
+# -----------------------------------------------------------------------------
+
 from datetime import datetime
 from typing import Literal
 

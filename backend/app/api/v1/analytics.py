@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Analytics endpoints for dashboards, summaries, and reporting metrics.
+# -----------------------------------------------------------------------------
+
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query

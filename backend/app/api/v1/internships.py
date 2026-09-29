@@ -1,10 +1,14 @@
+# -----------------------------------------------------------------------------
+# Internship listing, filtering, and management endpoints.
+# -----------------------------------------------------------------------------
+
 from datetime import date, datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select
 
-from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
+from app.api.v1.dependencies import DbSession, get_current_user_optional, require_roles
 from app.models import CompanyProfile, Internship, SavedInternship, StudentProfile, User, UserRole
 from app.schemas.internship import InternshipInput, InternshipPage, InternshipResponse
 from app.services.ai import compute_match_score_fast

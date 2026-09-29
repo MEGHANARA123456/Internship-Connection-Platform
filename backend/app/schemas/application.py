@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Pydantic models for application request and response structures.
+# -----------------------------------------------------------------------------
+
 from datetime import datetime
 from typing import Literal
 

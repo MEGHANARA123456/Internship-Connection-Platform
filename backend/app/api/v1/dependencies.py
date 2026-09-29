@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Shared FastAPI dependencies for authentication and data access.
+# -----------------------------------------------------------------------------
+
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -23,7 +27,7 @@ async def get_current_user_optional(token: Annotated[str | None, Depends(oauth2_
             return None
         user = await db.scalar(select(User).where(User.id == int(payload["sub"])))
         return user if user and user.is_active else None
-    except Exception:
+    except (KeyError, TypeError, ValueError):
         return None
 
 

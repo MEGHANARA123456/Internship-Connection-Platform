@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Service for validating email format and address quality.
+# -----------------------------------------------------------------------------
+
 from dataclasses import dataclass
 import re
 
@@ -71,10 +75,6 @@ def is_institution_email(email: str) -> bool:
     return domain.endswith(_INSTITUTION_SUFFIXES) or any(
         marker in domain for marker in ("college", "university", "campus", "institute")
     )
-
-
-def is_organization_email(email: str) -> bool:
-    return not is_personal_email(email) and not is_disposable_email(email)
 
 
 def classify_email(email: str) -> EmailValidationResult:

@@ -305,10 +305,30 @@ export function InterviewsPage() {
                       <Badge status={item.status}>{item.status}</Badge>
                     </div>
 
-                    {item.candidate_name && (
+                    {item.company_name && !isCompany && (
+                      <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
+                        <Users className="w-3.5 h-3.5 text-indigo-500" />
+                        Company: {item.company_name}
+                      </p>
+                    )}
+
+                    {item.candidate_name && isCompany && (
                       <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
                         <Users className="w-3.5 h-3.5 text-indigo-500" />
                         Candidate: {item.candidate_name}
+                      </p>
+                    )}
+
+                    {item.interview_type && (
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+                        <Badge variant="slate" className="!px-2 !py-0.5">{item.interview_type}</Badge>
+                      </p>
+                    )}
+
+                    {item.meeting_link && (
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+                        <ExternalLink className="w-3.5 h-3.5 text-indigo-500" />
+                        Meeting link: <a href={item.meeting_link} target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-indigo-400 underline">Open link</a>
                       </p>
                     )}
 

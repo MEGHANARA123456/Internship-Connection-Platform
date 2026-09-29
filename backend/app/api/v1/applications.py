@@ -1,6 +1,11 @@
-from typing import Annotated
+# -----------------------------------------------------------------------------
+# Endpoints for internship application submission, review, and tracking.
+# -----------------------------------------------------------------------------
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from typing import Annotated
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
@@ -16,8 +21,42 @@ from app.schemas.application import (
 )
 
 router = APIRouter(prefix="/applications", tags=["applications"])
+logger = logging.getLogger(__name__)
 student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]
 company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]
+
+
+def _status_notification_text(status: str, company_name: str, internship_title: str) -> tuple[str, str, str]:
+    status_text = status.replace("_", " ").title()
+    if status == "SHORTLISTED":
+        title = "Application shortlisted"
+        body = f"You have been shortlisted for {internship_title} at {company_name}. The team wants to move forward with your application."
+    elif status == "INTERVIEW_SCHEDULED":
+        title = "Interview scheduled"
+        body = f"Your interview for {internship_title} at {company_name} has been scheduled. Check the Interviews page for the details and meeting link."
+    elif status == "SELECTED":
+        title = "Offer update"
+        body = f"Congratulations! {company_name} has selected you for {internship_title}. The next steps will be shared with you soon."
+    elif status == "REJECTED":
+        title = "Application update"
+        body = f"After a careful review, {company_name} has decided to move forward with other candidates for {internship_title}."
+    elif status == "UNDER_REVIEW":
+        title = "Application under review"
+        body = f"Your application for {internship_title} at {company_name} is still under review. We will update you once a decision is made."
+    else:
+        title = f"Application status: {status_text}"
+        body = f"Your application for {internship_title} at {company_name} is now marked as {status_text}."
+
+    html = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 540px; margin: 0 auto; padding: 24px; background: #f8fafc; color: #0f172a;">
+      <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
+        <div style="font-size: 12px; letter-spacing: 1.4px; color: #4338ca; font-weight: 700; text-transform: uppercase; margin-bottom: 16px;">InternSphere</div>
+        <h2 style="margin: 0 0 12px; font-size: 22px;">{title}</h2>
+        <p style="margin: 0; color: #475569; line-height: 1.6;">{body}</p>
+      </div>
+    </div>
+    """
+    return title, body, html
 
 TRANSITIONS = {
     "APPLIED": {"UNDER_REVIEW", "WITHDRAWN"},
@@ -128,12 +167,12 @@ async def bulk_update_status(
         app.status = target_status
         success_ids.append(app_id)
 
-        title = f"Application status: {target_status.replace('_', ' ').title()}"
-        body = f"Your application has moved to {target_status.replace('_', ' ').title()}"
+        company_name = internship.company_name if hasattr(internship, "company_name") else "the company"
+        title, body, html = _status_notification_text(target_status, company_name or "the company", internship.title or "the internship")
         db.add(Notification(user_id=app.student_id, notification_type="APPLICATION_STATUS", title=title, body=body))
         student_user = await db.scalar(select(User).where(User.id == app.student_id))
         if student_user:
-            background_tasks.add_task(send_dev_email, student_user.email, title, body, db=db)
+            await send_dev_email(student_user.email, title, body, html=html, message_type="APPLICATION_STATUS", db=db)
         try:
             from app.api.v1.ws import manager
             await manager.send_personal_message(
@@ -147,7 +186,8 @@ async def bulk_update_status(
                     "body": body,
                 },
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("Could not send application status notification for application %s: %s", app.id, exc)
             pass
 
     await db.commit()
@@ -174,10 +214,10 @@ async def update_status(application_id: int, data: ApplicationStatusUpdate, back
     recipient_id = application.student_id if user.role == UserRole.COMPANY else internship.company_id
     recipient = await db.scalar(select(User).where(User.id == recipient_id))
     if recipient:
-        title = f"Application status: {data.status.replace('_', ' ').title()}"
-        body = f"Your application has moved to {data.status.replace('_', ' ').title()}"
+        company_name = internship.company_name if hasattr(internship, "company_name") else "the company"
+        title, body, html = _status_notification_text(data.status, company_name or "the company", internship.title or "the internship")
         db.add(Notification(user_id=recipient.id, notification_type="APPLICATION_STATUS", title=title, body=body))
-        background_tasks.add_task(send_dev_email, recipient.email, title, body, db=db)
+        await send_dev_email(recipient.email, title, body, html=html, message_type="APPLICATION_STATUS", db=db)
         try:
             from app.api.v1.ws import manager
             await manager.send_personal_message(
@@ -191,7 +231,8 @@ async def update_status(application_id: int, data: ApplicationStatusUpdate, back
                     "body": body,
                 },
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("Could not send application status notification for application %s: %s", application.id, exc)
             pass
     await db.commit(); await db.refresh(application)
     return await serialize(application, db)
