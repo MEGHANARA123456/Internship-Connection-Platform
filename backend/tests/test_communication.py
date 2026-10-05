@@ -35,6 +35,33 @@ def test_interview_response_has_enrichment_fields() -> None:
     assert res.company_name == "Acme Corp"
 
 
+@pytest.mark.parametrize("meeting_link", [None, "", "   ", "https://meet.google.com/xyz", "http://example.com/meeting", "HTTPS://EXAMPLE.COM/MEETING"])
+def test_interview_meeting_link_accepts_http_urls(meeting_link: str | None) -> None:
+    from datetime import datetime, timezone
+    from app.schemas.communication import InterviewCreate
+
+    interview = InterviewCreate(
+        scheduled_at=datetime.now(timezone.utc),
+        interview_type="VIDEO",
+        meeting_link=meeting_link,
+    )
+    assert interview.meeting_link == (meeting_link.strip() or None if meeting_link is not None else None)
+
+
+@pytest.mark.parametrize("meeting_link", ["javascript:alert(1)", "data:text/html,abc", "In-App Encrypted Video Room #26", "not a url"])
+def test_interview_meeting_link_rejects_non_http_urls(meeting_link: str) -> None:
+    from datetime import datetime, timezone
+    from pydantic import ValidationError
+    from app.schemas.communication import InterviewCreate
+
+    with pytest.raises(ValidationError):
+        InterviewCreate(
+            scheduled_at=datetime.now(timezone.utc),
+            interview_type="VIDEO",
+            meeting_link=meeting_link,
+        )
+
+
 def test_application_response_has_internship_title() -> None:
     from app.schemas.application import ApplicationResponse
     from datetime import datetime, timezone

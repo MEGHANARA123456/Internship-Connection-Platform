@@ -1,10 +1,13 @@
 import io
+from datetime import timedelta
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.v1.dependencies import get_db
+from app.core.security import create_token
 from app.main import app
 from app.models import User, UserRole, StudentProfile, CompanyProfile, Internship
 from app.models.base import Base
@@ -92,3 +95,45 @@ async def test_analytics_and_avatars(monkeypatch: pytest.MonkeyPatch):
         del_res = await client.delete("/api/v1/profiles/avatar", headers=headers)
         assert del_res.status_code == 200
         assert del_res.json()["avatar_url"] is None
+
+
+@pytest.mark.anyio
+async def test_admin_user_growth_counts_users_without_email_verification(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async def override_db():
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_db
+
+    async with sessions() as session:
+        users = [
+            User(email="growth-student-1@example.com", password_hash="unused", role=UserRole.STUDENT),
+            User(email="growth-student-2@example.com", password_hash="unused", role=UserRole.STUDENT),
+            User(email="growth-company@example.com", password_hash="unused", role=UserRole.COMPANY),
+            User(email="growth-admin@example.com", password_hash="unused", role=UserRole.ADMIN),
+        ]
+        session.add_all(users)
+        await session.commit()
+        admin = users[-1]
+        token = create_token(str(admin.id), UserRole.ADMIN.value, "access", timedelta(minutes=30))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/analytics/admin/user-growth?granularity=month&periods=1",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    current_period = response.json()[0]
+    assert current_period["students"] == 2
+    assert current_period["companies"] == 1
+    assert current_period["admins"] == 1
+
+    app.dependency_overrides.clear()
+    await engine.dispose()

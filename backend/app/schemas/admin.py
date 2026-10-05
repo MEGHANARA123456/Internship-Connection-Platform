@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Pydantic models for admin data validation and API payloads.
+# -----------------------------------------------------------------------------
+
 from datetime import datetime
 from typing import Any, Literal
 
@@ -124,16 +128,6 @@ class CompanyPostingItem(BaseModel):
     status: str
     applicant_count: int
     created_at: datetime
-
-
-class CompanyPostingsResponse(BaseModel):
-    company_id: int
-    items: list[CompanyPostingItem]
-
-
-class ModerationAction(BaseModel):
-    status: Literal["PUBLISHED", "REJECTED", "CLOSED"]
-    reason: str | None = None
 
 
 # ── Admin Analytics ───────────────────────────────────────────────────────────

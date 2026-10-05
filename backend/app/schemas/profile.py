@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Pydantic models for profile-related data validation.
+# -----------------------------------------------------------------------------
+
 from pydantic import BaseModel, Field
 
 

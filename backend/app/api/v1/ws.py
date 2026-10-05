@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# WebSocket routes for real-time communication, notifications, and live updates.
+# -----------------------------------------------------------------------------
+
 import json
 import logging
 from collections import defaultdict
@@ -147,12 +151,14 @@ async def websocket_video_signal_endpoint(websocket: WebSocket, interview_id: in
                 if peer != websocket:
                     try:
                         await peer.send_json(data)
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning("Could not relay video signaling message for interview %s: %s", interview_id, exc)
                         pass
     except WebSocketDisconnect:
         manager.disconnect_video(interview_id, websocket)
         for peer in manager.video_rooms.get(interview_id, set()).copy():
             try:
                 await peer.send_json({"type": "peer_left"})
-            except Exception:
+            except Exception as exc:
+                logger.warning("Could not notify video peers that interview %s ended: %s", interview_id, exc)
                 pass

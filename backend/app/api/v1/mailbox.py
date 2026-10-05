@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Mailbox-related APIs for reading and processing user messages.
+# -----------------------------------------------------------------------------
+
 from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy import select

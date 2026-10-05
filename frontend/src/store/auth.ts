@@ -10,6 +10,10 @@ export type Session = {
   email?: string
   name?: string
   avatar_url?: string | null
+  accessTokenExpiresAt?: string | null
+  refreshTokenExpiresAt?: string | null
+  accessTokenExpiresIn?: number | null
+  refreshTokenExpiresIn?: number | null
 } | null
 
 type AuthState = {

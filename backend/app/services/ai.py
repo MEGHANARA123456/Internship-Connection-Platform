@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# AI service layer for embeddings, generation, and intelligence-backed features.
+# -----------------------------------------------------------------------------
+
 import re
 from typing import Any
 

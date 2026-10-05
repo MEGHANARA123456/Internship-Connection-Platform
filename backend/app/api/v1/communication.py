@@ -1,18 +1,31 @@
+# -----------------------------------------------------------------------------
+# Communication features such as messaging, email flow, and contact actions.
+# -----------------------------------------------------------------------------
+
 from datetime import datetime, timezone
+import logging
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, select, update
 
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
-from app.core.config import get_settings
 from app.models import Application, CompanyProfile, Conversation, Interview, Internship, Message, Notification, StudentProfile, User, UserRole
 from app.api.v1.applications import application_transition_allowed
 from app.schemas.communication import ConversationCreate, InterviewCreate, InterviewResponse, InterviewUpdate, MessageCreate, MessageResponse, NotificationResponse
 from app.services.mail import send_dev_email
 
 router = APIRouter(tags=["communication"])
+logger = logging.getLogger(__name__)
 participant = Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))]
+
+
+def _is_external_url(value: str | None) -> bool:
+    if not value:
+        return False
+    parsed = urlsplit(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 async def get_conversation(conversation_id: int, user: User, db: DbSession) -> Conversation:
@@ -242,7 +255,8 @@ async def send_message(conversation_id: int, data: MessageCreate, user: particip
                 },
             },
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("Could not send conversation notification for message %s: %s", message.id, exc)
         pass
 
     return message
@@ -272,9 +286,43 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
     company_profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
 
     if student:
-        db.add(Notification(user_id=student.id, notification_type="INTERVIEW_INVITE", title="Interview invitation", body=f"Interview scheduled for {data.scheduled_at.isoformat()}"))
+        scheduled_at = data.scheduled_at
+        formatted_time = scheduled_at.strftime("%A, %B %d, %Y at %I:%M %p") if scheduled_at else "your selected time"
+        has_external_link = _is_external_url(data.meeting_link)
+        meeting_details = f"Meeting link: {data.meeting_link}" if has_external_link else "Join via the InternSphere video room"
+        meeting_link_html = (
+            f'<p style="margin: 4px 0; color: #1e293b;"><strong>Meeting link:</strong> <a href="{data.meeting_link}" style="color: #4338ca;">{data.meeting_link}</a></p>'
+            if has_external_link
+            else '<p style="margin: 4px 0; color: #1e293b;">Join via the InternSphere video room.</p>'
+        )
+        notification_title = "Interview invitation"
+        notification_body = (
+            f"You have been invited to a {data.interview_type or 'Interview'} for {internship.title if internship else 'the role'} with "
+            f"{company_profile.company_name if company_profile else 'the hiring team'} on {formatted_time}. "
+            f"{meeting_details}."
+        )
+        html_body = f"""
+                <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; background: #f8fafc; padding: 24px; color: #0f172a;">
+                    <div style="background: #ffffff; border-radius: 14px; padding: 24px; border: 1px solid #e2e8f0;">
+                        <div style="font-size: 12px; letter-spacing: 1.5px; color: #4338ca; font-weight: 700; text-transform: uppercase; margin-bottom: 16px;">InternSphere</div>
+                        <h2 style="margin: 0 0 12px; font-size: 24px; color: #0f172a;">Interview Invitation</h2>
+                        <p style="margin: 0 0 12px; color: #475569; line-height: 1.6;">
+                            You have been shortlisted for <strong>{internship.title if internship else 'the internship'}</strong> with <strong>{company_profile.company_name if company_profile else 'the hiring team'}</strong>.
+                        </p>
+                        <div style="background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 10px; padding: 16px; margin: 18px 0;">
+                            <p style="margin: 0 0 8px; font-size: 13px; color: #4338ca; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Details</p>
+                            <p style="margin: 4px 0; color: #1e293b;"><strong>Interview type:</strong> {data.interview_type or 'Interview'}</p>
+                            <p style="margin: 4px 0; color: #1e293b;"><strong>Scheduled:</strong> {formatted_time}</p>
+                            {meeting_link_html}
+                            {data.notes and f"<p style='margin: 4px 0; color: #1e293b;'><strong>Notes:</strong> {data.notes}</p>"}
+                        </div>
+                        <p style="margin: 0; color: #475569; line-height: 1.6;">Please join a few minutes early and have your resume and project notes ready for discussion.</p>
+                    </div>
+                </div>
+                """
+        db.add(Notification(user_id=student.id, notification_type="INTERVIEW_INVITE", title=notification_title, body=notification_body))
         await db.commit()
-        await send_dev_email(student.email, "Interview invitation", f"Interview scheduled for {data.scheduled_at.isoformat()}", db=db)
+        await send_dev_email(student.email, notification_title, notification_body, html=html_body, message_type="INTERVIEW_INVITE", db=db)
         try:
             from app.api.v1.ws import manager
             await manager.send_personal_message(
@@ -282,12 +330,16 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
                 {
                     "type": "interview_scheduled",
                     "application_id": application_id,
-                    "scheduled_at": data.scheduled_at.isoformat(),
+                    "scheduled_at": scheduled_at.isoformat() if scheduled_at else None,
                     "interview_type": data.interview_type,
                     "meeting_link": data.meeting_link,
+                    "internship_title": internship.title if internship else None,
+                    "company_name": company_profile.company_name if company_profile else None,
+                    "notes": data.notes,
                 },
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("Could not send interview notification for application %s: %s", application_id, exc)
             pass
 
     return {

@@ -98,7 +98,7 @@ export function WelcomeGreeting({
   const defaultSubtitle = {
     STUDENT: 'Ready to advance your career? Browse verified internships and track your applications.',
     COMPANY: 'Welcome to your hiring command center. Review candidates, schedule interviews, and publish open roles.',
-    ADMIN: 'Platform operations dashboard. Monitor ecosystem health, verify companies, and manage listings.',
+    ADMIN: 'Platform operations dashboard. Oversee company verification, listing moderation, and ecosystem security.',
     COLLEGE: 'Institutional placement portal. Track student career progress and corporate recruiter connections.',
   }[currentRole] || 'Welcome back to your dashboard.'
 
@@ -106,11 +106,20 @@ export function WelcomeGreeting({
   const initials = getInitials(displayName)
   const avatarFullUrl = getFullMediaUrl(session?.avatar_url)
 
+  const roleLabel =
+    currentRole === 'STUDENT'
+      ? 'Verified Student'
+      : currentRole === 'COMPANY'
+      ? 'Registered Employer'
+      : currentRole === 'ADMIN'
+      ? 'System Admin'
+      : 'Campus Partner'
+
   if (compact) {
     return (
-      <div className={`flex items-center justify-between gap-3 p-3.5 rounded-xl bg-gradient-to-r from-indigo-50/70 via-white to-purple-50/50 dark:from-slate-800/80 dark:via-slate-900 dark:to-indigo-950/40 border border-slate-200/80 dark:border-slate-800 shadow-2xs ${className}`}>
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl overflow-hidden bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
+      <div className={`flex items-center justify-between gap-3 p-3 rounded-xl bg-gradient-to-r from-indigo-50/70 via-white to-purple-50/50 dark:from-slate-800/80 dark:via-slate-900 dark:to-indigo-950/40 border border-slate-200/80 dark:border-slate-800 shadow-2xs ${className}`}>
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 rounded-xl overflow-hidden bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center font-bold text-xs shadow-xs shrink-0">
             {avatarFullUrl ? (
               <img
                 src={avatarFullUrl}
@@ -124,13 +133,13 @@ export function WelcomeGreeting({
               <span>{initials}</span>
             )}
           </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <GreetingIcon className={`w-3.5 h-3.5 ${iconColor}`} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 truncate">
+              <GreetingIcon className={`w-3.5 h-3.5 shrink-0 ${iconColor}`} />
               <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">{greeting},</span>
-              <span className="text-sm font-bold text-slate-900 dark:text-white">{displayName}!</span>
+              <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">{displayName}!</span>
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-1">{customSubtitle || defaultSubtitle}</p>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">{customSubtitle || defaultSubtitle}</p>
           </div>
         </div>
         {actionNode && <div className="shrink-0">{actionNode}</div>}
@@ -139,14 +148,15 @@ export function WelcomeGreeting({
   }
 
   return (
-    <div className={`relative overflow-hidden p-5 sm:p-6 rounded-2xl bg-gradient-to-r from-indigo-50/90 via-white to-purple-50/70 dark:from-slate-900 dark:via-slate-900/90 dark:to-indigo-950/50 border border-indigo-100/90 dark:border-slate-800 shadow-2xs transition-all ${className}`}>
+    <div className={`relative overflow-hidden p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-50/70 via-white to-purple-50/40 dark:from-slate-900 dark:via-slate-900/90 dark:to-indigo-950/40 border border-indigo-100/80 dark:border-slate-800 shadow-xs transition-all ${className}`}>
       {/* Subtle decorative background glow */}
-      <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-indigo-400/10 dark:bg-indigo-500/10 blur-2xl pointer-events-none" />
+      <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-indigo-400/10 dark:bg-indigo-500/10 blur-2xl pointer-events-none" />
 
-      <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4">
-        {/* Left Side: Avatar + Greetings */}
-        <div className="flex items-start sm:items-center gap-3.5">
-          <div className="w-12 h-12 rounded-2xl overflow-hidden bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-600 text-white flex items-center justify-center font-black text-base shadow-sm shadow-indigo-500/30 ring-2 ring-white/80 dark:ring-slate-800 shrink-0">
+      <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-3.5">
+        {/* Main Content Area */}
+        <div className="flex items-start gap-3 min-w-0">
+          {/* Avatar */}
+          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl overflow-hidden bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-600 text-white flex items-center justify-center font-bold text-sm shadow-sm shadow-indigo-500/25 ring-2 ring-white dark:ring-slate-800 shrink-0 mt-0.5">
             {avatarFullUrl ? (
               <img
                 src={avatarFullUrl}
@@ -161,52 +171,51 @@ export function WelcomeGreeting({
             )}
           </div>
 
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-white/80 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 shadow-2xs">
+          {/* Text block */}
+          <div className="space-y-1 min-w-0 flex-1">
+            {/* Meta Tags Row */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] sm:text-[11px] font-semibold bg-white/90 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 text-slate-700 dark:text-slate-300 shadow-2xs">
                 <GreetingIcon className={`w-3 h-3 ${iconColor}`} />
                 <span>{greeting}</span>
               </span>
 
               {showDate && (
-                <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 dark:text-slate-500 font-medium">
-                  <Calendar className="w-3 h-3" />
+                <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+                  <Calendar className="w-2.5 h-2.5" />
                   <span>{todayFormatted}</span>
                 </span>
               )}
+
+              {/* Role Chip integrated directly for mobile flow */}
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] sm:text-[11px] font-semibold bg-indigo-100/70 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/60 ml-auto sm:ml-0">
+                <ShieldCheck className="w-3 h-3" />
+                <span>{roleLabel}</span>
+              </span>
             </div>
 
-            <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-1.5">
+            {/* Title / Name */}
+            <h2 className="text-base sm:text-xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
               <span>{greeting},</span>
-              <span className="bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 dark:from-indigo-400 dark:to-violet-400 bg-clip-text text-transparent">
+              <span className="bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 dark:from-indigo-400 dark:to-violet-400 bg-clip-text text-transparent truncate max-w-[220px] sm:max-w-md">
                 {displayName}
               </span>
-              <span className="animate-pulse inline-block">👋</span>
+              <span className="inline-block text-sm sm:text-base">👋</span>
             </h2>
 
-            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 max-w-2xl leading-relaxed">
+            {/* Subtitle */}
+            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-2xl leading-relaxed line-clamp-2 sm:line-clamp-none">
               {customSubtitle || defaultSubtitle}
             </p>
           </div>
         </div>
 
-        {/* Right Side: Role badge & Optional Actions */}
-        <div className="flex items-center gap-2.5 self-start md:self-center shrink-0">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-100/70 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/80">
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>
-              {currentRole === 'STUDENT'
-                ? 'Verified Student'
-                : currentRole === 'COMPANY'
-                ? 'Registered Employer'
-                : currentRole === 'ADMIN'
-                ? 'System Admin'
-                : 'Campus Partner'}
-            </span>
-          </span>
-
-          {actionNode}
-        </div>
+        {/* Action Button if provided */}
+        {actionNode && (
+          <div className="flex items-center gap-2 self-start md:self-center shrink-0 pt-1 md:pt-0">
+            {actionNode}
+          </div>
+        )}
       </div>
     </div>
   )

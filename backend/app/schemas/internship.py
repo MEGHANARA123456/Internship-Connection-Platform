@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Pydantic models for internship payloads and filters.
+# -----------------------------------------------------------------------------
+
 from datetime import date, datetime
 from typing import Literal
 

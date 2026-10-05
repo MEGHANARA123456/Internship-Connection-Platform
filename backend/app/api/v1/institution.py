@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Endpoints for institution and college-related data and operations.
+# -----------------------------------------------------------------------------
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -26,7 +30,7 @@ async def get_placement_stats(
         await db.scalar(
             select(func.count())
             .select_from(Application)
-            .where(Application.status == "SELECTED")
+            .where(Application.status.in_(["SELECTED", "ACCEPTED"]))
         )
         or 0
     )
@@ -63,7 +67,7 @@ async def get_placement_stats(
             await db.scalar(
                 select(func.count(Application.id))
                 .join(StudentProfile, Application.student_id == StudentProfile.user_id)
-                .where(StudentProfile.major == major_name, Application.status == "SELECTED")
+                .where(StudentProfile.major == major_name, Application.status.in_(["SELECTED", "ACCEPTED"]))
             )
             or 0
         )
@@ -77,7 +81,7 @@ async def get_placement_stats(
     placed_apps = list(
         await db.scalars(
             select(Application)
-            .where(Application.status == "SELECTED")
+            .where(Application.status.in_(["SELECTED", "ACCEPTED"]))
             .order_by(Application.updated_at.desc())
             .limit(10)
         )

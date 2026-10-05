@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Alembic migration: adds the audit log table for tracking application changes.
+# -----------------------------------------------------------------------------
+
 """add audit_logs table
 
 Revision ID: 0006_add_audit_log

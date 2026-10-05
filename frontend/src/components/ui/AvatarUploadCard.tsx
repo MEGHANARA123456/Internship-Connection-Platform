@@ -1,8 +1,10 @@
 import { useState, useRef } from 'react'
+import { isAxiosError } from 'axios'
 import { Camera, Trash2, Loader2 } from 'lucide-react'
 import { api, getFullMediaUrl } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
 import { Button } from './Button'
+import { Modal } from './Modal'
 
 interface AvatarUploadCardProps {
   currentAvatarUrl?: string | null
@@ -20,6 +22,9 @@ export function AvatarUploadCard({
   const [uploading, setUploading] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
+  const [successMsg, setSuccessMsg] = useState('')
+  const [removeModalOpen, setRemoveModalOpen] = useState(false)
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const updateAvatarInStore = useAuthStore((state) => state.updateAvatar)
 
@@ -39,6 +44,7 @@ export function AvatarUploadCard({
     }
 
     setErrorMsg('')
+    setSuccessMsg('')
     setUploading(true)
 
     try {
@@ -50,6 +56,7 @@ export function AvatarUploadCard({
       })
 
       const newAvatarUrl = res.data.avatar_url
+      setFailedAvatarUrl(null)
       updateAvatarInStore(newAvatarUrl)
       if (onAvatarUpdated) onAvatarUpdated(newAvatarUrl)
     } catch (err: any) {
@@ -61,18 +68,39 @@ export function AvatarUploadCard({
   }
 
   const handleRemoveAvatar = async () => {
-    if (!confirm('Are you sure you want to remove your profile photo?')) return
     setRemoving(true)
     setErrorMsg('')
+    setSuccessMsg('')
     try {
       await api.delete('/profiles/avatar')
       updateAvatarInStore(null)
       if (onAvatarUpdated) onAvatarUpdated(null)
-    } catch {
-      setErrorMsg('Failed to remove profile photo.')
+      setFailedAvatarUrl(null)
+      setRemoveModalOpen(false)
+      setSuccessMsg('Profile photo removed')
+    } catch (err: unknown) {
+      const detail = isAxiosError<{ detail?: unknown }>(err)
+        ? err.response?.data?.detail
+        : undefined
+      setErrorMsg(
+        typeof detail === 'string' && detail
+          ? detail
+          : 'Failed to remove profile photo.'
+      )
     } finally {
       setRemoving(false)
     }
+  }
+
+  const closeRemoveModal = () => {
+    if (removing) return
+    setRemoveModalOpen(false)
+    setErrorMsg('')
+  }
+
+  const openRemoveModal = () => {
+    setErrorMsg('')
+    setRemoveModalOpen(true)
   }
 
   const avatarFullUrl = getFullMediaUrl(currentAvatarUrl)
@@ -90,27 +118,38 @@ export function AvatarUploadCard({
       {/* Avatar Image / Placeholder */}
       <div className="relative group">
         <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-2 border-indigo-200 dark:border-indigo-800/80 shadow-md bg-linear-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white shrink-0">
-          {avatarFullUrl ? (
+          {avatarFullUrl && failedAvatarUrl !== avatarFullUrl ? (
             <img
               src={avatarFullUrl}
               alt={name}
               className="w-full h-full object-cover"
-              onError={(e) => {
-                // If failed to load image, hide image and show initials
-                ;(e.currentTarget as HTMLElement).style.display = 'none'
-              }}
+              onError={() => setFailedAvatarUrl(avatarFullUrl)}
             />
           ) : (
             <span className="text-2xl font-bold font-serif">{initials}</span>
           )}
         </div>
 
+        {currentAvatarUrl && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-slate-950/55 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
+            <button
+              type="button"
+              onClick={openRemoveModal}
+              disabled={removing}
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[10px] font-semibold text-white hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50"
+            >
+              <Trash2 className="w-3 h-3" />
+              Remove photo
+            </button>
+          </div>
+        )}
+
         {/* Floating Upload Quick Badge */}
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="absolute -bottom-1 -right-1 p-1.5 rounded-full bg-indigo-600 text-white shadow-md hover:bg-indigo-700 transition-transform active:scale-95 cursor-pointer disabled:opacity-50"
+          className="absolute -bottom-1 -right-1 z-20 p-1.5 rounded-full bg-indigo-600 text-white shadow-md hover:bg-indigo-700 transition-transform active:scale-95 cursor-pointer disabled:opacity-50"
           title="Change Profile Photo"
         >
           {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
@@ -134,8 +173,13 @@ export function AvatarUploadCard({
         </div>
 
         {errorMsg && (
-          <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">
+          !removeModalOpen && <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium" role="alert">
             {errorMsg}
+          </p>
+        )}
+        {successMsg && (
+          <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium" role="status">
+            {successMsg}
           </p>
         )}
 
@@ -165,8 +209,7 @@ export function AvatarUploadCard({
               type="button"
               size="sm"
               variant="ghost"
-              onClick={handleRemoveAvatar}
-              isLoading={removing}
+              onClick={openRemoveModal}
               leftIcon={<Trash2 className="w-3.5 h-3.5 text-rose-500" />}
               className="text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40"
             >
@@ -175,6 +218,31 @@ export function AvatarUploadCard({
           )}
         </div>
       </div>
+
+      <Modal
+        isOpen={removeModalOpen}
+        onClose={closeRemoveModal}
+        title="Remove profile photo?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            Your initials will be shown instead.
+          </p>
+          {errorMsg && (
+            <p className="text-xs text-rose-600 dark:text-rose-400 font-medium" role="alert">
+              {errorMsg}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={closeRemoveModal} disabled={removing}>
+              Cancel
+            </Button>
+            <Button type="button" variant="danger" size="sm" onClick={handleRemoveAvatar} isLoading={removing}>
+              Remove
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

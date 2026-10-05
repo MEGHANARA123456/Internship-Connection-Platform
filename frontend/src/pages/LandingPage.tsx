@@ -16,6 +16,11 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
+import { CompaniesSection } from '../components/landing/CompaniesSection'
+import { StudentsSection } from '../components/landing/StudentsSection'
+import { Testimonials } from '../components/landing/Testimonials'
+import { FaqSection } from '../components/landing/FaqSection'
+import { FinalCta } from '../components/landing/FinalCta'
 
 export function LandingPage() {
   const navigate = useNavigate()
@@ -72,21 +77,34 @@ export function LandingPage() {
           </Button>
         </form>
 
-        {/* Action Buttons if not logged in */}
-        {!session && (
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-xs">
-            <Link to="/register-student">
+        {/* Action Buttons */}
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-xs">
+          <Link to="/opportunities">
+            <Button variant="primary" size="sm" className="shadow-sm">
+              Browse Internships
+            </Button>
+          </Link>
+          {!session ? (
+            <>
+              <Link to="/register-student">
+                <Button variant="outline" size="sm">
+                  Register as Student
+                </Button>
+              </Link>
+              <Link to="/register-company">
+                <Button variant="ghost" size="sm" className="text-slate-600">
+                  Post an Internship &rarr;
+                </Button>
+              </Link>
+            </>
+          ) : (
+            <Link to="/dashboard">
               <Button variant="outline" size="sm">
-                Register as Student
+                Go to Dashboard &rarr;
               </Button>
             </Link>
-            <Link to="/register-company">
-              <Button variant="ghost" size="sm" className="text-slate-600">
-                Post an Internship &rarr;
-              </Button>
-            </Link>
-          </div>
-        )}
+          )}
+        </div>
       </section>
 
       {/* Role Pillars Section */}
@@ -252,6 +270,12 @@ export function LandingPage() {
           subtitle="Explore live recruitment metrics: placement progression, hiring speed, and role distributions"
         />
       </section>
+
+      <CompaniesSection />
+      <StudentsSection />
+      <Testimonials />
+      <FaqSection />
+      <FinalCta />
     </div>
   )
 }

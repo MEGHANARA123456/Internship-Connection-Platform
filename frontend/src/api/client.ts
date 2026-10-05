@@ -87,6 +87,10 @@ api.interceptors.response.use(
           refreshToken: newTokens.refresh_token,
           role: newTokens.role,
           userId: newTokens.user_id,
+          accessTokenExpiresAt: newTokens.access_token_expires_at ?? null,
+          refreshTokenExpiresAt: newTokens.refresh_token_expires_at ?? null,
+          accessTokenExpiresIn: newTokens.access_token_expires_in ?? null,
+          refreshTokenExpiresIn: newTokens.refresh_token_expires_in ?? null,
         })
         processQueue(null, newTokens.access_token)
         originalRequest.headers.Authorization = `Bearer ${newTokens.access_token}`

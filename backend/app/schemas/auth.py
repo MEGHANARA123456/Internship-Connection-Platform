@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Pydantic models for authentication input and output schemas.
+# -----------------------------------------------------------------------------
+
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -78,12 +82,17 @@ class TokenResponse(BaseModel):
     email: str | None = None
     avatar_url: str | None = None
     mfa_required: bool = False
+    access_token_expires_in: int | None = None
+    refresh_token_expires_in: int | None = None
+    access_token_expires_at: datetime | None = None
+    refresh_token_expires_at: datetime | None = None
 
 
 class MFALoginChallengeResponse(BaseModel):
     mfa_required: bool = True
     mfa_ticket: str
     email: str
+    mfa_type: str = "EMAIL"
     message: str = "Two-factor authentication code sent to your email"
 
 
@@ -92,9 +101,21 @@ class MFALoginVerifyRequest(BaseModel):
     otp: str = Field(min_length=6, max_length=6)
 
 
+class MFATotpSetupResponse(BaseModel):
+    mfa_type: str = "TOTP"
+    secret: str
+    otpauth_url: str
+    message: str = "Authenticator app setup ready"
+
+
+class MFATotpVerifyRequest(BaseModel):
+    otp: str = Field(min_length=6, max_length=6)
+
+
 class MFAStatusResponse(BaseModel):
     mfa_enabled: bool
     email: str | None = None
+    mfa_type: str = "EMAIL"
 
 
 class MFAEnableRequest(BaseModel):

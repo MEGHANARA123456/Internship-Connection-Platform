@@ -1,6 +1,10 @@
+# -----------------------------------------------------------------------------
+# User and authentication model definitions for accounts, roles, and related profile data.
+# -----------------------------------------------------------------------------
+
 from datetime import date, datetime, timezone
 try:
-    from enum import StrEnum
+    from enum import StrEnum # type: ignore
 except ImportError:
     from enum import Enum
     class StrEnum(str, Enum):
@@ -12,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 
-class UserRole(StrEnum):
+class UserRole(StrEnum):# type: ignore
     STUDENT = "STUDENT"
     COMPANY = "COMPANY"
     ADMIN = "ADMIN"
@@ -26,6 +30,9 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     student_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     institution_verified: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -37,6 +44,7 @@ class User(Base):
     reset_token: Mapped[str | None] = mapped_column(String(255), unique=True)
     reset_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mfa_type: Mapped[str] = mapped_column(String(20), default="EMAIL", nullable=False)
     mfa_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     mfa_otp: Mapped[str | None] = mapped_column(String(64), nullable=True)
     mfa_otp_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -130,6 +138,9 @@ class Application(Base):
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     status: Mapped[str] = mapped_column(String(30), default="APPLIED", index=True)
     cover_note: Mapped[str | None] = mapped_column(Text)
+    offer_signed_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    offer_signature_mode: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    offer_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -239,4 +250,4 @@ class AuditLog(Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
-
+

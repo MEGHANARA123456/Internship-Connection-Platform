@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Alembic migration: adds saved internships and company review tables.
+# -----------------------------------------------------------------------------
+
 """add saved_internships and company_reviews
 
 Revision ID: 0004_saved_internships_and_reviews

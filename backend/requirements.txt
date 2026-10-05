@@ -8,6 +8,7 @@ python-multipart==0.0.20
 pydantic-settings==2.10.1
 pydantic[email]==2.8.2
 python-jose[cryptography]==3.5.0
+pyotp==2.9.0
 pytest==8.4.1
 sqlalchemy[asyncio]==2.0.43
 uvicorn[standard]==0.35.0

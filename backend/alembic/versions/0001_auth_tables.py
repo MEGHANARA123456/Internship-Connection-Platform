@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Alembic migration: creates the core authentication tables for the app.
+# -----------------------------------------------------------------------------
+
 """add authentication tables
 
 Revision ID: 0001_auth_tables

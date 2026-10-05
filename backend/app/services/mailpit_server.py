@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime, timezone
 import json
 import logging
@@ -7,7 +6,7 @@ import re
 from typing import Any
 import uuid
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -51,11 +50,9 @@ mailpit_app.add_middleware(
     allow_headers=["*"],
 )
 
-
 class EmailRecipient(BaseModel):
     Email: str
     Name: str | None = None
-
 
 class SendEmailPayload(BaseModel):
     From: EmailRecipient | dict[str, Any]
@@ -63,7 +60,6 @@ class SendEmailPayload(BaseModel):
     Subject: str
     Text: str | None = None
     HTML: str | None = None
-
 
 def extract_otp(text: str) -> str | None:
     # Looks for a 6-digit numeric OTP code
@@ -77,17 +73,17 @@ async def send_message(payload: SendEmailPayload):
     now = datetime.now(timezone.utc).isoformat()
 
     # Normalize from
-    from_dict = payload.From.model_dump() if hasattr(payload.From, "model_dump") else payload.From
-    from_addr = from_dict.get("Email", "noreply@internship.local")
-    from_name = from_dict.get("Name", "Internship Platform")
+    from_dict = payload.From.model_dump() if hasattr(payload.From, "model_dump") else payload.From # type: ignore
+    from_addr = from_dict.get("Email", "noreply@internship.local") # type: ignore
+    from_name = from_dict.get("Name", "Internship Platform")# type: ignore
 
     # Normalize to
     recipients = []
     for r in payload.To:
-        r_dict = r.model_dump() if hasattr(r, "model_dump") else r
+        r_dict = r.model_dump() if hasattr(r, "model_dump") else r # type: ignore
         recipients.append({
-            "Address": r_dict.get("Email", "").strip().lower(),
-            "Name": r_dict.get("Name", "")
+            "Address": r_dict.get("Email", "").strip().lower(), # type: ignore
+            "Name": r_dict.get("Name", "") # type: ignore
         })
 
     text_content = payload.Text or ""

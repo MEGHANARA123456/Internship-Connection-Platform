@@ -31,9 +31,6 @@ import {
   Eye,
   Inbox,
   Lock,
-  KeyRound,
-  Copy,
-  Check,
   Sparkles,
   CheckCircle2,
   FileText,
@@ -42,6 +39,16 @@ import {
   Users,
   ArrowRight,
 } from 'lucide-react'
+
+function isExternalUrl(value: string | null | undefined): boolean {
+  if (!value) return false
+  try {
+    const url = new URL(value)
+    return ['http:', 'https:'].includes(url.protocol) && Boolean(url.hostname)
+  } catch {
+    return false
+  }
+}
 
 // --- 1. Scheduled Interviews Page ---
 
@@ -66,6 +73,7 @@ export function InterviewsPage() {
         `DESCRIPTION:${item.notes || 'Scheduled Interview Session'}`,
         `DTSTART:${start}`,
         `DTEND:${end}`,
+        `LOCATION:${isExternalUrl(item.meeting_link) ? item.meeting_link : `${window.location.origin}/interviews`}`,
         "STATUS:CONFIRMED",
         "END:VEVENT",
         "END:VCALENDAR"
@@ -87,12 +95,11 @@ export function InterviewsPage() {
       const start = new Date(item.scheduled_at).toISOString().replace(/-|:|\.\d\d\d/g, '')
       const end = new Date(new Date(item.scheduled_at).getTime() + 45 * 60000).toISOString().replace(/-|:|\.\d\d\d/g, '')
       const title = encodeURIComponent(`${item.interview_type || 'Internship'} Interview - InternSphere`)
-      const details = encodeURIComponent(
-        item.notes
-          ? `${item.notes}\n\nMeeting link: ${item.meeting_link || 'InternSphere Video Room'}`
-          : `Scheduled Interview on InternSphere\nMeeting link: ${item.meeting_link || 'InternSphere Video Room'}`
-      )
-      const location = encodeURIComponent(item.meeting_link || 'InternSphere In-App Video Call')
+      const meetingDetails = isExternalUrl(item.meeting_link)
+        ? `Meeting link: ${item.meeting_link}`
+        : `Join via InternSphere: ${window.location.origin}/interviews`
+      const details = encodeURIComponent(item.notes ? `${item.notes}\n\n${meetingDetails}` : `Scheduled Interview on InternSphere\n${meetingDetails}`)
+      const location = encodeURIComponent(isExternalUrl(item.meeting_link) ? item.meeting_link : `${window.location.origin}/interviews`)
       return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}&location=${location}`
     } catch {
       return '#'
@@ -305,10 +312,30 @@ export function InterviewsPage() {
                       <Badge status={item.status}>{item.status}</Badge>
                     </div>
 
-                    {item.candidate_name && (
+                    {item.company_name && !isCompany && (
+                      <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
+                        <Users className="w-3.5 h-3.5 text-indigo-500" />
+                        Company: {item.company_name}
+                      </p>
+                    )}
+
+                    {item.candidate_name && isCompany && (
                       <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
                         <Users className="w-3.5 h-3.5 text-indigo-500" />
                         Candidate: {item.candidate_name}
+                      </p>
+                    )}
+
+                    {item.interview_type && (
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+                        <Badge variant="slate" className="!px-2 !py-0.5">{item.interview_type}</Badge>
+                      </p>
+                    )}
+
+                    {isExternalUrl(item.meeting_link) && (
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+                        <ExternalLink className="w-3.5 h-3.5 text-indigo-500" />
+                        Meeting link: <a href={item.meeting_link} target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 underline">Open link</a>
                       </p>
                     )}
 
@@ -336,7 +363,7 @@ export function InterviewsPage() {
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap shrink-0">
-                    <Button
+                    {item.interview_type === 'VIDEO' && <Button
                       size="sm"
                       variant="primary"
                       onClick={() => setVideoModalInterview(item)}
@@ -344,7 +371,7 @@ export function InterviewsPage() {
                       className="bg-indigo-600 hover:bg-indigo-700"
                     >
                       Launch In-App Video
-                    </Button>
+                    </Button>}
 
                     <Button
                       size="sm"
@@ -372,7 +399,7 @@ export function InterviewsPage() {
                       </Button>
                     </a>
 
-                    {item.meeting_link && (
+                    {isExternalUrl(item.meeting_link) && (
                       <a
                         href={item.meeting_link}
                         target="_blank"
@@ -1247,7 +1274,6 @@ export function NotificationsPage() {
   const [loadingEmails, setLoadingEmails] = useState(false)
   const [emailError, setEmailError] = useState<string | null>(null)
   const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null)
-  const [copiedOtp, setCopiedOtp] = useState<string | null>(null)
 
   const fetchNotifications = async () => {
     setLoading(true)
@@ -1299,12 +1325,6 @@ export function NotificationsPage() {
     } catch {
       // ignore
     }
-  }
-
-  const handleCopyCode = (code: string) => {
-    navigator.clipboard.writeText(code)
-    setCopiedOtp(code)
-    setTimeout(() => setCopiedOtp(null), 2500)
   }
 
   const unreadCount = notifications.filter((n) => !n.read_at).length
@@ -1471,8 +1491,6 @@ export function NotificationsPage() {
             <div className="space-y-3">
               {emails.map((mail) => {
                 const isExpanded = expandedEmailId === mail.id
-                const otpMatch = (mail.subject + ' ' + (mail.body || '')).match(/\b\d{6}\b/)
-                const detectedOtp = otpMatch ? otpMatch[0] : null
 
                 return (
                   <Card
@@ -1498,23 +1516,6 @@ export function NotificationsPage() {
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
-                        {detectedOtp && (
-                          <button
-                            type="button"
-                            onClick={() => handleCopyCode(detectedOtp)}
-                            className="px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 hover:bg-emerald-100 transition-colors cursor-pointer"
-                            title="Copy OTP to clipboard"
-                          >
-                            <KeyRound className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>{detectedOtp}</span>
-                            {copiedOtp === detectedOtp ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5 text-slate-400" />
-                            )}
-                          </button>
-                        )}
-
                         <Button
                           size="sm"
                           variant="outline"

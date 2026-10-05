@@ -55,6 +55,10 @@ import {
 
 import { CollegePlacementPortal } from './pages/CollegePlacementPortal'
 import { MobileViewSimulator } from './components/ui/MobileViewSimulator'
+import { PrivacyPolicyPage } from './pages/PrivacyPolicyPage'
+import { PrivacySecurityPage } from './pages/PrivacySecurityPage'
+import { CookieConsentBanner } from './components/ui/CookieConsentBanner'
+import { Footer } from './components/landing/Footer'
 
 function ProfileRedirect() {
   const { session } = useAuthStore()
@@ -130,22 +134,19 @@ export default function App() {
               <Route path="/admin/audit-logs" element={<AdminAuditLogsPage />} />
             </Route>
 
+            {/* Privacy & Regulatory Compliance (GDPR / CCPA) */}
+            <Route path="/privacy" element={<PrivacyPolicyPage />} />
+            <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
+            <Route path="/privacy-center" element={<PrivacySecurityPage />} />
+            <Route path="/settings/privacy" element={<PrivacySecurityPage />} />
+
             {/* Fallback */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
 
-        {/* Global Footer */}
-        <footer className="w-full border-t border-slate-200 bg-white py-6 mt-auto">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-slate-800">Internship Connection Platform</span>
-              <span>•</span>
-              <span>Production Grade Verified Recruitment</span>
-            </div>
-            <p>© {new Date().getFullYear()} All rights reserved.</p>
-          </div>
-        </footer>
+        <Footer />
+        <CookieConsentBanner />
       </div>
     </MobileViewSimulator>
   )

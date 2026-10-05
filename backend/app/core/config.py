@@ -1,9 +1,12 @@
+# Central application configuration.
+# Values are loaded from environment variables and the local .env file.
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # Database connection used by the app and by Alembic migrations.
     database_url: str = "postgresql+asyncpg://postgres:postgres@db:5432/internship_platform"
     secret_key: str = "change-me-in-development"
     frontend_url: str = "http://localhost:5174"
@@ -24,12 +27,13 @@ class Settings(BaseSettings):
     resume_storage_path: str = "storage/resumes"
     rate_limit_requests: int = 120
     rate_limit_window_seconds: int = 60
-    admin_signup_key: str = "change-admin-signup-key"
+    admin_signup_key: str
     gemini_api_key: str | None = None
     require_email_verification: bool = True
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
+# Cache settings so environment values are loaded once for the runtime.
 @lru_cache
 def get_settings() -> Settings:
     return Settings()

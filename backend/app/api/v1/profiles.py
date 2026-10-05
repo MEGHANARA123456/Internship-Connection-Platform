@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Profile endpoints for student, company, and user profile management.
+# -----------------------------------------------------------------------------
+
 from pathlib import Path
 from uuid import uuid4
 from typing import Annotated, Any

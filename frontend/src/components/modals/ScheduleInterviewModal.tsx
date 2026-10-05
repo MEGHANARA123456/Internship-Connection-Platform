@@ -10,10 +10,22 @@ import { Textarea } from '../ui/Textarea'
 import { Button } from '../ui/Button'
 import { Calendar, CheckCircle2, Clock, Sparkles, User, Briefcase, AlertCircle } from 'lucide-react'
 
+const normalizeMeetingLink = (value: string) => {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  const url = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+  try {
+    const parsed = new URL(url)
+    return ['http:', 'https:'].includes(parsed.protocol) && parsed.hostname ? url : null
+  } catch {
+    return null
+  }
+}
+
 const interviewSchema = z.object({
   scheduled_at: z.string().min(1, 'Interview date & time is required'),
   interview_type: z.enum(['VIDEO', 'PHONE', 'IN_PERSON']),
-  meeting_link: z.string().optional().or(z.literal('')),
+  meeting_link: z.string().trim().refine((value) => normalizeMeetingLink(value) !== null, 'Enter a valid http(s) meeting URL or leave it blank for in-app video'),
   notes: z.string().optional().or(z.literal('')),
 })
 
@@ -61,7 +73,7 @@ export function ScheduleInterviewModal({
     resolver: zodResolver(interviewSchema),
     defaultValues: {
       interview_type: 'VIDEO',
-      meeting_link: activeAppId ? `In-App Encrypted Video Room #${activeAppId}` : 'In-App Encrypted Video Room',
+      meeting_link: '',
     },
   })
 
@@ -72,7 +84,7 @@ export function ScheduleInterviewModal({
     }
     if (applicationId) {
       setSelectedAppId(applicationId)
-      setValue('meeting_link', `In-App Encrypted Video Room #${applicationId}`)
+      setValue('meeting_link', '')
     }
   }, [jobId, applicationId, setValue])
 
@@ -103,7 +115,6 @@ export function ScheduleInterviewModal({
           setCandidates(list)
           if (list.length > 0) {
             setSelectedAppId(list[0].id)
-            setValue('meeting_link', `In-App Encrypted Video Room #${list[0].id}`)
           } else {
             setSelectedAppId(undefined)
           }
@@ -115,13 +126,6 @@ export function ScheduleInterviewModal({
         .finally(() => setLoadingOptions(false))
     }
   }, [isOpen, applicationId, selectedJobId, setValue])
-
-  // Update meeting link when selectedAppId changes
-  useEffect(() => {
-    if (selectedAppId && !applicationId) {
-      setValue('meeting_link', `In-App Encrypted Video Room #${selectedAppId}`)
-    }
-  }, [selectedAppId, applicationId, setValue])
 
   // Quick slot helpers (Tomorrow 10 AM, etc.)
   const generateQuickSlots = () => {
@@ -174,7 +178,7 @@ export function ScheduleInterviewModal({
       await api.post(`/applications/${targetAppId}/interviews`, {
         scheduled_at: isoDate,
         interview_type: data.interview_type,
-        meeting_link: data.meeting_link?.trim() || null,
+        meeting_link: normalizeMeetingLink(data.meeting_link) || null,
         notes: data.notes ? `[Duration: ${selectedDuration}] ${data.notes.trim()}` : `Duration: ${selectedDuration}`,
       })
 
@@ -343,9 +347,9 @@ export function ScheduleInterviewModal({
 
           <Input
             label="Meeting Link or Location"
-            placeholder="https://meet.google.com/abc-defg-hij or In-App Room"
+            placeholder="meet.google.com/abc-defg-hij (leave blank for in-app video)"
             error={errors.meeting_link?.message}
-            helperText="Provide video meeting link or in-app session link"
+            helperText="Enter an http(s) link, or leave blank to use the InternSphere video room"
             {...register('meeting_link')}
           />
 

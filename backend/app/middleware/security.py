@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------
+# Security middleware that applies request protections, rate limiting, and headers.
+# -----------------------------------------------------------------------------
+
 import time
 from collections import defaultdict, deque
 
@@ -22,12 +26,16 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         while timestamps and now - timestamps[0] >= window:
             timestamps.popleft()
         if len(timestamps) >= limit:
-            response = JSONResponse({"detail": "Rate limit exceeded"}, status_code=429)
+            response = JSONResponse({"detail": "Rate limit exceeded. Please try again later."}, status_code=429)
         else:
             timestamps.append(now)
             response = await call_next(request)
+
+        # Apply robust HTTP security headers (OWASP, GDPR & Privacy Guidelines)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=(), payment=()"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
         return response

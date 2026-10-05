@@ -47,6 +47,10 @@ export function GoogleSignInButton({
     name?: string
     email?: string
     avatar_url?: string | null
+    access_token_expires_in?: number | null
+    refresh_token_expires_in?: number | null
+    access_token_expires_at?: string | null
+    refresh_token_expires_at?: string | null
   }, userEmail: string) => {
     const finalEmail = data.email || userEmail
     setSession({
@@ -57,6 +61,10 @@ export function GoogleSignInButton({
       email: finalEmail,
       name: data.name || undefined,
       avatar_url: data.avatar_url,
+      accessTokenExpiresAt: data.access_token_expires_at ?? null,
+      refreshTokenExpiresAt: data.refresh_token_expires_at ?? null,
+      accessTokenExpiresIn: data.access_token_expires_in ?? null,
+      refreshTokenExpiresIn: data.refresh_token_expires_in ?? null,
     })
 
     if (data.role === 'ADMIN') {

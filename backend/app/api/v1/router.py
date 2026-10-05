@@ -1,3 +1,8 @@
+
+# -----------------------------------------------------------------------------
+# Main API router that registers all versioned endpoints for the backend.
+# -----------------------------------------------------------------------------
+
 from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -15,6 +20,7 @@ from app.api.v1.institution import router as institution_router
 from app.api.v1.mailbox import router as mailbox_router
 from app.api.v1.analytics import router as analytics_router
 from app.api.v1.reviews import router as reviews_router
+from app.api.v1.privacy import router as privacy_router
 from app.api.v1.dependencies import DbSession, require_roles
 from app.models import CompanyProfile, StudentProfile, User, UserRole
 
@@ -32,6 +38,7 @@ api_router.include_router(institution_router)
 api_router.include_router(mailbox_router)
 api_router.include_router(analytics_router)
 api_router.include_router(reviews_router)
+api_router.include_router(privacy_router)
 
 
 
@@ -67,4 +74,4 @@ async def admin_dashboard(user: Annotated[User, Depends(require_roles(UserRole.A
     local_part = user.email.split("@")[0]
     words = "".join(c if c.isalpha() else " " for c in local_part).split()
     name = " ".join(words).title() if words else local_part.title()
-    return {"email": user.email, "role": user.role.value, "name": name, "user_id": user.id}
+    return {"email": user.email, "role": user.role.value, "name": name, "user_id": user.id}
