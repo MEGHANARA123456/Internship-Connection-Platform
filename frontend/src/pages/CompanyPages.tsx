@@ -728,7 +728,7 @@ export function JobApplicantsPage() {
               All Stages ({applicants.length})
             </button>
             {STAGES.map((s) => {
-              const count = applicants.filter((a) => a.status === s.id).length
+              const count = applicants.filter((a) => a.status === s.id || (s.id === 'SELECTED' && a.status === 'ACCEPTED')).length
               return (
                 <button
                   key={s.id}
@@ -749,7 +749,7 @@ export function JobApplicantsPage() {
 
           <div className="flex md:grid md:grid-cols-3 lg:grid-cols-6 gap-4 items-start overflow-x-auto pb-4 snap-x snap-mandatory">
             {STAGES.filter((s) => mobileStageFilter === 'ALL' || s.id === mobileStageFilter).map((stage) => {
-              const stageApps = applicants.filter((a) => a.status === stage.id)
+              const stageApps = applicants.filter((a) => a.status === stage.id || (stage.id === 'SELECTED' && a.status === 'ACCEPTED'))
               return (
                 <div
                   key={stage.id}
@@ -935,7 +935,7 @@ export function JobApplicantsPage() {
                       {app.student_university || 'N/A'}
                     </td>
                     <td className="p-3.5">
-                      <Badge status={app.status}>{app.status}</Badge>
+                      <Badge status={app.status}>{app.status === 'ACCEPTED' ? 'Offer Accepted' : app.status}</Badge>
                     </td>
                     <td className="p-3.5 text-slate-500 dark:text-slate-400">
                       {new Date(app.created_at).toLocaleDateString()}

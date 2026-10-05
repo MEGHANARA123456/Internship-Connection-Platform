@@ -362,16 +362,6 @@ export function Navbar() {
                           </div>
                         </Link>
 
-                        <Link to="/college" onClick={() => setNavMenuOpen(false)} className="flex items-start gap-2.5 p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200">
-                          <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/60 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5">
-                            <GraduationCap className="w-4 h-4" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <span className="text-xs font-bold">College Placement Portal</span>
-                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Institutional campus placements</p>
-                          </div>
-                        </Link>
-
                         <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800/80">
                           <Link to="/login" onClick={() => setNavMenuOpen(false)} className="flex items-center justify-center p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60">
                             Sign in

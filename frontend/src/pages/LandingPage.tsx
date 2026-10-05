@@ -16,6 +16,11 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
+import { CompaniesSection } from '../components/landing/CompaniesSection'
+import { StudentsSection } from '../components/landing/StudentsSection'
+import { Testimonials } from '../components/landing/Testimonials'
+import { FaqSection } from '../components/landing/FaqSection'
+import { FinalCta } from '../components/landing/FinalCta'
 
 export function LandingPage() {
   const navigate = useNavigate()
@@ -265,6 +270,12 @@ export function LandingPage() {
           subtitle="Explore live recruitment metrics: placement progression, hiring speed, and role distributions"
         />
       </section>
+
+      <CompaniesSection />
+      <StudentsSection />
+      <Testimonials />
+      <FaqSection />
+      <FinalCta />
     </div>
   )
 }

@@ -54,13 +54,15 @@ async def get_analytics_overview(
             "SHORTLISTED",
             "INTERVIEW_SCHEDULED",
             "SELECTED",
+            "ACCEPTED",
         })
         funnel["interviews"] = sum(1 for a in apps if a.status in {
             "SHORTLISTED",
             "INTERVIEW_SCHEDULED",
             "SELECTED",
+            "ACCEPTED",
         })
-        funnel["offers"] = sum(1 for a in apps if a.status == "SELECTED")
+        funnel["offers"] = sum(1 for a in apps if a.status in {"SELECTED", "ACCEPTED"})
 
         # Real domain breakdown for applied roles
         domain_query = (
@@ -93,8 +95,9 @@ async def get_analytics_overview(
                 "SHORTLISTED",
                 "INTERVIEW_SCHEDULED",
                 "SELECTED",
+                "ACCEPTED",
             })
-            funnel["offers"] = sum(1 for a in apps if a.status == "SELECTED")
+            funnel["offers"] = sum(1 for a in apps if a.status in {"SELECTED", "ACCEPTED"})
 
             # Domain breakdown of company's open listings
             domain_query = (
@@ -119,7 +122,7 @@ async def get_analytics_overview(
         total_interviews = await db.scalar(select(func.count(Interview.id))) or 0
         total_offers = await db.scalar(
             select(func.count(Application.id)).where(
-                Application.status == "SELECTED"
+                Application.status.in_(["SELECTED", "ACCEPTED"])
             )
         ) or 0
         screened_count = await db.scalar(
@@ -129,6 +132,7 @@ async def get_analytics_overview(
                     "SHORTLISTED",
                     "INTERVIEW_SCHEDULED",
                     "SELECTED",
+                    "ACCEPTED",
                 ])
             )
         ) or 0
@@ -225,16 +229,12 @@ async def admin_user_growth(
                     select(func.count(User.id))
                     .where(
                         User.role == role,
-                        User.email_verified_at >= period_start,
-                        User.email_verified_at < period_end,
+                        User.created_at >= period_start,
+                        User.created_at < period_end,
                     )
                 ) or 0
             )
 
-        # Fall back to total count when email_verified_at is null by approximating
-        # with a simple count of users created before the period boundary.
-        # Since we don't have a created_at on User, we use id ordering as a proxy
-        # and count by email_verified_at which is set on registration.
         result.append(UserGrowthPoint(
             period=label,
             students=await _count_role(UserRole.STUDENT),
@@ -285,8 +285,8 @@ async def admin_funnel_by_company(
             company_name=name_map.get(company_id, f"Company #{company_id}"),
             applied=len(apps),
             screened=sum(1 for a in apps if a.status not in {"APPLIED", "REJECTED"}),
-            interviews=sum(1 for a in apps if a.status in {"SHORTLISTED", "INTERVIEW_SCHEDULED", "SELECTED"}),
-            offers=sum(1 for a in apps if a.status == "SELECTED"),
+            interviews=sum(1 for a in apps if a.status in {"SHORTLISTED", "INTERVIEW_SCHEDULED", "SELECTED", "ACCEPTED"}),
+            offers=sum(1 for a in apps if a.status in {"SELECTED", "ACCEPTED"}),
         ).model_dump())
 
     return result

@@ -4,6 +4,7 @@
 
 from typing import Annotated
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
@@ -16,6 +17,7 @@ from app.schemas.application import (
     ApplicationDashboard,
     ApplicationResponse,
     ApplicationStatusUpdate,
+    OfferAcceptance,
     BulkApplicationStatusResponse,
     BulkApplicationStatusUpdate,
 )
@@ -63,7 +65,8 @@ TRANSITIONS = {
     "UNDER_REVIEW": {"SHORTLISTED", "REJECTED", "WITHDRAWN"},
     "SHORTLISTED": {"INTERVIEW_SCHEDULED", "REJECTED", "WITHDRAWN"},
     "INTERVIEW_SCHEDULED": {"SELECTED", "REJECTED"},
-    "SELECTED": set(),
+    "SELECTED": {"ACCEPTED"},
+    "ACCEPTED": set(),
     "REJECTED": set(),
     "WITHDRAWN": set(),
 }
@@ -87,6 +90,9 @@ async def serialize(application: Application, db: DbSession) -> dict:
         "student_id": application.student_id,
         "status": application.status,
         "cover_note": application.cover_note,
+        "offer_signed_name": application.offer_signed_name,
+        "offer_signature_mode": application.offer_signature_mode,
+        "offer_accepted_at": application.offer_accepted_at,
         "created_at": application.created_at,
         "updated_at": application.updated_at,
         "student_name": student.full_name if student else None,
@@ -261,3 +267,61 @@ async def mark_reject(application_id: int, background_tasks: BackgroundTasks, us
 @router.patch("/{application_id}/withdraw", response_model=ApplicationResponse)
 async def mark_withdraw(application_id: int, background_tasks: BackgroundTasks, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict:
     return await update_status(application_id, ApplicationStatusUpdate(status="WITHDRAWN"), background_tasks, user, db)
+
+
+@router.post("/{application_id}/accept-offer", response_model=ApplicationResponse)
+async def accept_offer(application_id: int, data: OfferAcceptance, user: student_only, db: DbSession) -> dict:
+    application = await db.scalar(select(Application).where(Application.id == application_id))
+    if application is None or application.student_id != user.id:
+        raise HTTPException(404, "Application not found")
+    if application.status == "ACCEPTED":
+        return await serialize(application, db)
+    if application.status != "SELECTED":
+        raise HTTPException(409, f"Cannot accept an offer while application is {application.status}")
+
+    internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id))
+    student_profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+    company = await db.scalar(select(User).where(User.id == internship.company_id)) if internship else None
+    student_name = student_profile.full_name if student_profile else user.email
+    internship_title = internship.title if internship else "the internship"
+    notification_title = "Offer accepted"
+    notification_body = f"{student_name} accepted the offer for {internship_title}"
+
+    application.status = "ACCEPTED"
+    application.offer_signed_name = data.signature_name.strip()
+    application.offer_signature_mode = data.signature_mode
+    application.offer_accepted_at = datetime.now(timezone.utc)
+    if internship:
+        db.add(Notification(
+            user_id=internship.company_id,
+            notification_type="APPLICATION_STATUS",
+            title=notification_title,
+            body=notification_body,
+        ))
+    await db.commit()
+    await db.refresh(application)
+
+    if company:
+        await send_dev_email(
+            company.email,
+            notification_title,
+            notification_body,
+            message_type="APPLICATION_STATUS",
+            db=db,
+        )
+        try:
+            from app.api.v1.ws import manager
+            await manager.send_personal_message(
+                company.id,
+                {
+                    "type": "application_status_updated",
+                    "application_id": application.id,
+                    "status": "ACCEPTED",
+                    "internship_id": application.internship_id,
+                    "title": notification_title,
+                    "body": notification_body,
+                },
+            )
+        except Exception as exc:
+            logger.warning("Could not send offer acceptance notification for application %s: %s", application.id, exc)
+    return await serialize(application, db)

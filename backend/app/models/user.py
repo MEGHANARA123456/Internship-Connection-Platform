@@ -30,6 +30,9 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     student_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     institution_verified: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -135,6 +138,9 @@ class Application(Base):
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     status: Mapped[str] = mapped_column(String(30), default="APPLIED", index=True)
     cover_note: Mapped[str | None] = mapped_column(Text)
+    offer_signed_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    offer_signature_mode: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    offer_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

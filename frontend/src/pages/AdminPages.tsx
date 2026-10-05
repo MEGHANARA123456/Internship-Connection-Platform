@@ -410,48 +410,6 @@ export function AdminDashboardPage() {
         </Card>
       </div>
 
-      {/* Quick Credentials & Workflow Guide for Developers/Admins */}
-      <div className="p-6 rounded-2xl bg-purple-50/70 border border-purple-200 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Users className="w-5 h-5 text-purple-700" />
-            <h3 className="text-sm font-bold text-purple-950">
-              Platform Admin Credentials & Ecosystem Guide
-            </h3>
-          </div>
-          <span className="text-[11px] font-mono bg-purple-200 text-purple-900 px-2 py-0.5 rounded-md font-semibold">
-            Admin Signup Key: change-admin-signup-key
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-700">
-          <div className="p-3 bg-white rounded-xl border border-purple-100 shadow-2xs space-y-1">
-            <span className="font-bold text-purple-900 block">Admin Registration</span>
-            <p className="text-slate-600 text-[11px]">
-              Register via <code className="bg-slate-100 px-1 py-0.5 rounded">/register-admin</code> with the secret key{' '}
-              <code className="bg-purple-100 text-purple-800 px-1 py-0.5 rounded font-mono">change-admin-signup-key</code>.
-            </p>
-          </div>
-
-          <div className="p-3 bg-white rounded-xl border border-purple-100 shadow-2xs space-y-1">
-            <span className="font-bold text-indigo-900 block">Company Verification</span>
-            <p className="text-slate-600 text-[11px]">
-              Companies register at <code className="bg-slate-100 px-1 py-0.5 rounded">/register-company</code>. They cannot post jobs until vetted in the Verifications tab.
-            </p>
-          </div>
-
-          <div className="p-3 bg-white rounded-xl border border-purple-100 shadow-2xs space-y-1">
-            <span className="font-bold text-emerald-900 block">Mailpit Local Inbox</span>
-            <p className="text-slate-600 text-[11px]">
-              Email tokens deliver instantly to{' '}
-              <a href="http://localhost:8025" target="_blank" rel="noreferrer" className="text-indigo-600 underline font-semibold">
-                http://localhost:8025
-              </a>.
-            </p>
-          </div>
-        </div>
-      </div>
-
       {/* Admin Account Security & Two-Factor Authentication */}
       <div className="pt-2">
         <AccountSecurityCard userEmail={session?.email} role="Admin" />
@@ -477,13 +435,13 @@ function AdminAnalyticsCharts({ refreshKey }: { refreshKey: number }) {
     })
   }, [refreshKey])
 
-  const maxGrowth = Math.max(...growth.map((item) => item.students + item.companies), 1)
+  const maxGrowth = Math.max(...growth.map((item) => item.students + item.companies + item.admins), 1)
   const maxAction = Math.max(...actions.map((item) => item.count), 1)
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <Card className="bg-white p-6">
         <div className="mb-5 flex items-center gap-2"><TrendingUp className="h-4 w-4 text-indigo-600" /><h2 className="text-sm font-bold text-slate-900">User growth</h2></div>
-        {growth.length === 0 ? <p className="text-xs text-slate-500">No signup data for this period.</p> : <div className="space-y-3">{growth.map((item) => <div key={item.period} className="flex items-center gap-3 text-xs"><span className="w-16 text-slate-500">{item.period}</span><div className="h-6 flex-1 overflow-hidden rounded bg-slate-100"><div className="h-full rounded bg-indigo-500" style={{ width: `${Math.max(3, ((item.students + item.companies) / maxGrowth) * 100)}%` }} /></div><span className="w-12 text-right font-semibold text-slate-700">{item.students + item.companies}</span></div>)}</div>}
+        {growth.length === 0 ? <p className="text-xs text-slate-500">No signup data for this period.</p> : <div className="space-y-3">{growth.map((item) => <div key={item.period} title={`Students: ${item.students}, Companies: ${item.companies}, Admins: ${item.admins}`} className="flex items-center gap-3 text-xs"><span className="w-16 text-slate-500">{item.period}</span><div className="h-6 flex-1 overflow-hidden rounded bg-slate-100"><div className="h-full rounded bg-indigo-500" style={{ width: `${Math.max(3, ((item.students + item.companies + item.admins) / maxGrowth) * 100)}%` }} /></div><span className="w-12 text-right font-semibold text-slate-700">{item.students + item.companies + item.admins}</span></div>)}</div>}
       </Card>
       <Card className="bg-white p-6">
         <div className="mb-5 flex items-center gap-2"><BarChart2 className="h-4 w-4 text-amber-600" /><h2 className="text-sm font-bold text-slate-900">Admin action volume</h2></div>

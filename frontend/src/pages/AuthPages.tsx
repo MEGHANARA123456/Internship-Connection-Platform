@@ -466,7 +466,7 @@ export function LoginPage() {
           <Link to="/forgot-password" className="text-indigo-600 hover:underline">
             Forgot password?
           </Link>
-          <Link to="/verify" className="text-slate-500 hover:underline">
+          <Link to="/verify" className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline">
             Verify email
           </Link>
         </div>

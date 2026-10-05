@@ -839,7 +839,7 @@ export function ApplicationsPage() {
                       <h3 className="text-base font-bold text-slate-900 dark:text-white">
                         {app.internship_title || `Internship #${app.internship_id}`}
                       </h3>
-                      <Badge status={app.status}>{app.status}</Badge>
+                      <Badge status={app.status}>{app.status === 'ACCEPTED' ? 'Offer Accepted' : app.status}</Badge>
                     </div>
                     {app.company_name && (
                       <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
@@ -858,7 +858,7 @@ export function ApplicationsPage() {
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                    {app.status === 'SELECTED' && (
+                    {['SELECTED', 'ACCEPTED'].includes(app.status) && (
                       <>
                         <Button
                           size="sm"
@@ -867,9 +867,9 @@ export function ApplicationsPage() {
                           leftIcon={<FileCheck className="w-3.5 h-3.5" />}
                           onClick={() => setSelectedOfferApp(app)}
                         >
-                          Offer Letter & E-Sign
+                          {app.status === 'ACCEPTED' ? 'View Offer Letter' : 'Offer Letter & E-Sign'}
                         </Button>
-                        {app.company_id && (
+                        {app.company_id && app.status === 'SELECTED' && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -913,10 +913,14 @@ export function ApplicationsPage() {
         <OfferLetterModal
           isOpen={!!selectedOfferApp}
           onClose={() => setSelectedOfferApp(null)}
+          applicationId={selectedOfferApp.id}
+          onSigned={() => { void fetchApplications() }}
           candidateName={selectedOfferApp.student_name || 'Candidate'}
           companyName={selectedOfferApp.company_name || selectedOfferApp.internship_title || 'Enterprise Partner'}
           roleTitle={selectedOfferApp.internship_title || 'Software Engineering Intern'}
           stipend={selectedOfferApp.stipend || 1800}
+          offerSignedName={selectedOfferApp.offer_signed_name}
+          offerAcceptedAt={selectedOfferApp.offer_accepted_at}
         />
       )}
 

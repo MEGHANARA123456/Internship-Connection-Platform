@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
+import { api } from '../../api/client'
 import {
   Download,
   PenTool,
@@ -13,29 +14,40 @@ import {
 interface OfferLetterModalProps {
   isOpen: boolean
   onClose: () => void
+  applicationId: number
+  onSigned: () => void
   candidateName: string
   companyName: string
   roleTitle: string
   stipend: number
   startDate?: string
+  offerSignedName?: string | null
+  offerAcceptedAt?: string | null
 }
 
 export function OfferLetterModal({
   isOpen,
   onClose,
+  applicationId,
+  onSigned,
   candidateName,
   companyName,
   roleTitle,
   stipend,
   startDate = 'October 1, 2026',
+  offerSignedName,
+  offerAcceptedAt,
 }: OfferLetterModalProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [isDrawing, setIsDrawing] = useState(false)
   const [hasDrawnSignature, setHasDrawnSignature] = useState(false)
   const [typedSignName, setTypedSignName] = useState('')
   const [signMode, setSignMode] = useState<'draw' | 'type'>('draw')
-  const [isSigned, setIsSigned] = useState(false)
-  const [signatureTimestamp, setSignatureTimestamp] = useState('')
+  const [isSigned, setIsSigned] = useState(Boolean(offerAcceptedAt))
+  const [signatureTimestamp, setSignatureTimestamp] = useState(offerAcceptedAt ? new Date(offerAcceptedAt).toLocaleString() : '')
+  const [signedName, setSignedName] = useState(offerSignedName || '')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [signError, setSignError] = useState('')
 
   useEffect(() => {
     if (isOpen && signMode === 'draw') {
@@ -87,9 +99,23 @@ export function OfferLetterModal({
     setHasDrawnSignature(false)
   }
 
-  const handleConfirmSign = () => {
-    setIsSigned(true)
-    setSignatureTimestamp(new Date().toLocaleString())
+  const handleConfirmSign = async () => {
+    setIsSubmitting(true)
+    setSignError('')
+    try {
+      const response = await api.post(`/applications/${applicationId}/accept-offer`, {
+        signature_name: signMode === 'type' ? typedSignName.trim() : candidateName,
+        signature_mode: signMode,
+      })
+      setIsSigned(true)
+      setSignedName(response.data.offer_signed_name)
+      setSignatureTimestamp(new Date(response.data.offer_accepted_at).toLocaleString())
+      onSigned()
+    } catch (err: any) {
+      setSignError(err.response?.data?.detail || 'Unable to accept this offer. Please try again.')
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const handlePrintDownload = () => {
@@ -170,7 +196,7 @@ export function OfferLetterModal({
               {isSigned ? (
                 <div className="mt-1 space-y-0.5">
                   <span className="text-sm font-serif italic font-bold text-indigo-600 dark:text-indigo-400 block">
-                    {typedSignName || candidateName}
+                    {signedName || typedSignName || candidateName}
                   </span>
                   <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1 sm:justify-end">
                     <CheckCircle2 className="w-2.5 h-2.5" />
@@ -260,6 +286,7 @@ export function OfferLetterModal({
               />
             )}
 
+            {signError && <p className="text-xs text-rose-600 font-medium" role="alert">{signError}</p>}
             <div className="pt-2 flex justify-end gap-2">
               <Button size="sm" variant="outline" onClick={onClose}>
                 Cancel
@@ -268,7 +295,8 @@ export function OfferLetterModal({
                 size="sm"
                 variant="primary"
                 onClick={handleConfirmSign}
-                disabled={signMode === 'draw' ? !hasDrawnSignature : !typedSignName.trim()}
+                isLoading={isSubmitting}
+                disabled={isSubmitting || (signMode === 'draw' ? !hasDrawnSignature : !typedSignName.trim())}
                 leftIcon={<ShieldCheck className="w-3.5 h-3.5" />}
               >
                 Apply E-Signature & Accept

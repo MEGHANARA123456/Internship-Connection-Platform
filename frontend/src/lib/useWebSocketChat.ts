@@ -21,7 +21,10 @@ export function useWebSocketChat(userId?: number) {
     const wsUrl = `${protocol}//${host}:8010/api/v1/ws/chat/${userId}`
 
     let socket: WebSocket | null = null
-    let reconnectTimeout: any = null
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
+    let reconnectAttempts = 0
+    let isActive = true
+    const maxReconnectAttempts = 8
 
     const connect = () => {
       try {
@@ -29,6 +32,7 @@ export function useWebSocketChat(userId?: number) {
         socketRef.current = socket
 
         socket.onopen = () => {
+          reconnectAttempts = 0
           setIsConnected(true)
         }
 
@@ -64,7 +68,10 @@ export function useWebSocketChat(userId?: number) {
 
         socket.onclose = () => {
           setIsConnected(false)
-          reconnectTimeout = setTimeout(connect, 3000)
+          if (!isActive || reconnectAttempts >= maxReconnectAttempts) return
+          const delay = Math.min(1000 * 2 ** reconnectAttempts, 30000)
+          reconnectAttempts += 1
+          reconnectTimeout = setTimeout(connect, delay)
         }
 
         socket.onerror = () => {
@@ -78,8 +85,14 @@ export function useWebSocketChat(userId?: number) {
     connect()
 
     return () => {
-      if (reconnectTimeout) clearTimeout(reconnectTimeout)
-      if (socket) socket.close()
+      isActive = false
+      if (reconnectTimeout !== null) clearTimeout(reconnectTimeout)
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.close()
+      } else if (socket?.readyState === WebSocket.CONNECTING) {
+        const connectingSocket = socket
+        connectingSocket.onopen = () => connectingSocket.close()
+      }
     }
   }, [userId])
 

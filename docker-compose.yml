@@ -28,7 +28,7 @@ services:
       RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
       MAX_RESUME_SIZE_MB: ${MAX_RESUME_SIZE_MB:-5}
       RESUME_STORAGE_PATH: ${RESUME_STORAGE_PATH:-/var/lib/internship-platform/resumes}
-      ADMIN_SIGNUP_KEY: ${ADMIN_SIGNUP_KEY:-change-admin-signup-key}
+      ADMIN_SIGNUP_KEY: ${ADMIN_SIGNUP_KEY:?Set ADMIN_SIGNUP_KEY in .env}
     ports: ["${BACKEND_PORT:-8000}:8000"]
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')\""]

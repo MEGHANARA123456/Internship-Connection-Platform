@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     resume_storage_path: str = "storage/resumes"
     rate_limit_requests: int = 120
     rate_limit_window_seconds: int = 60
-    admin_signup_key: str = "change-admin-signup-key"
+    admin_signup_key: str
     gemini_api_key: str | None = None
     require_email_verification: bool = True
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

@@ -12,7 +12,6 @@ import {
   PlusCircle,
   Building,
   Home,
-  GraduationCap,
 } from 'lucide-react'
 
 export function BottomTabBar() {
@@ -52,7 +51,6 @@ export function BottomTabBar() {
     return [
       { to: '/', label: 'Home', icon: Home },
       { to: '/opportunities', label: 'Internships', icon: Briefcase },
-      { to: '/college/dashboard', label: 'College', icon: GraduationCap },
       { to: '/login', label: 'Sign In', icon: User },
     ]
   }

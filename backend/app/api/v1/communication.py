@@ -5,6 +5,7 @@
 from datetime import datetime, timezone
 import logging
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, select, update
@@ -18,6 +19,13 @@ from app.services.mail import send_dev_email
 router = APIRouter(tags=["communication"])
 logger = logging.getLogger(__name__)
 participant = Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))]
+
+
+def _is_external_url(value: str | None) -> bool:
+    if not value:
+        return False
+    parsed = urlsplit(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 async def get_conversation(conversation_id: int, user: User, db: DbSession) -> Conversation:
@@ -280,12 +288,18 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
     if student:
         scheduled_at = data.scheduled_at
         formatted_time = scheduled_at.strftime("%A, %B %d, %Y at %I:%M %p") if scheduled_at else "your selected time"
-        meeting_label = data.meeting_link or "the InternSphere video room"
+        has_external_link = _is_external_url(data.meeting_link)
+        meeting_details = f"Meeting link: {data.meeting_link}" if has_external_link else "Join via the InternSphere video room"
+        meeting_link_html = (
+            f'<p style="margin: 4px 0; color: #1e293b;"><strong>Meeting link:</strong> <a href="{data.meeting_link}" style="color: #4338ca;">{data.meeting_link}</a></p>'
+            if has_external_link
+            else '<p style="margin: 4px 0; color: #1e293b;">Join via the InternSphere video room.</p>'
+        )
         notification_title = "Interview invitation"
         notification_body = (
             f"You have been invited to a {data.interview_type or 'Interview'} for {internship.title if internship else 'the role'} with "
             f"{company_profile.company_name if company_profile else 'the hiring team'} on {formatted_time}. "
-            f"Meeting link: {meeting_label}."
+            f"{meeting_details}."
         )
         html_body = f"""
                 <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; background: #f8fafc; padding: 24px; color: #0f172a;">
@@ -299,7 +313,7 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
                             <p style="margin: 0 0 8px; font-size: 13px; color: #4338ca; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Details</p>
                             <p style="margin: 4px 0; color: #1e293b;"><strong>Interview type:</strong> {data.interview_type or 'Interview'}</p>
                             <p style="margin: 4px 0; color: #1e293b;"><strong>Scheduled:</strong> {formatted_time}</p>
-                            <p style="margin: 4px 0; color: #1e293b;"><strong>Meeting link:</strong> <a href="{meeting_label}" style="color: #4338ca;">{meeting_label}</a></p>
+                            {meeting_link_html}
                             {data.notes and f"<p style='margin: 4px 0; color: #1e293b;'><strong>Notes:</strong> {data.notes}</p>"}
                         </div>
                         <p style="margin: 0; color: #475569; line-height: 1.6;">Please join a few minutes early and have your resume and project notes ready for discussion.</p>

@@ -4,16 +4,19 @@
 
 from datetime import date, datetime, timezone
 from typing import Annotated
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 
 from app.api.v1.dependencies import DbSession, get_current_user_optional, require_roles
-from app.models import CompanyProfile, Internship, SavedInternship, StudentProfile, User, UserRole
+from app.models import Application, CompanyProfile, Internship, Notification, SavedInternship, StudentProfile, User, UserRole
 from app.schemas.internship import InternshipInput, InternshipPage, InternshipResponse
 from app.services.ai import compute_match_score_fast
+from app.services.mail import send_dev_email
 
 router = APIRouter(prefix="/internships", tags=["internships"])
+logger = logging.getLogger(__name__)
 company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]
 student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]
 admin_only = Annotated[User, Depends(require_roles(UserRole.ADMIN))]
@@ -239,8 +242,57 @@ async def change_status(internship_id: int, target: str, user: company_only, db:
     item = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id))
     if item is None: raise HTTPException(404, "Internship not found")
     if target not in {"PENDING_APPROVAL", "CLOSED"} or not transition_allowed(item.status, target): raise HTTPException(409, f"Cannot move {item.status} to {target}")
-    item.status = target; await db.commit(); await db.refresh(item)
     cname = await get_company_name(item.company_id, db)
+    notifications = []
+    if target == "CLOSED":
+        applications = list(await db.scalars(
+            select(Application).where(
+                Application.internship_id == item.id,
+                Application.status.not_in(["WITHDRAWN", "REJECTED"]),
+            )
+        ))
+        for application in applications:
+            if application.status in {"APPLIED", "UNDER_REVIEW"}:
+                body = f"{cname} has closed {item.title}. No further review decisions will be made on this posting."
+            elif application.status in {"SHORTLISTED", "INTERVIEW_SCHEDULED"}:
+                body = f"{cname} has closed {item.title}. Your application is in progress; please contact the company for next steps."
+            else:
+                body = f"{cname} has closed {item.title} to new applicants. Your offer is unaffected."
+            db.add(Notification(
+                user_id=application.student_id,
+                notification_type="INTERNSHIP_CLOSED",
+                title="Internship closed",
+                body=body,
+            ))
+            notifications.append((application, body))
+    item.status = target
+    await db.commit()
+    await db.refresh(item)
+    for application, body in notifications:
+        student = await db.scalar(select(User).where(User.id == application.student_id))
+        if student:
+            await send_dev_email(
+                student.email,
+                "Internship closed",
+                body,
+                message_type="INTERNSHIP_CLOSED",
+                db=db,
+            )
+        try:
+            from app.api.v1.ws import manager
+            await manager.send_personal_message(
+                application.student_id,
+                {
+                    "type": "internship_closed",
+                    "application_id": application.id,
+                    "internship_id": item.id,
+                    "status": application.status,
+                    "title": "Internship closed",
+                    "body": body,
+                },
+            )
+        except Exception as exc:
+            logger.warning("Could not send internship closure notification for application %s: %s", application.id, exc)
     return output(item, cname)
 
 
