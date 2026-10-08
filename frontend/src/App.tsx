@@ -1,7 +1,52 @@
+import { useEffect, useRef } from 'react'
 import { Route, Routes, Navigate } from 'react-router-dom'
 import { Navbar } from './components/layout/Navbar'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { api } from './api/client'
 import { useAuthStore } from './store/auth'
+
+export function SessionIdentityVerifier() {
+  const session = useAuthStore((state) => state.session)
+  const setSession = useAuthStore((state) => state.setSession)
+  const identityKey = session
+    ? `${session.userId ?? ''}:${session.email?.trim().toLowerCase() ?? ''}`
+    : null
+  const verificationKey = session && identityKey
+    ? `${identityKey}:${session.accessToken}`
+    : null
+  const verifiedSessionRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!session?.accessToken || !verificationKey || !identityKey) {
+      verifiedSessionRef.current = null
+      return
+    }
+    if (verifiedSessionRef.current === verificationKey) return
+
+    verifiedSessionRef.current = verificationKey
+    const accessToken = session.accessToken
+    void api.get('/auth/me')
+      .then(({ data }) => {
+        if (data?.id == null || !data.email) return
+        const currentSession = useAuthStore.getState().session
+        if (currentSession?.accessToken !== accessToken) return
+
+        const serverIdentityKey = `${data.id}:${String(data.email).trim().toLowerCase()}`
+        verifiedSessionRef.current = `${serverIdentityKey}:${accessToken}`
+        setSession({
+          ...currentSession,
+          userId: data.id,
+          email: data.email,
+          name: data.name ?? undefined,
+        })
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to verify the current session with /auth/me.', error)
+      })
+  }, [identityKey, verificationKey, session?.accessToken, setSession])
+
+  return null
+}
 
 function DashboardRedirect() {
   const { session } = useAuthStore()
@@ -17,7 +62,6 @@ import {
   LoginPage,
   StudentRegisterPage,
   CompanyRegisterPage,
-  AdminRegisterPage,
   ForgotPasswordPage,
   ResetPasswordPage,
   VerifyEmailPage,
@@ -27,6 +71,7 @@ import {
   OpportunitiesPage,
   ApplicationsPage,
   StudentProfilePage,
+  StudentAnalyticsPage,
 } from './pages/StudentPages'
 
 import {
@@ -72,6 +117,7 @@ export default function App() {
   return (
     <MobileViewSimulator>
       <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans antialiased transition-colors">
+        <SessionIdentityVerifier />
         <Navbar />
 
         <main className="flex-1 flex flex-col">
@@ -88,7 +134,6 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register-student" element={<StudentRegisterPage />} />
             <Route path="/register-company" element={<CompanyRegisterPage />} />
-            <Route path="/register-admin" element={<AdminRegisterPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/verify" element={<VerifyEmailPage />} />
@@ -99,6 +144,8 @@ export default function App() {
 
             {/* Student Dedicated Routes */}
             <Route element={<ProtectedRoute allowedRoles={['STUDENT']} />}>
+              <Route path="/saved" element={<OpportunitiesPage initialTab="saved" />} />
+              <Route path="/student/analytics" element={<StudentAnalyticsPage />} />
               <Route path="/applications" element={<ApplicationsPage />} />
               <Route path="/profile/student" element={<StudentProfilePage />} />
             </Route>
@@ -121,7 +168,7 @@ export default function App() {
               <Route path="/notifications" element={<NotificationsPage />} />
             </Route>
 
-            {/* Admin Oversight Console */}
+            {/* Admin Oversight Dashboard */}
             <Route path="/admin/dashboard" element={<Navigate to="/admin" replace />} />
             <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
               <Route path="/admin" element={<AdminDashboardPage />} />

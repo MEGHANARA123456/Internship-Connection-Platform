@@ -1,4 +1,11 @@
 import { create } from 'zustand'
+import {
+  deleteCookie,
+  getCookie,
+  getCookieConsent,
+  setCookie,
+  THEME_COOKIE_KEY,
+} from '../lib/cookies'
 
 export type Theme = 'light' | 'dark' | 'system'
 
@@ -25,7 +32,14 @@ function applyTheme(theme: Theme): boolean {
   return isDark
 }
 
-const initialTheme = ((typeof localStorage !== 'undefined' && localStorage.getItem('theme')) as Theme) || 'system'
+function parseTheme(theme: string | null): Theme | null {
+  return theme === 'light' || theme === 'dark' || theme === 'system' ? theme : null
+}
+
+const hasFunctionalConsent = () => getCookieConsent()?.functional === true
+const cookieTheme = hasFunctionalConsent() ? parseTheme(getCookie(THEME_COOKIE_KEY)) : null
+const storedTheme = typeof localStorage !== 'undefined' ? parseTheme(localStorage.getItem('theme')) : null
+const initialTheme = cookieTheme ?? storedTheme ?? 'system'
 const initialIsDark = applyTheme(initialTheme)
 
 export const useThemeStore = create<ThemeState>((set) => ({
@@ -34,6 +48,11 @@ export const useThemeStore = create<ThemeState>((set) => ({
   setTheme: (theme: Theme) => {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem('theme', theme)
+    }
+    if (hasFunctionalConsent() && (theme === 'light' || theme === 'dark')) {
+      setCookie(THEME_COOKIE_KEY, theme, 365)
+    } else {
+      deleteCookie(THEME_COOKIE_KEY)
     }
     const isDark = applyTheme(theme)
     set({ theme, isDark })

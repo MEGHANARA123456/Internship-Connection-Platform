@@ -37,6 +37,7 @@ jobs:
           JWT_SECRET: test-jwt-secret-key-for-ci-runs-only
           SMTP_HOST: localhost
           SMTP_PORT: 1025
+          RATE_LIMIT_REQUESTS: 100000
 
   frontend-check:
     name: Frontend Typecheck, Tests & Build

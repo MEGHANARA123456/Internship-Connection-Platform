@@ -20,6 +20,50 @@ vi.mock('../../api/client', () => ({
 }))
 
 describe('Dashboard Features & Buttons', () => {
+  it('switches analytics views from the accessible view dropdown', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({
+      data: {
+        role: 'STUDENT',
+        has_activity: false,
+        funnel: { applied: 0, screened: 0, interviews: 0, offers: 0 },
+        domains: [],
+        monthly_trends: [],
+        total_active_internships: 0,
+        total_verified_students: 0,
+        total_companies: 0,
+      },
+    })
+
+    render(
+      <BrowserRouter>
+        <DesktopAnalysisVisuals variant="student" title="View dropdown test" />
+      </BrowserRouter>
+    )
+
+    const trigger = await screen.findByRole('button', { name: 'Analytics view: Pipeline Funnel' })
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu')
+    fireEvent.click(trigger)
+
+    const menu = screen.getByRole('menu', { name: 'Analytics views' })
+    expect(menu).toBeDefined()
+    const funnelOption = screen.getByRole('menuitem', { name: /Pipeline Funnel/ })
+    fireEvent.keyDown(funnelOption, { key: 'ArrowDown' })
+    const trendsOption = screen.getByRole('menuitem', { name: /Activity Trends/ })
+    expect(document.activeElement).toBe(trendsOption)
+    fireEvent.keyDown(trendsOption, { key: 'Escape' })
+    expect(screen.queryByRole('menu', { name: 'Analytics views' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+
+    fireEvent.click(trigger)
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByRole('menu', { name: 'Analytics views' })).toBeNull()
+
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('menuitem', { name: /Role Domains/ }))
+    expect(screen.queryByRole('menu', { name: 'Analytics views' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Analytics view: Role Domains' })).toBeDefined()
+  })
+
   it('renders DesktopAnalysisVisuals with a working Refresh button on analysis top', async () => {
     vi.mocked(api.get).mockResolvedValueOnce({
       data: {
@@ -140,7 +184,7 @@ describe('Dashboard Features & Buttons', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText('Platform Admin Console')).toBeDefined()
+      expect(screen.getByText('Platform Admin Dashboard')).toBeDefined()
     })
 
     // Top dashboard refresh button

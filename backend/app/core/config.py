@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@db:5432/internship_platform"
     secret_key: str = "change-me-in-development"
     frontend_url: str = "http://localhost:5174"
+    google_client_id: str | None = None
+    admin_emails: str = ""
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
     mailpit_host: str = "127.0.0.1"
@@ -25,11 +27,12 @@ class Settings(BaseSettings):
     mail_timeout: int = 15
     max_resume_size_mb: int = 5
     resume_storage_path: str = "storage/resumes"
+    company_document_storage_path: str = "storage/company_documents"
     rate_limit_requests: int = 120
     rate_limit_window_seconds: int = 60
-    admin_signup_key: str
     gemini_api_key: str | None = None
     require_email_verification: bool = True
+    require_company_email_verification: bool = False
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

@@ -1,9 +1,11 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import get_current_user, get_db
 from app.main import app
 from app.models import User, UserRole
+from app.models.base import Base
 
 
 @pytest.mark.anyio
@@ -17,10 +19,21 @@ async def test_health_check() -> None:
 
 @pytest.fixture
 async def client():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async def override_db():
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = lambda: User(email="student@example.com", role=UserRole.STUDENT, is_active=True)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as test_client:
         yield test_client
     app.dependency_overrides.clear()
+    await engine.dispose()
 
 
 @pytest.mark.anyio

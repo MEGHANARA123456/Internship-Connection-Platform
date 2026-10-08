@@ -9,7 +9,8 @@ import { Input } from '../components/ui/Input'
 import { Textarea } from '../components/ui/Textarea'
 import { Button } from '../components/ui/Button'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/Card'
-import { CheckCircle2, AlertCircle, ShieldCheck, KeyRound } from 'lucide-react'
+import { Modal } from '../components/ui/Modal'
+import { CheckCircle2, AlertCircle, KeyRound, UploadCloud, FileText, X } from 'lucide-react'
 import { GoogleSignInButton } from '../components/auth/GoogleSignInButton'
 import { Logo } from '../components/layout/Logo'
 
@@ -38,12 +39,6 @@ const companyRegisterSchema = z.object({
   industry: z.string().min(2, 'Industry is required (e.g. Technology, Finance)'),
   website: z.string().url('Please enter a valid URL (e.g. https://company.com)').optional().or(z.literal('')),
   description: z.string().optional().or(z.literal('')),
-})
-
-const adminRegisterSchema = z.object({
-  email: z.string().email('Valid email required'),
-  password: z.string().min(8, 'Password must be at least 8 characters long'),
-  signup_key: z.string().min(16, 'Bootstrap key must be at least 16 characters'),
 })
 
 // --- Auth Layout Wrapper ---
@@ -83,7 +78,6 @@ function AuthCardLayout({
 export function LoginPage() {
   const navigate = useNavigate()
   const setSession = useAuthStore((state) => state.setSession)
-  const [portal, setPortal] = useState<'STUDENT' | 'COMPANY' | 'ADMIN'>('STUDENT')
   const [serverError, setServerError] = useState('')
   const [resendingVerification, setResendingVerification] = useState(false)
   const [resendStatus, setResendStatus] = useState('')
@@ -95,6 +89,20 @@ export function LoginPage() {
   const [mfaError, setMfaError] = useState('')
   const [resendMfaLoading, setResendMfaLoading] = useState(false)
   const [resendMfaStatus, setResendMfaStatus] = useState('')
+  const [demoMailOpen, setDemoMailOpen] = useState(false)
+  const [postLoginPath, setPostLoginPath] = useState('/opportunities')
+  const demoMode = import.meta.env.VITE_DEMO_MODE === 'true'
+  const mailpitUrl = import.meta.env.VITE_MAILPIT_URL || 'http://localhost:8025'
+
+  const finishLogin = (role: string, isFirstLogin = false) => {
+    const target = role === 'ADMIN' ? '/admin' : role === 'COMPANY' ? '/company/jobs' : '/opportunities'
+    if (demoMode && role === 'COMPANY' && isFirstLogin) {
+      setPostLoginPath(target)
+      setDemoMailOpen(true)
+      return false
+    }
+    navigate(target)
+  }
 
   const {
     register,
@@ -142,7 +150,7 @@ export function LoginPage() {
       setSession({
         accessToken: access_token,
         refreshToken: refresh_token,
-        role: role ?? portal,
+        role,
         userId: user_id,
         email: mfaChallenge.email,
         name: name,
@@ -152,10 +160,7 @@ export function LoginPage() {
         refreshTokenExpiresIn: refresh_token_expires_in ?? null,
       })
 
-      // Route according to role
-      if (role === 'ADMIN') navigate('/admin')
-      else if (role === 'COMPANY') navigate('/company/jobs')
-      else navigate('/opportunities')
+      finishLogin(role, res.data?.is_first_login === true)
     } catch (err: any) {
       setMfaError(err.response?.data?.detail || 'Invalid or expired 2FA code. Please try again.')
     } finally {
@@ -172,7 +177,6 @@ export function LoginPage() {
       const res = await api.post('/auth/login', {
         ...rawValues,
         email: (mfaChallenge?.email || rawValues.email || '').trim().toLowerCase(),
-        portal,
       })
       if (res.data?.mfa_ticket) {
         setMfaChallenge({
@@ -197,7 +201,6 @@ export function LoginPage() {
       const response = await api.post('/auth/login', {
         ...data,
         email: data.email.trim().toLowerCase(),
-        portal,
       })
 
       // Check if MFA is required for this account
@@ -216,7 +219,7 @@ export function LoginPage() {
       setSession({
         accessToken: access_token,
         refreshToken: refresh_token,
-        role: role ?? portal,
+        role,
         userId: user_id,
         email: data.email,
         name: name,
@@ -226,10 +229,7 @@ export function LoginPage() {
         refreshTokenExpiresIn: refresh_token_expires_in ?? null,
       })
 
-      // Route according to role
-      if (role === 'ADMIN') navigate('/admin')
-      else if (role === 'COMPANY') navigate('/company/jobs')
-      else navigate('/opportunities')
+      finishLogin(role, response.data?.is_first_login === true)
     } catch (err: any) {
       const detail = err.response?.data?.detail
       if (detail) {
@@ -341,8 +341,8 @@ export function LoginPage() {
 
   return (
     <AuthCardLayout
-      title={`Sign In to ${portal === 'STUDENT' ? 'Student Portal' : portal === 'COMPANY' ? 'Recruiter Portal' : 'Admin Console'}`}
-      description="Enter your registered credentials to access your dashboard and opportunities."
+      title="Sign In"
+      description="Enter your registered credentials to access your dashboard."
       footer={
         <div className="text-center space-y-1">
           <p>
@@ -355,67 +355,10 @@ export function LoginPage() {
               Register company
             </Link>
           </p>
-          <p className="text-[11px] text-slate-400">
-            Platform operations?{' '}
-            <Link to="/register-admin" className="text-purple-600 hover:underline font-semibold">
-              Admin setup
-            </Link>
-          </p>
         </div>
       }
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        {/* Role Portal Selector */}
-        <div className="space-y-1">
-          <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-            Select Your Login Portal
-          </label>
-          <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
-            <button
-              type="button"
-              onClick={() => {
-                setPortal('STUDENT')
-                setServerError('')
-              }}
-              className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all text-center ${
-                portal === 'STUDENT'
-                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              🎓 Student
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPortal('COMPANY')
-                setServerError('')
-              }}
-              className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all text-center ${
-                portal === 'COMPANY'
-                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              🏢 Recruiter
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPortal('ADMIN')
-                setServerError('')
-              }}
-              className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all text-center ${
-                portal === 'ADMIN'
-                  ? 'bg-white dark:bg-slate-900 text-purple-600 dark:text-purple-400 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              🛡️ Admin
-            </button>
-          </div>
-        </div>
-
         {serverError && (
           <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg space-y-2 text-xs text-rose-700 font-medium">
             <div className="flex items-start gap-2">
@@ -449,7 +392,7 @@ export function LoginPage() {
         <Input
           label="Email address"
           type="email"
-          placeholder={portal === 'COMPANY' ? 'recruiter@company.com' : portal === 'ADMIN' ? 'admin@internsphere.internal' : 'student@university.edu'}
+          placeholder="you@example.com"
           error={errors.email?.message}
           {...register('email')}
         />
@@ -472,7 +415,7 @@ export function LoginPage() {
         </div>
 
         <Button type="submit" variant="primary" className="w-full" isLoading={isSubmitting}>
-          Sign in as {portal === 'STUDENT' ? 'Student' : portal === 'COMPANY' ? 'Recruiter' : 'Admin'}
+          Sign In
         </Button>
 
         <div className="relative my-4">
@@ -484,8 +427,30 @@ export function LoginPage() {
           </div>
         </div>
 
-        <GoogleSignInButton role={portal} />
+        <GoogleSignInButton />
       </form>
+      <Modal
+        isOpen={demoMailOpen}
+        onClose={() => {
+          setDemoMailOpen(false)
+          navigate(postLoginPath)
+        }}
+        title="Your emails are delivered to the demo mail inbox"
+        description="After this, find all your emails under Notifications & Mailbox."
+      >
+        <div className="space-y-4">
+          <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-300">Open the demo inbox to view your company emails.</p>
+          <a href={mailpitUrl} target="_blank" rel="noreferrer" className="inline-flex w-full items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">
+            Open mail inbox
+          </a>
+          <Button type="button" variant="outline" className="w-full" onClick={() => {
+            setDemoMailOpen(false)
+            navigate(postLoginPath)
+          }}>
+            Continue to company dashboard
+          </Button>
+        </div>
+      </Modal>
     </AuthCardLayout>
   )
 }
@@ -583,6 +548,7 @@ export function StudentRegisterPage() {
           <Input
             label="Full name"
             placeholder="Alex Smith"
+            autoComplete="off"
             error={errors.full_name?.message}
             {...register('full_name')}
           />
@@ -680,6 +646,15 @@ export function CompanyRegisterPage() {
   const navigate = useNavigate()
   const [serverError, setServerError] = useState('')
   const [createdCompany, setCreatedCompany] = useState<any>(null)
+  const [step, setStep] = useState<1 | 2>(1)
+  const [documents, setDocuments] = useState<Record<string, File | null>>({})
+  const [documentErrors, setDocumentErrors] = useState<Record<string, string>>({})
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({})
+  const [uploadedDocumentTypes, setUploadedDocumentTypes] = useState<string[]>([])
+  const [documentsSubmitted, setDocumentsSubmitted] = useState(false)
+  const [submittingDocuments, setSubmittingDocuments] = useState(false)
+  const [demoMailOpen, setDemoMailOpen] = useState(false)
+  const [companyValues, setCompanyValues] = useState<z.infer<typeof companyRegisterSchema> | null>(null)
   const [emailStatus, setEmailStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle')
   const [emailClassification, setEmailClassification] = useState('')
 
@@ -695,7 +670,7 @@ export function CompanyRegisterPage() {
     const val = e.target.value.trim()
     if (!val || !val.includes('@')) {
       setEmailStatus('idle')
-      return
+      return false
     }
     setEmailStatus('checking')
     try {
@@ -715,16 +690,128 @@ export function CompanyRegisterPage() {
     }
   }
 
+  const addDocument = (type: string, file?: File) => {
+    if (!file) return
+    const extension = file.name.split('.').pop()?.toLowerCase()
+    const mimeTypes: Record<string, string> = {
+      pdf: 'application/pdf',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+    }
+    if (!extension || mimeTypes[extension] !== file.type) {
+      setDocumentErrors((errors) => ({ ...errors, [type]: 'Choose a PDF, JPG, or PNG document.' }))
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setDocumentErrors((errors) => ({ ...errors, [type]: 'File must be 5 MB or smaller.' }))
+      return
+    }
+    setDocuments((current) => ({ ...current, [type]: file }))
+    setDocumentErrors((errors) => ({ ...errors, [type]: '' }))
+    setUploadProgress((current) => ({ ...current, [type]: 0 }))
+    setUploadedDocumentTypes((current) => current.filter((uploadedType) => uploadedType !== type))
+  }
+
+  const submitDocuments = async (): Promise<boolean> => {
+    const businessRegistration = documents.BUSINESS_REGISTRATION
+    if (!businessRegistration) {
+      setDocumentErrors((errors) => ({ ...errors, BUSINESS_REGISTRATION: 'Business registration document is required.' }))
+      return false
+    }
+    setSubmittingDocuments(true)
+    setServerError('')
+    try {
+      for (const [type, file] of Object.entries(documents)) {
+        if (!file) continue
+        if (uploadedDocumentTypes.includes(type)) continue
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('document_type', type)
+        await api.post('/profiles/company/documents', formData, {
+          onUploadProgress: (event) => {
+            if (event.total) {
+              setUploadProgress((current) => ({ ...current, [type]: Math.round((event.loaded / event.total!) * 100) }))
+            }
+          },
+        })
+        setUploadedDocumentTypes((current) => current.includes(type) ? current : [...current, type])
+        setUploadProgress((current) => ({ ...current, [type]: 100 }))
+      }
+      setDocumentsSubmitted(true)
+      return true
+    } catch (err: any) {
+      setServerError(err.response?.data?.detail || 'We could not upload all documents. Your files are still selected; please retry.')
+      return false
+    } finally {
+      setSubmittingDocuments(false)
+    }
+  }
+
+  const loginAndUpload = async () => {
+    const registrationData = companyValues
+    if (!registrationData) {
+      setServerError('Your saved registration details are unavailable. Please sign in to continue.')
+      return
+    }
+    setSubmittingDocuments(true)
+    setServerError('')
+    try {
+      const response = await api.post('/auth/login', {
+        email: registrationData.email.trim().toLowerCase(),
+        password: registrationData.password,
+      })
+      const { access_token, refresh_token, role, user_id, name, access_token_expires_in, refresh_token_expires_in, access_token_expires_at, refresh_token_expires_at } = response.data
+      if (role !== 'COMPANY') throw new Error('The returned account is not a company account.')
+      useAuthStore.getState().setSession({
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        role,
+        userId: user_id,
+        email: registrationData.email.trim().toLowerCase(),
+        name,
+        accessTokenExpiresAt: access_token_expires_at ?? null,
+        refreshTokenExpiresAt: refresh_token_expires_at ?? null,
+        accessTokenExpiresIn: access_token_expires_in ?? null,
+        refreshTokenExpiresIn: refresh_token_expires_in ?? null,
+      })
+      const submitted = await submitDocuments()
+      if (submitted && import.meta.env.VITE_DEMO_MODE === 'true' && response.data?.is_first_login === true) {
+        setDemoMailOpen(true)
+      }
+    } catch (err: any) {
+      setServerError(err.response?.data?.detail || err.message || 'Your account was created, but sign-in or document upload did not complete. Your selected files are retained; retry to continue.')
+    } finally {
+      setSubmittingDocuments(false)
+    }
+  }
+
   const onSubmit = async (data: z.infer<typeof companyRegisterSchema>) => {
+    if (step === 1) {
+      setCompanyValues(data)
+      setStep(2)
+      setServerError('')
+      return
+    }
+    if (!documents.BUSINESS_REGISTRATION) {
+      setDocumentErrors((errors) => ({ ...errors, BUSINESS_REGISTRATION: 'Business registration document is required.' }))
+      return
+    }
+    if (createdCompany) {
+      await loginAndUpload()
+      return
+    }
+    const registrationData = companyValues || data
     setServerError('')
     try {
       const res = await api.post('/auth/register/company', {
-        ...data,
-        email: data.email.trim().toLowerCase(),
-        website: data.website || null,
-        description: data.description || null,
+        ...registrationData,
+        email: registrationData.email.trim().toLowerCase(),
+        website: registrationData.website || null,
+        description: registrationData.description || null,
       })
       setCreatedCompany(res.data)
+      await loginAndUpload()
     } catch (err: any) {
       const detail = err.response?.data?.detail
       if (detail) {
@@ -750,22 +837,46 @@ export function CompanyRegisterPage() {
         </p>
       }
     >
-      {createdCompany ? (
+      {createdCompany && documentsSubmitted ? (
         <div className="p-6 text-center space-y-4">
           <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto" />
-          <h3 className="text-base font-semibold text-slate-900">Email Verification Sent</h3>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            We sent an email verification link to <strong>{createdCompany.email}</strong>. Please check your corporate inbox to activate your recruiter account.
+          <h3 className="text-base font-semibold text-slate-900 dark:text-white">Submitted for admin verification</h3>
+          <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+            Your company account and verification documents have been submitted to our admins for review.
           </p>
-          <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700 font-medium">
-            Your verification email has been sent. Check your registered inbox to continue.
+          <div className="p-3 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 rounded-lg text-xs text-indigo-700 dark:text-indigo-300 font-medium">
+            You can sign in any time to check verification status and manage your company profile.
           </div>
-          <Button variant="primary" className="w-full" onClick={() => navigate('/login')}>
-            Proceed to Sign In
+          <Button variant="primary" className="w-full" onClick={() => navigate('/company/jobs')}>
+            Continue to company dashboard
           </Button>
+          <Modal
+            isOpen={demoMailOpen}
+            onClose={() => setDemoMailOpen(false)}
+            title="Welcome to the company demo"
+            description="Use the demo inbox to view onboarding and verification emails."
+          >
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600 dark:text-slate-300">Mail is captured locally in demo mode and is not sent to a real inbox.</p>
+              <a href={import.meta.env.VITE_MAILPIT_URL || 'http://localhost:8025'} target="_blank" rel="noreferrer" className="inline-flex w-full items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">Open demo mail inbox</a>
+              <Button type="button" variant="outline" className="w-full" onClick={() => setDemoMailOpen(false)}>Continue</Button>
+            </div>
+          </Modal>
         </div>
       ) : (
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-3.5">
+          <div className="mb-4 flex items-center gap-2" aria-label={`Registration step ${step} of 2`}>
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${step === 1 ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'}`}>1. Company details</span>
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${step === 2 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>2. Documents</span>
+          </div>
+          {createdCompany && !documentsSubmitted && (
+            <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              Your company account is already created. Sign in and retry uploading the selected files; do not register again.
+              {serverError.toLowerCase().includes('verification') && (
+                <p className="mt-2"><a href="/verify" target="_blank" rel="noreferrer" className="font-semibold underline">Verify your email in another tab</a>, then return here to retry. Your selected files will remain available.</p>
+              )}
+            </div>
+          )}
           {serverError && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-2 text-xs text-rose-700 font-medium">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -773,6 +884,7 @@ export function CompanyRegisterPage() {
             </div>
           )}
 
+          {step === 1 && <>
           <Input
             label="Company name"
             placeholder="Acme Inc."
@@ -836,7 +948,7 @@ export function CompanyRegisterPage() {
           />
 
           <Button type="submit" variant="primary" className="w-full mt-2" isLoading={isSubmitting}>
-            Register organization
+            Continue to verification documents
           </Button>
 
           <div className="relative my-4">
@@ -849,98 +961,68 @@ export function CompanyRegisterPage() {
           </div>
 
           <GoogleSignInButton role="COMPANY" buttonText="Sign up with Google" />
-        </form>
-      )}
-    </AuthCardLayout>
-  )
-}
+          </>}
 
-// --- 4. Admin Registration ---
-
-export function AdminRegisterPage() {
-  const navigate = useNavigate()
-  const [successMsg, setSuccessMsg] = useState('')
-  const [serverError, setServerError] = useState('')
-
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<z.infer<typeof adminRegisterSchema>>({
-    resolver: zodResolver(adminRegisterSchema),
-  })
-
-  const onSubmit = async (data: z.infer<typeof adminRegisterSchema>) => {
-    setServerError('')
-    try {
-      await api.post('/auth/register/admin', data)
-      setSuccessMsg('Administrator account provisioned successfully.')
-      setTimeout(() => navigate('/login'), 1500)
-    } catch {
-      setServerError('Admin registration failed. Please ensure the admin bootstrap key is correct.')
-    }
-  }
-
-  return (
-    <AuthCardLayout
-      title="Provision Admin Account"
-      description="Enter the secret bootstrap key to register platform oversight administrator."
-      footer={
-        <Link to="/login" className="text-slate-600 hover:underline">
-          Back to sign in
-        </Link>
-      }
-    >
-      {successMsg ? (
-        <div className="p-6 text-center space-y-3">
-          <ShieldCheck className="w-12 h-12 text-purple-600 mx-auto" />
-          <h3 className="text-base font-semibold text-slate-900">Admin Account Active</h3>
-          <p className="text-xs text-slate-600">{successMsg}</p>
-        </div>
-      ) : (
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          {serverError && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700 font-medium">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{serverError}</span>
+          {step === 2 && <>
+            <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">Upload clear company verification documents. PDF, JPG, and PNG files up to 5 MB are accepted. A business registration document is required.</p>
+            {[
+              ['BUSINESS_REGISTRATION', 'Business registration', true],
+              ['GST_OR_PAN', 'GST or PAN document (optional)', false],
+              ['AUTHORIZATION_LETTER', 'Authorization letter (optional)', false],
+              ['OTHER', 'Other supporting document (optional)', false],
+            ].map(([type, label, required]) => {
+              const key = String(type)
+              const file = documents[key]
+              return <div key={key}>
+                <label
+                  htmlFor={`company-doc-${key}`}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    addDocument(key, event.dataTransfer.files?.[0])
+                  }}
+                  className="flex min-h-24 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-center hover:border-indigo-400 dark:border-slate-700 dark:bg-slate-800/60"
+                >
+                  {file ? <FileText className="mb-1 h-5 w-5 text-indigo-600 dark:text-indigo-300" /> : <UploadCloud className="mb-1 h-5 w-5 text-slate-500 dark:text-slate-300" />}
+                  <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">{label}{required && <span className="ml-1 text-rose-600">*</span>}</span>
+                  <span className="mt-1 max-w-full truncate text-[11px] text-slate-500 dark:text-slate-400">{file ? file.name : 'Drag a file here or browse'}</span>
+                  <input
+                    id={`company-doc-${key}`}
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+                    className="sr-only"
+                    onChange={(event) => addDocument(key, event.target.files?.[0])}
+                    aria-label={`Upload ${label}`}
+                  />
+                </label>
+                {file && <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                  <span className="min-w-0 flex-1 truncate">{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB</span>
+                  <button type="button" aria-label={`Remove ${label}`} title={`Remove ${label}`} className="rounded p-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => setDocuments((current) => ({ ...current, [key]: null }))}><X className="h-4 w-4" /></button>
+                </div>}
+                {uploadProgress[key] > 0 && <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${uploadProgress[key]}%` }} /></div>}
+                {documentErrors[key] && <p role="alert" className="mt-1 text-[11px] font-medium text-rose-600">{documentErrors[key]}</p>}
+              </div>
+            })}
+            <div className="flex gap-2 pt-1">
+              {!createdCompany && <Button type="button" variant="outline" className="flex-1" onClick={() => setStep(1)}>Back</Button>}
+              <Button
+                type={createdCompany ? 'button' : 'submit'}
+                variant="primary"
+                className="flex-1"
+                isLoading={isSubmitting || submittingDocuments}
+                onClick={createdCompany ? () => void loginAndUpload() : undefined}
+              >
+                {createdCompany ? 'Retry sign-in and upload' : 'Submit verification'}
+              </Button>
             </div>
-          )}
-
-          <Input
-            label="Admin email"
-            type="email"
-            placeholder="admin@platform.internal"
-            error={errors.email?.message}
-            {...register('email')}
-          />
-
-          <Input
-            label="Password"
-            type="password"
-            placeholder="At least 8 characters"
-            error={errors.password?.message}
-            {...register('password')}
-          />
-
-          <Input
-            label="Admin Signup Key"
-            type="password"
-            placeholder="Enter secure bootstrap key"
-            helperText="Matches ADMIN_SIGNUP_KEY in server environment"
-            error={errors.signup_key?.message}
-            {...register('signup_key')}
-          />
-
-          <Button type="submit" variant="primary" className="w-full bg-purple-600 hover:bg-purple-700" isLoading={isSubmitting}>
-            Provision Administrator
-          </Button>
+          </>}
         </form>
       )}
     </AuthCardLayout>
   )
 }
 
-// --- 5. Forgot Password ---
+// --- 4. Forgot Password ---
 
 // --- 5. Forgot Password & OTP Reset ---
 

@@ -20,7 +20,6 @@ from app.core.config import get_settings
 from app.core.security import create_token, decode_token, hash_password, verify_password
 from app.models import CompanyProfile, EmailVerificationToken, RefreshToken, StudentProfile, User, UserRole
 from app.schemas.auth import (
-    AdminRegister,
     ChangePasswordRequest,
     CheckEmailRequest,
     CompanyRegister,
@@ -44,6 +43,7 @@ from app.schemas.auth import (
     VerifyOtpRequest,
 )
 from app.services.mail import send_dev_email
+from app.services.notify import notify
 from app.services.email_validation import validate_email_format, validate_organization_email, validate_student_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -73,6 +73,8 @@ async def verify_google_credential(
                 res = await client.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={credential}")
                 if res.status_code == 200:
                     info = res.json()
+                    if info.get("aud") != get_settings().google_client_id:
+                        raise HTTPException(status_code=400, detail="Invalid Google token audience")
                     email = info.get("email")
                     name = info.get("name") or info.get("given_name") or (email.split("@")[0] if email else "Google User")
                     if email:
@@ -101,8 +103,13 @@ async def verify_google_credential(
     raise HTTPException(status_code=400, detail="A valid Google credential is required")
 
 
-async def issue_tokens(user: User, db: DbSession) -> TokenResponse:
+async def issue_tokens(
+    user: User, db: DbSession, *, record_first_login: bool = False
+) -> TokenResponse:
     settings = get_settings()
+    is_first_login = record_first_login and user.first_login_at is None
+    if is_first_login:
+        user.first_login_at = datetime.now(timezone.utc)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
     refresh_expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
 
@@ -136,6 +143,7 @@ async def issue_tokens(user: User, db: DbSession) -> TokenResponse:
         refresh_token=refresh,
         role=user.role.value,
         user_id=user.id,
+        is_first_login=is_first_login,
         name=user_name,
         email=user.email,
         avatar_url=avatar_url,
@@ -147,19 +155,34 @@ async def issue_tokens(user: User, db: DbSession) -> TokenResponse:
 
 
 
-async def create_user(email: str, password: str, role: UserRole, db: DbSession, background_tasks: BackgroundTasks) -> User:
+async def create_user(
+    email: str,
+    password: str,
+    role: UserRole,
+    db: DbSession,
+    background_tasks: BackgroundTasks,
+    *,
+    require_verification: bool = True,
+) -> User:
     clean_email = validate_email_format(email)
     if await db.scalar(select(User).where(User.email == clean_email)):
         raise HTTPException(status_code=409, detail="Email is already registered")
-    raw_token = token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
     user = User(
         email=clean_email,
         password_hash=hash_password(password),
         role=role,
-        verification_token=raw_token,
-        verification_token_expires_at=expires_at,
     )
+    if not require_verification:
+        user.is_verified = True
+        user.email_verified_at = datetime.now(timezone.utc)
+        db.add(user)
+        await db.flush()
+        return user
+
+    raw_token = token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    user.verification_token = raw_token
+    user.verification_token_expires_at = expires_at
     db.add(user)
     await db.flush()
     db.add(EmailVerificationToken(user_id=user.id, token_digest=hashlib.sha256(raw_token.encode()).hexdigest(), expires_at=expires_at))
@@ -220,7 +243,7 @@ async def register_student(data: StudentRegister, background_tasks: BackgroundTa
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     clean_email = email_result.email
-    user = await create_user(clean_email, data.password, UserRole.STUDENT, db, background_tasks)
+    user = await create_user(clean_email, data.password, UserRole.STUDENT, db, background_tasks)# type: ignore
     user.student_profile = StudentProfile(
         user_id=user.id,
         institution_email=clean_email if email_result.classification == "INSTITUTION_EMAIL" else None,
@@ -237,19 +260,24 @@ async def register_company(data: CompanyRegister, background_tasks: BackgroundTa
         clean_email = validate_organization_email(str(data.email)).email
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    user = await create_user(clean_email, data.password, UserRole.COMPANY, db, background_tasks)
+    user = await create_user(
+        clean_email,
+        data.password,
+        UserRole.COMPANY,
+        db,
+        background_tasks,
+        require_verification=get_settings().require_company_email_verification,
+    )# type: ignore
     user.company_profile = CompanyProfile(user_id=user.id, **data.model_dump(exclude={"email", "password"}))
-    await db.commit()
-    await db.refresh(user)
-    return user
-
-
-@router.post("/register/admin", response_model=UserResponse, status_code=201)
-async def register_admin(data: AdminRegister, background_tasks: BackgroundTasks, db: DbSession) -> User:
-    if data.signup_key.strip() != get_settings().admin_signup_key:
-        raise HTTPException(status_code=403, detail="Invalid admin signup key")
-    user = await create_user(str(data.email).strip().lower(), data.password, UserRole.ADMIN, db, background_tasks)
-    user.is_verified = True  # Admins are automatically verified for immediate access
+    admins = await db.scalars(select(User).where(User.role == UserRole.ADMIN))
+    for admin in admins:
+        await notify(
+            db,
+            admin.id,
+            "COMPANY_REGISTRATION",
+            "New company awaiting verification",
+            f"{user.company_profile.company_name} registered and is awaiting verification.",# type: ignore
+        )
     await db.commit()
     await db.refresh(user)
     return user
@@ -266,7 +294,7 @@ async def setup_totp(user: Annotated[User, Depends(get_current_user)], db: DbSes
     await db.commit()
 
     otpauth_url = f"otpauth://totp/InternSphere:{quote_plus(user.email)}?secret={secret}&issuer=InternSphere"
-    return MFATotpSetupResponse(secret=secret, otpauth_url=otpauth_url, message="Authenticator app setup ready")
+    return MFATotpSetupResponse(secret=secret, otpauth_url=otpauth_url, message="Authenticator app setup ready")# type: ignore
 
 
 @router.post("/mfa/verify-totp")
@@ -315,7 +343,12 @@ async def login(data: LoginRequest, db: DbSession) -> Any:
             )
 
     settings = get_settings()
-    if settings.require_email_verification and user.role != UserRole.ADMIN and not user.is_verified:
+    requires_email_verification = (
+        settings.require_company_email_verification
+        if user.role == UserRole.COMPANY
+        else settings.require_email_verification and user.role != UserRole.ADMIN
+    )
+    if requires_email_verification and not user.is_verified:
         raise HTTPException(
             status_code=403,
             detail=f"Email verification required. Please click the activation link sent to '{user.email}' before logging in.",
@@ -389,7 +422,7 @@ async def login(data: LoginRequest, db: DbSession) -> Any:
             message="Two-factor authentication code sent to your email",
         )
 
-    return await issue_tokens(user, db)
+    return await issue_tokens(user, db, record_first_login=True)
 
 
 @router.post("/mfa/verify-login", response_model=TokenResponse)
@@ -406,7 +439,7 @@ async def verify_mfa_login(data: MFALoginVerifyRequest, db: DbSession) -> TokenR
         raise HTTPException(status_code=401, detail="Invalid authentication token type.")
 
     try:
-        user_id = int(payload.get("sub"))
+        user_id = int(payload.get("sub"))# type: ignore
     except (TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid user identifier in token.")
 
@@ -415,14 +448,14 @@ async def verify_mfa_login(data: MFALoginVerifyRequest, db: DbSession) -> TokenR
         raise HTTPException(status_code=404, detail="User account not found or deactivated.")
 
     if not user.mfa_enabled:
-        return await issue_tokens(user, db)
+        return await issue_tokens(user, db, record_first_login=True)
 
     clean_otp = data.otp.strip()
     if getattr(user, "mfa_type", "EMAIL") == "TOTP":
         if not user.mfa_secret or not pyotp.TOTP(user.mfa_secret).verify(clean_otp, valid_window=1):
             raise HTTPException(status_code=400, detail="Invalid authenticator app code. Please try again.")
         await db.commit()
-        return await issue_tokens(user, db)
+        return await issue_tokens(user, db, record_first_login=True)
 
     if not user.mfa_otp or user.mfa_otp != clean_otp:
         raise HTTPException(status_code=400, detail="Invalid two-factor authentication code. Please try again.")
@@ -434,7 +467,7 @@ async def verify_mfa_login(data: MFALoginVerifyRequest, db: DbSession) -> TokenR
     user.mfa_otp_expires_at = None
     await db.commit()
 
-    return await issue_tokens(user, db)
+    return await issue_tokens(user, db, record_first_login=True)
 
 
 @router.get("/mfa/status", response_model=MFAStatusResponse)
@@ -586,9 +619,7 @@ async def google_auth(data: GoogleAuthRequest, db: DbSession) -> TokenResponse:
 
     if user is None:
         req_role = data.role.upper() if data.role else "STUDENT"
-        if req_role == "ADMIN" or email in {"kamatammeghana.143@gmail.com", "meghanakamatam.143@gmail.com", "meghanakamatam25@gmail.com"}:
-            role = UserRole.ADMIN
-        elif req_role == "COMPANY":
+        if req_role == "COMPANY":
             try:
                 validate_organization_email(email)
             except ValueError as exc:
@@ -624,15 +655,33 @@ async def google_auth(data: GoogleAuthRequest, db: DbSession) -> TokenResponse:
                 industry="Technology",
             )
             db.add(company_profile)
+            admins = await db.scalars(select(User).where(User.role == UserRole.ADMIN))
+            for admin in admins:
+                await notify(
+                    db,
+                    admin.id,
+                    "COMPANY_REGISTRATION",
+                    "New company awaiting verification",
+                    f"{company_profile.company_name} registered and is awaiting verification.",
+                )
 
         await db.commit()
         await db.refresh(user)
     else:
         if not user.is_active:
             raise HTTPException(status_code=403, detail="Account has been suspended")
+        was_verified = user.is_verified
         if not user.is_verified:
             user.is_verified = True
             user.email_verified_at = datetime.now(timezone.utc)
+        admin_emails = {
+            value.strip().lower()
+            for value in get_settings().admin_emails.split(",")
+            if value.strip()
+        }
+        if was_verified and email in admin_emails:
+            user.role = UserRole.ADMIN # type: ignore
+        if not was_verified or (was_verified and email in admin_emails):
             await db.commit()
 
     return await issue_tokens(user, db)
@@ -773,7 +822,7 @@ async def forgot_password(data: ForgotPasswordRequest, background_tasks: Backgro
     background_tasks.add_task(
         send_dev_email,
         user.email,
-        f"InternSphere Password Reset OTP: {otp}",
+        "InternSphere Password Reset Code",
         plain_body,
         html_body,
         db=db,

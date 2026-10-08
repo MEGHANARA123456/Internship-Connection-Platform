@@ -61,6 +61,7 @@ api.interceptors.response.use(
         useAuthStore.getState().logout()
         return Promise.reject(error)
       }
+      const refreshUserId = session.userId
 
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
@@ -82,11 +83,18 @@ api.interceptors.response.use(
           { refresh_token: session.refreshToken }
         )
         const newTokens = res.data
+        const currentSession = useAuthStore.getState().session
+        if (!currentSession || currentSession.userId !== refreshUserId) {
+          const sessionChangedError = new Error('Session changed while refreshing the access token.')
+          processQueue(sessionChangedError, null)
+          return Promise.reject(sessionChangedError)
+        }
         useAuthStore.getState().setSession({
+          ...currentSession,
           accessToken: newTokens.access_token,
           refreshToken: newTokens.refresh_token,
           role: newTokens.role,
-          userId: newTokens.user_id,
+          userId: currentSession.userId,
           accessTokenExpiresAt: newTokens.access_token_expires_at ?? null,
           refreshTokenExpiresAt: newTokens.refresh_token_expires_at ?? null,
           accessTokenExpiresIn: newTokens.access_token_expires_in ?? null,
@@ -97,7 +105,9 @@ api.interceptors.response.use(
         return api(originalRequest)
       } catch (refreshError) {
         processQueue(refreshError, null)
-        useAuthStore.getState().logout()
+        if (useAuthStore.getState().session?.userId === refreshUserId) {
+          useAuthStore.getState().logout()
+        }
         return Promise.reject(refreshError)
       } finally {
         isRefreshing = false
@@ -131,4 +141,25 @@ export async function downloadAuthenticatedFile(url: string, defaultFilename: st
   link.click()
   link.remove()
   window.URL.revokeObjectURL(blobUrl)
+}
+
+export async function openAuthenticatedFile(url: string, defaultFilename: string = 'document') {
+  const apiOrigin = new URL(api.defaults.baseURL || window.location.origin, window.location.origin).origin
+  const resourceOrigin = new URL(url, api.defaults.baseURL || window.location.origin).origin
+  if (resourceOrigin !== apiOrigin) {
+    throw new Error('Authenticated file URLs must be hosted by the configured API.')
+  }
+  const response = await api.get(url, { responseType: 'blob' })
+  const contentType = response.headers['content-type']
+  const blob = new Blob([response.data], { type: contentType ? String(contentType) : undefined })
+  const blobUrl = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = blobUrl
+  link.target = '_blank'
+  link.rel = 'noopener noreferrer'
+  link.download = defaultFilename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 60_000)
 }

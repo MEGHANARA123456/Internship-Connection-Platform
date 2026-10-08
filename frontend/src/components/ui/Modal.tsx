@@ -60,6 +60,9 @@ export function Modal({
           'relative w-full rounded-2xl bg-white dark:bg-slate-900 p-6 text-left shadow-2xl transition-all border border-slate-200 dark:border-slate-800 z-10 animate-in zoom-in-95 max-h-[90vh] overflow-y-auto',
           widths[maxWidth]
         )}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
       >
         <div className="flex items-start justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
           <div>
@@ -67,8 +70,11 @@ export function Modal({
             {description && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{description}</p>}
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+            aria-label="Close dialog"
+            title="Close dialog"
           >
             <X className="w-5 h-5" />
           </button>

@@ -10,8 +10,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
-from app.models import Application, CompanyProfile, Internship, Notification, Resume, StudentProfile, User, UserRole
-from app.services.mail import send_dev_email
+from app.models import Application, CompanyProfile, Internship, Resume, StudentProfile, User, UserRole
+from app.services.notify import notify
 from app.schemas.application import (
     ApplicationCreate,
     ApplicationDashboard,
@@ -24,8 +24,8 @@ from app.schemas.application import (
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 logger = logging.getLogger(__name__)
-student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]
-company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]
+student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]# type: ignore
+company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]# type: ignore
 
 
 def _status_notification_text(status: str, company_name: str, internship_title: str) -> tuple[str, str, str]:
@@ -109,7 +109,24 @@ async def apply(internship_id: int, data: ApplicationCreate, user: student_only,
     existing = await db.scalar(select(Application).where(Application.internship_id == internship_id, Application.student_id == user.id))
     if existing: raise HTTPException(409, "You have already applied to this internship")
     application = Application(internship_id=internship_id, student_id=user.id, cover_note=data.cover_note)
-    db.add(application); await db.commit(); await db.refresh(application)
+    db.add(application)
+    student_profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+    student_name = student_profile.full_name if student_profile else user.email
+    await notify(
+        db,
+        internship.company_id,
+        "APPLICATION_NEW",
+        f"New application: {student_name} applied to {internship.title}",
+        f"{student_name} applied to {internship.title}.",
+    )
+    await notify(
+        db,
+        user.id,
+        "APPLICATION_SUBMITTED",
+        f"Application submitted for {internship.title}",
+        f"Your application for {internship.title} was submitted successfully.",
+    )
+    await db.commit(); await db.refresh(application)
     return await serialize(application, db)
 
 
@@ -173,12 +190,9 @@ async def bulk_update_status(
         app.status = target_status
         success_ids.append(app_id)
 
-        company_name = internship.company_name if hasattr(internship, "company_name") else "the company"
+        company_name = internship.company_name if hasattr(internship, "company_name") else "the company"# type: ignore
         title, body, html = _status_notification_text(target_status, company_name or "the company", internship.title or "the internship")
-        db.add(Notification(user_id=app.student_id, notification_type="APPLICATION_STATUS", title=title, body=body))
-        student_user = await db.scalar(select(User).where(User.id == app.student_id))
-        if student_user:
-            await send_dev_email(student_user.email, title, body, html=html, message_type="APPLICATION_STATUS", db=db)
+        await notify(db, app.student_id, "APPLICATION_STATUS", title, body, email=True, html=html)
         try:
             from app.api.v1.ws import manager
             await manager.send_personal_message(
@@ -220,10 +234,9 @@ async def update_status(application_id: int, data: ApplicationStatusUpdate, back
     recipient_id = application.student_id if user.role == UserRole.COMPANY else internship.company_id
     recipient = await db.scalar(select(User).where(User.id == recipient_id))
     if recipient:
-        company_name = internship.company_name if hasattr(internship, "company_name") else "the company"
+        company_name = internship.company_name if hasattr(internship, "company_name") else "the company"# type: ignore
         title, body, html = _status_notification_text(data.status, company_name or "the company", internship.title or "the internship")
-        db.add(Notification(user_id=recipient.id, notification_type="APPLICATION_STATUS", title=title, body=body))
-        await send_dev_email(recipient.email, title, body, html=html, message_type="APPLICATION_STATUS", db=db)
+        await notify(db, recipient.id, "APPLICATION_STATUS", title, body, email=True, html=html)
         try:
             from app.api.v1.ws import manager
             await manager.send_personal_message(
@@ -292,23 +305,18 @@ async def accept_offer(application_id: int, data: OfferAcceptance, user: student
     application.offer_signature_mode = data.signature_mode
     application.offer_accepted_at = datetime.now(timezone.utc)
     if internship:
-        db.add(Notification(
-            user_id=internship.company_id,
-            notification_type="APPLICATION_STATUS",
-            title=notification_title,
-            body=notification_body,
-        ))
+        await notify(
+            db,
+            internship.company_id,
+            "APPLICATION_STATUS",
+            notification_title,
+            notification_body,
+            email=True,
+        )
     await db.commit()
     await db.refresh(application)
 
     if company:
-        await send_dev_email(
-            company.email,
-            notification_title,
-            notification_body,
-            message_type="APPLICATION_STATUS",
-            db=db,
-        )
         try:
             from app.api.v1.ws import manager
             await manager.send_personal_message(

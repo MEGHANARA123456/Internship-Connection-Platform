@@ -104,6 +104,39 @@ export function PrivacyPolicyPage() {
           </div>
         </section>
 
+        {/* Cookies */}
+        <section className="space-y-3">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+            Cookies we use
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs sm:text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-700">
+                  <th scope="col" className="py-2 pr-4 font-semibold text-slate-900 dark:text-white">Name</th>
+                  <th scope="col" className="py-2 pr-4 font-semibold text-slate-900 dark:text-white">Purpose</th>
+                  <th scope="col" className="py-2 pr-4 font-semibold text-slate-900 dark:text-white">Duration</th>
+                  <th scope="col" className="py-2 font-semibold text-slate-900 dark:text-white">Type</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="py-2 pr-4 font-mono">internsphere_cookie_consent</td>
+                  <td className="py-2 pr-4">Stores your cookie choices and consent timestamp.</td>
+                  <td className="py-2 pr-4">365 days</td>
+                  <td className="py-2">Strictly necessary</td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-4 font-mono">internsphere_theme</td>
+                  <td className="py-2 pr-4">Remembers your selected light or dark theme.</td>
+                  <td className="py-2 pr-4">365 days</td>
+                  <td className="py-2">Functional (only with consent)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         {/* Section 4 */}
         <section className="space-y-3">
           <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">

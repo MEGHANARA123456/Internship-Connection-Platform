@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -25,6 +25,7 @@ import { AccountSecurityCard } from '../components/auth/AccountSecurityCard'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 import { ResumeEditorModal } from '../components/resume/ResumeEditorModal'
 import { AvatarUploadCard } from '../components/ui/AvatarUploadCard'
+import { PaginationControls } from '../components/ui/PaginationControls'
 import {
   Search,
   MapPin,
@@ -59,7 +60,7 @@ import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisV
 
 // --- 1. Opportunities Page (Browse Internships) ---
 
-export function OpportunitiesPage() {
+export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' | 'saved' }) {
   const { session } = useAuthStore()
   const navigate = useNavigate()
   const { id } = useParams()
@@ -74,7 +75,7 @@ export function OpportunitiesPage() {
   const [skills, setSkills] = useState(searchParams.get('skills') || '')
   const [page, setPage] = useState(1)
   const [showVisuals, setShowVisuals] = useState(false)
-  const [activeTab, setActiveTab] = useState<'all' | 'saved'>('all')
+  const [activeTab, setActiveTab] = useState<'all' | 'saved' | 'applied'>(initialTab)
   const [sortBy, setSortBy] = useState<string>('newest')
 
   // Keep state in sync with URL search params changes
@@ -94,6 +95,11 @@ export function OpportunitiesPage() {
   // Data & loading states
   const [internships, setInternships] = useState<any[]>([])
   const [total, setTotal] = useState(0)
+  const [applications, setApplications] = useState<any[]>([])
+  const [applicationsLoaded, setApplicationsLoaded] = useState(false)
+  const applicationsRequestInFlight = useRef(false)
+  const [applicationsLoading, setApplicationsLoading] = useState(false)
+  const [applicationsError, setApplicationsError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -116,6 +122,26 @@ export function OpportunitiesPage() {
   }, [selectedJob?.company_id])
 
   const fetchInternships = async () => {
+    if (activeTab === 'applied') {
+      if (applicationsLoaded || applicationsRequestInFlight.current) return
+      applicationsRequestInFlight.current = true
+      setApplicationsLoading(true)
+      setApplicationsError(null)
+      try {
+        const res = await api.get('/applications/student')
+        const items = Array.isArray(res.data?.applications) ? res.data.applications : []
+        setApplications(items)
+        setApplicationsLoaded(true)
+      } catch (err) {
+        console.error('Failed to fetch applications:', err)
+        setApplicationsError('Unable to load your applications. Please try again.')
+      } finally {
+        applicationsRequestInFlight.current = false
+        setApplicationsLoading(false)
+      }
+      return
+    }
+
     setLoading(true)
     setError(null)
     try {
@@ -226,6 +252,31 @@ export function OpportunitiesPage() {
     setApplyModalJob(job)
   }
 
+  const handleApplicationSubmitted = () => {
+    const appliedJob = applyModalJob
+    if (appliedJob) {
+      const wasVisible = internships.some((job) => job.id === appliedJob.id)
+      setInternships((previous) => previous.filter((job) => job.id !== appliedJob.id))
+      if (wasVisible) setTotal((previous) => Math.max(previous - 1, 0))
+    }
+    if (applicationsLoaded && applyModalJob) {
+      setApplications((previous) => {
+        if (previous.some((application) => application.internship_id === applyModalJob.id)) return previous
+        return [
+          {
+            id: `pending-${applyModalJob.id}`,
+            internship_id: applyModalJob.id,
+            internship_title: applyModalJob.title,
+            company_name: applyModalJob.company_name,
+            status: 'APPLIED',
+            created_at: new Date().toISOString(),
+          },
+          ...previous,
+        ]
+      })
+    }
+  }
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
       {session && (
@@ -264,7 +315,7 @@ export function OpportunitiesPage() {
         </div>
       )}
 
-      {/* Tabs: All Opportunities vs Saved Roles */}
+      {/* Tabs: All Opportunities, Saved Roles, and Applied */}
       {session?.role === 'STUDENT' && (
         <div className="flex items-center gap-2 mb-4 border-b border-slate-200 dark:border-slate-800 pb-2">
           <button
@@ -297,10 +348,37 @@ export function OpportunitiesPage() {
             <Bookmark className="w-3.5 h-3.5" />
             <span>Saved Roles</span>
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('applied')
+              setPage(1)
+            }}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'applied'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>Applied</span>
+            {applicationsLoaded && (
+              <span className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
+                activeTab === 'applied' ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700'
+              }`}>
+                {applications.length}
+              </span>
+            )}
+          </button>
         </div>
       )}
 
       {/* Filter Toolbar */}
+      {activeTab === 'applied' ? (
+        <div className="mb-6 text-xs text-slate-500 dark:text-slate-400">
+          You have applied to <strong className="text-slate-900 dark:text-white">{applications.length}</strong> internships.
+        </div>
+      ) : (
       <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200/90 dark:border-slate-800 shadow-2xs mb-6 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
 
@@ -392,9 +470,78 @@ export function OpportunitiesPage() {
           )}
         </div>
       </div>
+      )}
 
       {/* Main List */}
-      {loading ? (
+      {activeTab === 'applied' ? (
+        applicationsLoading ? (
+          <div className="space-y-4">
+            <CardSkeleton />
+            <CardSkeleton />
+            <CardSkeleton />
+          </div>
+        ) : applicationsError ? (
+          <ErrorState message={applicationsError} onRetry={fetchInternships} />
+        ) : applications.length === 0 ? (
+          <EmptyState
+            title="No applications yet"
+            description="Internships you apply to will appear here."
+            actionLabel="All Opportunities"
+            onAction={() => {
+              setActiveTab('all')
+              setPage(1)
+            }}
+          />
+        ) : (
+          <div className="space-y-3">
+            {applications.map((application) => (
+              <Card key={application.id} className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                        {application.internship_title || `Internship #${application.internship_id}`}
+                      </h3>
+                      <Badge status={application.status}>
+                        {application.status === 'WITHDRAWN'
+                          ? 'Withdrawn'
+                          : application.status === 'ACCEPTED'
+                            ? 'Offer Accepted'
+                            : application.status}
+                      </Badge>
+                    </div>
+                    {application.company_name && (
+                      <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
+                        <Building2 className="w-3.5 h-3.5 text-indigo-500" />
+                        <span>{application.company_name}</span>
+                      </p>
+                    )}
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Applied on {new Date(application.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => navigate(`/internships/${application.internship_id}`)}
+                    >
+                      View details
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => navigate('/applications')}
+                    >
+                      Track application
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )
+      ) : loading ? (
         <div className="space-y-4">
           <CardSkeleton />
           <CardSkeleton />
@@ -713,8 +860,9 @@ export function OpportunitiesPage() {
           onClose={() => setApplyModalJob(null)}
           internshipId={applyModalJob.id}
           internshipTitle={applyModalJob.title}
+          matchScore={applyModalJob.match_score}
           onApplied={() => {
-            fetchInternships()
+            handleApplicationSubmitted()
           }}
         />
       )}
@@ -742,6 +890,117 @@ export function OpportunitiesPage() {
   )
 }
 
+export function StudentAnalyticsPage() {
+  const { session } = useAuthStore()
+  const navigate = useNavigate()
+  const [stats, setStats] = useState({
+    applied: 0,
+    underReview: 0,
+    shortlisted: 0,
+    interviewsScheduled: 0,
+    offers: 0,
+    savedRoles: 0,
+  })
+  const [hasApplications, setHasApplications] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchStudentAnalytics = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [overviewResponse, savedResponse, interviewsResponse, applicationsResponse] = await Promise.all([
+        api.get('/analytics/overview'),
+        api.get('/internships/saved'),
+        api.get('/interviews/my'),
+        api.get('/applications/student'),
+      ])
+      const applications = Array.isArray(applicationsResponse.data)
+        ? applicationsResponse.data
+        : applicationsResponse.data?.applications || []
+      const interviews = Array.isArray(interviewsResponse.data) ? interviewsResponse.data : []
+      const savedRoles = Array.isArray(savedResponse.data) ? savedResponse.data : []
+      const overview = overviewResponse.data
+
+      setHasApplications(applications.length > 0)
+      setStats({
+        applied: overview?.funnel?.applied ?? applications.length,
+        underReview: applications.filter((application: any) => application.status === 'UNDER_REVIEW').length,
+        shortlisted: applications.filter((application: any) => application.status === 'SHORTLISTED').length,
+        interviewsScheduled: interviews.filter((interview: any) =>
+          ['SCHEDULED', 'RESCHEDULED'].includes(interview.status)
+        ).length,
+        offers: applications.filter((application: any) =>
+          ['SELECTED', 'ACCEPTED'].includes(application.status)
+        ).length,
+        savedRoles: savedRoles.length,
+      })
+    } catch {
+      setError('Unable to load your analytics. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void fetchStudentAnalytics()
+  }, [fetchStudentAnalytics])
+
+  const summaryCards = [
+    { label: 'Applications submitted', value: stats.applied, icon: FileText },
+    { label: 'Under review', value: stats.underReview, icon: Clock },
+    { label: 'Shortlisted', value: stats.shortlisted, icon: CheckCircle2 },
+    { label: 'Interviews scheduled', value: stats.interviewsScheduled, icon: Calendar },
+    { label: 'Offers', value: stats.offers, icon: Award },
+    { label: 'Saved roles', value: stats.savedRoles, icon: Bookmark },
+  ]
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-6">
+      {session && <WelcomeGreeting role={session.role} name={session.name} className="mb-6" />}
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">My Analytics</h1>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">A personal view of your applications and progress.</p>
+      </div>
+
+      {loading ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {summaryCards.map((card) => <CardSkeleton key={card.label} />)}
+        </div>
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => void fetchStudentAnalytics()} />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {summaryCards.map(({ label, value, icon: Icon }) => (
+              <Card key={label} className="bg-white dark:bg-slate-900 p-5">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">{label}</p>
+                  <Icon className="h-4 w-4 text-indigo-500" />
+                </div>
+                <p className="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{value}</p>
+              </Card>
+            ))}
+          </div>
+          {!hasApplications && (
+            <EmptyState
+              title="Your application journey starts here"
+              description="Apply to an internship to see your personal application funnel and progress."
+              actionLabel="Explore Internships"
+              onAction={() => navigate('/opportunities')}
+            />
+          )}
+          <DesktopAnalysisVisuals
+            variant="student"
+            title="My Application Funnel & Recruitment Velocity"
+            subtitle="Track your personal application progression and application industries"
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
 // --- 2. My Applications Page ---
 
 export function ApplicationsPage() {
@@ -751,6 +1010,19 @@ export function ApplicationsPage() {
   const [withdrawingId, setWithdrawingId] = useState<number | null>(null)
   const [selectedOfferApp, setSelectedOfferApp] = useState<any | null>(null)
   const [selectedReviewApp, setSelectedReviewApp] = useState<any | null>(null)
+  const [activeStatusTab, setActiveStatusTab] = useState('ALL')
+  const [page, setPage] = useState(1)
+
+  const statusTabs = [
+    { key: 'ALL', label: 'All', statuses: null },
+    { key: 'APPLIED', label: 'Applied', statuses: ['APPLIED'] },
+    { key: 'UNDER_REVIEW', label: 'Under Review', statuses: ['UNDER_REVIEW'] },
+    { key: 'SHORTLISTED', label: 'Shortlisted', statuses: ['SHORTLISTED'] },
+    { key: 'INTERVIEW', label: 'Interview', statuses: ['INTERVIEW_SCHEDULED'] },
+    { key: 'SELECTED', label: 'Selected', statuses: ['SELECTED', 'ACCEPTED'] },
+    { key: 'REJECTED', label: 'Rejected', statuses: ['REJECTED'] },
+    { key: 'WITHDRAWN', label: 'Withdrawn', statuses: ['WITHDRAWN'] },
+  ]
 
   const fetchApplications = async () => {
     setLoading(true)
@@ -769,6 +1041,21 @@ export function ApplicationsPage() {
   useEffect(() => {
     fetchApplications()
   }, [])
+
+  const filteredApplications = activeStatusTab === 'ALL'
+    ? applications
+    : applications.filter((app) => statusTabs.find((tab) => tab.key === activeStatusTab)?.statuses?.includes(app.status))
+  const totalPages = Math.max(1, Math.ceil(filteredApplications.length / 10))
+  const pagedApplications = filteredApplications.slice((page - 1) * 10, page * 10)
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages))
+  }, [totalPages])
+  const summaryCards = [
+    { label: 'Total Applications', value: applications.length },
+    { label: 'Under Review', value: applications.filter((app) => app.status === 'UNDER_REVIEW').length },
+    { label: 'Interviews', value: applications.filter((app) => app.status === 'INTERVIEW_SCHEDULED').length },
+    { label: 'Selected', value: applications.filter((app) => ['SELECTED', 'ACCEPTED'].includes(app.status)).length },
+  ]
 
   const handleWithdraw = async (appId: number) => {
     if (!confirm('Are you sure you want to withdraw this application? This cannot be undone.')) return
@@ -803,6 +1090,52 @@ export function ApplicationsPage() {
         </Link>
       </div>
 
+      {!loading && !error && (
+        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {summaryCards.map((summary) => (
+            <Card key={summary.label} className="bg-white p-4 dark:bg-slate-900">
+              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">{summary.label}</p>
+              <p className="mt-2 text-xl font-bold text-slate-900 dark:text-white">{summary.value}</p>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <div className="mb-5 -mx-1 overflow-x-auto pb-1">
+        <div role="tablist" aria-label="Application status" className="flex w-max min-w-full items-center gap-1 border-b border-slate-200 pb-2 dark:border-slate-800">
+          {statusTabs.map((tab) => {
+            const count = tab.statuses
+              ? applications.filter((app) => tab.statuses?.includes(app.status)).length
+              : applications.length
+            const selected = activeStatusTab === tab.key
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => {
+                  setActiveStatusTab(tab.key)
+                  setPage(1)
+                }}
+                className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                  selected
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
+                }`}
+              >
+                {tab.label}
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
+                  selected ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700'
+                }`}>
+                  {count}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       {/* Desktop Visual Analysis Suite */}
       <div className="hidden md:block mb-8">
         <DesktopAnalysisVisuals
@@ -819,16 +1152,22 @@ export function ApplicationsPage() {
         </div>
       ) : error ? (
         <ErrorState message={error} onRetry={fetchApplications} />
-      ) : applications.length === 0 ? (
+      ) : filteredApplications.length === 0 ? (
         <EmptyState
-          title="No applications submitted yet"
-          description="You have not submitted any internship applications. Explore available listings and apply today!"
-          actionLabel="Find Internships"
-          onAction={() => (window.location.href = '/opportunities')}
+          title={applications.length === 0
+            ? 'No applications submitted yet'
+            : activeStatusTab === 'ALL'
+              ? 'No applications submitted yet'
+              : `No ${statusTabs.find((tab) => tab.key === activeStatusTab)?.label.toLowerCase()} applications yet`}
+          description={applications.length === 0
+            ? 'You have not submitted any internship applications. Explore available listings and apply today!'
+            : 'Applications with this status will appear here.'}
+          actionLabel={applications.length === 0 ? 'Find Internships' : undefined}
+          onAction={applications.length === 0 ? () => (window.location.href = '/opportunities') : undefined}
         />
       ) : (
         <div className="space-y-3">
-          {applications.map((app) => {
+          {pagedApplications.map((app) => {
             const canWithdraw = ['APPLIED', 'UNDER_REVIEW', 'SHORTLISTED'].includes(app.status)
 
             return (
@@ -907,6 +1246,9 @@ export function ApplicationsPage() {
           })}
         </div>
       )}
+      {!loading && !error && (
+        <PaginationControls currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+      )}
 
       {/* Offer Letter & Digital E-Signature Modal */}
       {selectedOfferApp && (
@@ -952,6 +1294,8 @@ const profileSchema = z.object({
 
 export function StudentProfilePage() {
   const session = useAuthStore((state) => state.session)
+  const identityKey = `${session?.userId ?? ''}:${session?.email?.trim().toLowerCase() ?? ''}`
+  const previousIdentityRef = useRef(identityKey)
   const [profileLoading, setProfileLoading] = useState(true)
   const [resume, setResume] = useState<any | null>(null)
   const [resumeLoading, setResumeLoading] = useState(true)
@@ -1080,10 +1424,14 @@ export function StudentProfilePage() {
   })
 
   // Load Profile
-  const loadProfile = async () => {
+  const loadProfile = useCallback(async () => {
+    const requestedIdentity = identityKey
     setProfileLoading(true)
     try {
       const res = await api.get('/profiles/student')
+      const currentSession = useAuthStore.getState().session
+      const currentIdentity = `${currentSession?.userId ?? ''}:${currentSession?.email?.trim().toLowerCase() ?? ''}`
+      if (currentIdentity !== requestedIdentity) return
       const data = res.data
       setValue('full_name', data.full_name || '')
       setValue('university', data.university || '')
@@ -1096,29 +1444,69 @@ export function StudentProfilePage() {
         useAuthStore.getState().updateAvatar(data.avatar_url)
       }
     } catch {
-      setProfileError('Failed to load profile details.')
+      const currentSession = useAuthStore.getState().session
+      const currentIdentity = `${currentSession?.userId ?? ''}:${currentSession?.email?.trim().toLowerCase() ?? ''}`
+      if (currentIdentity === requestedIdentity) {
+        setProfileError('Failed to load profile details.')
+      }
     } finally {
-      setProfileLoading(false)
+      const currentSession = useAuthStore.getState().session
+      const currentIdentity = `${currentSession?.userId ?? ''}:${currentSession?.email?.trim().toLowerCase() ?? ''}`
+      if (currentIdentity === requestedIdentity) {
+        setProfileLoading(false)
+      }
     }
-  }
+  }, [identityKey, setValue])
 
   // Load Resume Metadata
-  const loadResume = async () => {
+  const loadResume = useCallback(async () => {
+    const requestedIdentity = identityKey
     setResumeLoading(true)
     try {
       const res = await api.get('/profiles/student/resume')
+      const currentSession = useAuthStore.getState().session
+      const currentIdentity = `${currentSession?.userId ?? ''}:${currentSession?.email?.trim().toLowerCase() ?? ''}`
+      if (currentIdentity !== requestedIdentity) return
       setResume(res.data)
     } catch {
-      setResume(null)
+      const currentSession = useAuthStore.getState().session
+      const currentIdentity = `${currentSession?.userId ?? ''}:${currentSession?.email?.trim().toLowerCase() ?? ''}`
+      if (currentIdentity === requestedIdentity) {
+        setResume(null)
+      }
     } finally {
-      setResumeLoading(false)
+      const currentSession = useAuthStore.getState().session
+      const currentIdentity = `${currentSession?.userId ?? ''}:${currentSession?.email?.trim().toLowerCase() ?? ''}`
+      if (currentIdentity === requestedIdentity) {
+        setResumeLoading(false)
+      }
     }
-  }
+  }, [identityKey])
 
   useEffect(() => {
-    loadProfile()
-    loadResume()
-  }, [])
+    if (previousIdentityRef.current !== identityKey) {
+      previousIdentityRef.current = identityKey
+      setGithubHandle('')
+      setLeetcodeHandle('')
+      setTempGithub('')
+      setTempLeetcode('')
+      setVerifiedBadges([])
+      setRecommendations([])
+      setAvatarUrl(null)
+      setValue('full_name', '')
+      setValue('university', '')
+      setValue('major', '')
+      setValue('graduation_year', 2026)
+      setValue('skills', '')
+      setValue('bio', '')
+      setResume(null)
+      setProfileError('')
+    }
+    if (session?.userId != null) {
+      loadProfile()
+      loadResume()
+    }
+  }, [identityKey, loadProfile, loadResume, session?.userId, setValue])
 
   const onProfileSubmit = async (data: z.infer<typeof profileSchema>) => {
     setProfileError('')
@@ -1729,6 +2117,7 @@ export function StudentProfilePage() {
 
       {/* In-App Resume Builder & Editor Modal */}
       <ResumeEditorModal
+        key={identityKey}
         isOpen={isResumeEditorOpen}
         onClose={() => setIsResumeEditorOpen(false)}
         initialProfile={{

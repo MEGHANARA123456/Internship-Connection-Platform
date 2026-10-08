@@ -12,8 +12,19 @@ async def test_security_headers_are_present() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/v1/health")
     assert response.headers["x-content-type-options"] == "nosniff"
-    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["x-frame-options"] == "SAMEORIGIN"
     assert "default-src" in response.headers["content-security-policy"]
+
+
+@pytest.mark.anyio
+async def test_strict_content_security_policy_skips_api_documentation() -> None:
+    policy = "default-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        api_response = await client.get("/api/v1/health")
+        docs_response = await client.get("/docs")
+
+    assert api_response.headers["content-security-policy"] == policy
+    assert docs_response.headers.get("content-security-policy") != policy
 
 
 @pytest.mark.anyio

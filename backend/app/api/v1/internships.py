@@ -10,10 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 
 from app.api.v1.dependencies import DbSession, get_current_user_optional, require_roles
-from app.models import Application, CompanyProfile, Internship, Notification, SavedInternship, StudentProfile, User, UserRole
+from app.models import Application, CompanyProfile, Internship, SavedInternship, StudentProfile, User, UserRole
 from app.schemas.internship import InternshipInput, InternshipPage, InternshipResponse
-from app.services.ai import compute_match_score_fast
+from app.services.ai import compute_match_score_fast, get_student_resume_text
 from app.services.mail import send_dev_email
+from app.services.notify import notify
 
 router = APIRouter(prefix="/internships", tags=["internships"])
 logger = logging.getLogger(__name__)
@@ -81,11 +82,12 @@ async def list_saved_internships(user: student_only, db: DbSession) -> list[dict
 
     student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
     student_skills = [s.strip() for s in (student_prof.skills if student_prof else "").split(",") if s.strip()]
+    resume_text = await get_student_resume_text(db, user.id)
 
     results = []
     for item in items:
         job_skills = [s.strip() for s in (item.skills or "").split(",") if s.strip()]
-        match_info = compute_match_score_fast(student_skills, job_skills, item.title)
+        match_info = compute_match_score_fast(student_skills, job_skills, item.title, resume_text, item.description)
         results.append(
             output(
                 item,
@@ -159,6 +161,14 @@ async def browse_internships(
     if skills: filters.extend(Internship.skills.ilike(f"%{skill.strip()}%") for skill in skills.split(","))
     if posted_after: filters.append(Internship.created_at >= datetime.combine(posted_after, datetime.min.time(), timezone.utc))
     if deadline_before: filters.append(Internship.deadline <= deadline_before)
+    if user and user.role == UserRole.STUDENT:
+        filters.append(
+            ~select(Application.id).where(
+                Application.internship_id == Internship.id,
+                Application.student_id == user.id,
+                Application.status != "WITHDRAWN",
+            ).exists()
+        )
     if filters: query = query.where(*filters)
     total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
     items = list(await db.scalars(query.order_by(Internship.created_at.desc()).offset((page - 1) * page_size).limit(page_size)))
@@ -168,17 +178,25 @@ async def browse_internships(
 
     saved_ids = set()
     student_skills: list[str] = []
+    resume_text = ""
     if user and user.role == UserRole.STUDENT:
         saved_ids = set((await db.scalars(select(SavedInternship.internship_id).where(SavedInternship.student_id == user.id))).all())
         student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
         if student_prof and student_prof.skills:
             student_skills = [s.strip() for s in student_prof.skills.split(",") if s.strip()]
+        resume_text = await get_student_resume_text(db, user.id)
 
     output_items = []
     for item in items:
         is_saved = item.id in saved_ids if (user and user.role == UserRole.STUDENT) else None
         job_skills = [s.strip() for s in (item.skills or "").split(",") if s.strip()]
-        match_info = compute_match_score_fast(student_skills, job_skills, item.title) if (user and user.role == UserRole.STUDENT) else {"score": None, "matched_skills": None}
+        match_info = compute_match_score_fast(
+            student_skills,
+            job_skills,
+            item.title,
+            resume_text,
+            item.description,
+        ) if (user and user.role == UserRole.STUDENT) else {"score": None, "matched_skills": None}
         output_items.append(
             output(
                 item,
@@ -218,7 +236,14 @@ async def get_internship(internship_id: int, db: DbSession, user: optional_user)
         student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
         student_skills = [s.strip() for s in (student_prof.skills if student_prof else "").split(",") if s.strip()]
         job_skills = [s.strip() for s in (item.skills or "").split(",") if s.strip()]
-        match_info = compute_match_score_fast(student_skills, job_skills, item.title)
+        resume_text = await get_student_resume_text(db, user.id)
+        match_info = compute_match_score_fast(
+            student_skills,
+            job_skills,
+            item.title,
+            resume_text,
+            item.description,
+        )
         match_score = match_info["score"]
         matched_skills = match_info["matched_skills"]
 
@@ -242,6 +267,18 @@ async def change_status(internship_id: int, target: str, user: company_only, db:
     item = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id))
     if item is None: raise HTTPException(404, "Internship not found")
     if target not in {"PENDING_APPROVAL", "CLOSED"} or not transition_allowed(item.status, target): raise HTTPException(409, f"Cannot move {item.status} to {target}")
+    if target == "PENDING_APPROVAL":
+        profile = await db.scalar(
+            select(CompanyProfile).where(CompanyProfile.user_id == user.id)
+        )
+        if profile is None or profile.verification_status != "VERIFIED":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Company verification is required before submitting an internship "
+                    "for approval. Upload your verification documents and wait for an admin decision."
+                ),
+            )
     cname = await get_company_name(item.company_id, db)
     notifications = []
     if target == "CLOSED":
@@ -258,13 +295,24 @@ async def change_status(internship_id: int, target: str, user: company_only, db:
                 body = f"{cname} has closed {item.title}. Your application is in progress; please contact the company for next steps."
             else:
                 body = f"{cname} has closed {item.title} to new applicants. Your offer is unaffected."
-            db.add(Notification(
-                user_id=application.student_id,
-                notification_type="INTERNSHIP_CLOSED",
-                title="Internship closed",
-                body=body,
-            ))
+            await notify(
+                db,
+                application.student_id,
+                "INTERNSHIP_CLOSED",
+                "Internship closed",
+                body,
+            )
             notifications.append((application, body))
+    elif target == "PENDING_APPROVAL":
+        admins = await db.scalars(select(User).where(User.role == UserRole.ADMIN))
+        for admin in admins:
+            await notify(
+                db,
+                admin.id,
+                "INTERNSHIP_PENDING_APPROVAL",
+                f"Internship pending approval: {item.title}",
+                f"A company submitted {item.title} for approval.",
+            )
     item.status = target
     await db.commit()
     await db.refresh(item)
@@ -312,7 +360,11 @@ async def review_internship(internship_id: int, target: str, user: admin_only, d
     if item is None: raise HTTPException(404, "Internship not found")
     if item.status != "PENDING_APPROVAL" or target not in {"PUBLISHED", "REJECTED"}:
         raise HTTPException(409, f"Cannot review {item.status} as {target}")
-    item.status = target; await db.commit(); await db.refresh(item)
+    item.status = target
+    title = "Internship approved" if target == "PUBLISHED" else "Internship rejected"
+    body = f"Your internship {item.title} was {target.lower()}."
+    await notify(db, item.company_id, "INTERNSHIP_REVIEW", title, body)
+    await db.commit(); await db.refresh(item)
     cname = await get_company_name(item.company_id, db)
     return output(item, cname)
 

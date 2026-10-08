@@ -77,8 +77,10 @@ async def _create_published_internship(client: AsyncClient, sessions, company_he
 @pytest.mark.anyio
 async def test_closing_internship_notifies_active_applicants(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.api.v1 import internships
+    from app.services import notify
 
     monkeypatch.setattr(internships, "send_dev_email", _noop_email)
+    monkeypatch.setattr(notify, "send_dev_email", _noop_email)
     client, sessions, engine = await _create_client()
     try:
         company_headers = await _register(client, sessions, "close-company@example.com", "COMPANY")
@@ -98,9 +100,10 @@ async def test_closing_internship_notifies_active_applicants(monkeypatch: pytest
         async with sessions() as session:
             notifications = list(await session.scalars(select(Notification).order_by(Notification.id)))
             applications = list(await session.scalars(select(Application).order_by(Application.id)))
-            assert len(notifications) == 2
-            assert {item.user_id for item in notifications} == {item.student_id for item in applications}
-            assert all("Acme Labs has closed Software Intern." in item.body for item in notifications)
+            closure_notifications = [item for item in notifications if item.notification_type == "INTERNSHIP_CLOSED"]
+            assert len(closure_notifications) == 2
+            assert {item.user_id for item in closure_notifications} == {item.student_id for item in applications}
+            assert all("Acme Labs has closed Software Intern." in item.body for item in closure_notifications)
             assert [item.status for item in applications] == ["APPLIED", "APPLIED"]
     finally:
         await client.__aexit__(None, None, None)
@@ -110,9 +113,9 @@ async def test_closing_internship_notifies_active_applicants(monkeypatch: pytest
 
 @pytest.mark.anyio
 async def test_accept_offer_authorization_transition_and_idempotency(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.api.v1 import applications
+    from app.services import notify
 
-    monkeypatch.setattr(applications, "send_dev_email", _noop_email)
+    monkeypatch.setattr(notify, "send_dev_email", _noop_email)
     client, sessions, engine = await _create_client()
     try:
         company_headers = await _register(client, sessions, "offer-company@example.com", "COMPANY")
@@ -146,8 +149,13 @@ async def test_accept_offer_authorization_transition_and_idempotency(monkeypatch
 
         async with sessions() as session:
             notifications = list(await session.scalars(select(Notification)))
-            assert len(notifications) == 1
-            assert notifications[0].body == "offer-student accepted the offer for Software Intern"
+            accepted_notifications = [
+                notification
+                for notification in notifications
+                if notification.notification_type == "APPLICATION_STATUS"
+                and notification.body == "offer-student accepted the offer for Software Intern"
+            ]
+            assert len(accepted_notifications) == 1
     finally:
         await client.__aexit__(None, None, None)
         app.dependency_overrides.clear()

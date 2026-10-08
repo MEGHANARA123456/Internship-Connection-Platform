@@ -26,12 +26,9 @@ async def test_notification_read_routes_and_public_institution(monkeypatch: pyte
     app.dependency_overrides[get_db] = override_db
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # 1. Test public institutional stats
+        # 1. Institutional stats require an authenticated administrator
         inst_res = await client.get("/api/v1/institution/placement-stats")
-        assert inst_res.status_code == 200
-        inst_data = inst_res.json()
-        assert "placement_rate_pct" in inst_data
-        assert "institution_name" in inst_data
+        assert inst_res.status_code == 401
 
         # 2. Create user and notifications
         async with sessions() as session:
@@ -58,7 +55,13 @@ async def test_notification_read_routes_and_public_institution(monkeypatch: pyte
                 title="Status Update 2",
                 body="Second update",
             )
-            session.add_all([n1, n2])
+            coded = Notification(
+                user_id=user.id,
+                notification_type="PASSWORD_RESET",
+                title="Password reset",
+                body="Your verification code is 123456.",
+            )
+            session.add_all([n1, n2, coded])
             await session.commit()
             await session.refresh(n1)
             await session.refresh(n2)

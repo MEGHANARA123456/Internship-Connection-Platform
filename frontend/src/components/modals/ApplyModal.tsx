@@ -20,6 +20,7 @@ interface ApplyModalProps {
   internshipId: number
   internshipTitle: string
   companyName?: string
+  matchScore?: number | null
   onApplied: () => void
 }
 
@@ -36,6 +37,7 @@ export function ApplyModal({
   internshipId,
   internshipTitle,
   companyName,
+  matchScore,
   onApplied,
 }: ApplyModalProps) {
   const [success, setSuccess] = useState(false)
@@ -62,13 +64,27 @@ export function ApplyModal({
       return
     }
 
+    let isCurrent = true
+    setAtsData(matchScore == null ? null : {
+      score: matchScore,
+      matched_skills: [],
+      missing_skills: [],
+      suggestions: [],
+    })
     setIsLoadingAts(true)
     api
       .get(`/ai/internships/${internshipId}/ats-score`)
-      .then((res) => setAtsData(res.data))
+      .then((res) => {
+        if (isCurrent) setAtsData(res.data)
+      })
       .catch(() => {})
-      .finally(() => setIsLoadingAts(false))
-  }, [isOpen, internshipId])
+      .finally(() => {
+        if (isCurrent) setIsLoadingAts(false)
+      })
+    return () => {
+      isCurrent = false
+    }
+  }, [isOpen, internshipId, matchScore])
 
   const handleGeneratePitch = async () => {
     setIsGeneratingPitch(true)
@@ -122,18 +138,18 @@ export function ApplyModal({
         </div>
       ) : (
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          {/* AI ATS Match Score Banner */}
-          {isLoadingAts ? (
+          {/* Match Score Banner */}
+          {isLoadingAts && !atsData ? (
             <div className="p-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-lg flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
               <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
-              <span>Analyzing resume and calculating ATS Match Score...</span>
+              <span>Analyzing resume and calculating match score...</span>
             </div>
           ) : atsData ? (
             <div className="p-3.5 bg-gradient-to-r from-indigo-50/80 to-purple-50/80 dark:from-indigo-950/40 dark:to-purple-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Target className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                  <span className="text-xs font-bold text-slate-900 dark:text-white">AI ATS Match Score</span>
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">Match Score</span>
                 </div>
                 <span
                   className={`text-xs font-black px-2.5 py-0.5 rounded-full ${

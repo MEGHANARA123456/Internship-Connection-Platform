@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.api.v1.auth import router as auth_router
 from app.api.v1.profiles import router as profiles_router
+from app.api.v1.company_documents import router as company_documents_router
 from app.api.v1.internships import router as internships_router
 from app.api.v1.applications import router as applications_router
 from app.api.v1.communication import router as communication_router
@@ -27,6 +28,7 @@ from app.models import CompanyProfile, StudentProfile, User, UserRole
 api_router = APIRouter()
 api_router.include_router(auth_router)
 api_router.include_router(profiles_router)
+api_router.include_router(company_documents_router)
 api_router.include_router(internships_router)
 api_router.include_router(applications_router)
 api_router.include_router(communication_router)

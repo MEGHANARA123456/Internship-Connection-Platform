@@ -8,6 +8,11 @@ from collections import defaultdict
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
+
+from app.core.database import async_session_factory
+from app.core.security import decode_token
+from app.models import Application, Interview, User
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +79,23 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+async def _authenticated_user(websocket: WebSocket) -> User | None:
+    token = websocket.query_params.get("token")
+    if not token:
+        return None
+    try:
+        payload = decode_token(token)
+        if payload.get("type") != "access" or not payload.get("sub"):
+            return None
+        user_id = int(payload["sub"])
+    except (TypeError, ValueError):
+        return None
+
+    async with async_session_factory() as db:
+        user = await db.scalar(select(User).where(User.id == user_id))
+    return user if user and user.is_active else None
+
+
 async def notify_user(user_id: int, notification_data: dict[str, Any]) -> None:
     """Helper to dispatch real-time notifications to a connected user WebSocket."""
     try:
@@ -91,7 +113,15 @@ async def notify_user(user_id: int, notification_data: dict[str, Any]) -> None:
 
 @router.websocket("/chat/{user_id}")
 async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
-    await manager.connect_user(user_id, websocket)
+    user = await _authenticated_user(websocket)
+    if user is None:
+        await websocket.close(code=4401)
+        return
+    if user.id != user_id:
+        await websocket.close(code=4403)
+        return
+
+    await manager.connect_user(user.id, websocket)
     try:
         while True:
             raw_text = await websocket.receive_text()
@@ -107,7 +137,7 @@ async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
                             recipient_id,
                             {
                                 "type": "typing",
-                                "sender_id": user_id,
+                                "sender_id": user.id,
                                 "conversation_id": data.get("conversation_id"),
                                 "is_typing": data.get("is_typing", False),
                             },
@@ -117,12 +147,15 @@ async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
                 elif msg_type == "chat_message":
                     recipient_id = data.get("recipient_id")
                     if recipient_id:
+                        message = data.get("message")
+                        if isinstance(message, dict):
+                            message = {**message, "sender_id": user.id}
                         await manager.send_personal_message(
                             recipient_id,
                             {
                                 "type": "new_message",
                                 "conversation_id": data.get("conversation_id"),
-                                "message": data.get("message"),
+                                "message": message,
                             },
                         )
 
@@ -133,19 +166,38 @@ async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
-        manager.disconnect_user(user_id, websocket)
+        manager.disconnect_user(user.id, websocket)
         await manager.broadcast_presence()
     except Exception as exc:
-        logger.warning("WebSocket error for user %s: %s", user_id, exc)
-        manager.disconnect_user(user_id, websocket)
+        logger.warning("WebSocket error for user %s: %s", user.id, exc)
+        manager.disconnect_user(user.id, websocket)
 
 
 @router.websocket("/video-signal/{interview_id}")
 async def websocket_video_signal_endpoint(websocket: WebSocket, interview_id: int):
+    user = await _authenticated_user(websocket)
+    if user is None:
+        await websocket.close(code=4401)
+        return
+
+    async with async_session_factory() as db:
+        interview = await db.scalar(select(Interview).where(Interview.id == interview_id))
+        application = (
+            await db.scalar(select(Application).where(Application.id == interview.application_id))
+            if interview
+            else None
+        )
+    if interview is None or application is None or user.id not in {application.student_id, interview.scheduled_by}:
+        await websocket.close(code=4403)
+        return
+
     await manager.connect_video(interview_id, websocket)
     try:
         while True:
             data = await websocket.receive_json()
+            if not isinstance(data, dict):
+                continue
+            data = {**data, "sender_id": user.id}
             # Broadcast signaling messages (offer, answer, candidate) to other peers in room
             for peer in manager.video_rooms.get(interview_id, set()).copy():
                 if peer != websocket:

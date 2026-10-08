@@ -2,11 +2,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.v1.dependencies import get_db
 from app.main import app
-from app.models import User, UserRole
+from app.models import EmailMessage, Notification, User, UserRole
 from app.models.base import Base
 from app.services.mail import get_emails_for_recipient
 
@@ -138,6 +138,17 @@ async def test_mfa_full_lifecycle_and_regression() -> None:
             db_user = await session.scalar(select(User).where(User.email == reg_user_email))
             login_otp = db_user.mfa_otp
             assert login_otp is not None
+            mfa_email_count = await session.scalar(
+                select(func.count()).select_from(EmailMessage).where(
+                    EmailMessage.user_id == db_user.id,
+                    EmailMessage.message_type == "MFA_CHALLENGE",
+                )
+            )
+            notification_count = await session.scalar(
+                select(func.count()).select_from(Notification).where(Notification.user_id == db_user.id)
+            )
+            assert mfa_email_count >= 1
+            assert notification_count == 0
 
         # =====================================================================
         # 5. VERIFY MFA LOGIN: Reject bad OTP, succeed with good OTP

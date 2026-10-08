@@ -33,6 +33,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )
+    first_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     student_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     institution_verified: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -77,8 +78,24 @@ class CompanyProfile(Base):
     website: Mapped[str | None] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(Text)
     verification_status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    verification_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     user: Mapped[User] = relationship(back_populates="company_profile")
+
+
+class CompanyDocument(Base):
+    __tablename__ = "company_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    document_type: Mapped[str] = mapped_column(String(40), index=True)
+    original_filename: Mapped[str] = mapped_column(String(255))
+    stored_filename: Mapped[str] = mapped_column(String(255), unique=True)
+    content_type: Mapped[str] = mapped_column(String(100))
+    file_size: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
 
 
 class RefreshToken(Base):
@@ -250,4 +267,3 @@ class AuditLog(Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
-

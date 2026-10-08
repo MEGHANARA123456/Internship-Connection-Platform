@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { useAuthStore } from '../../store/auth'
-import { api, getFullMediaUrl } from '../../api/client'
+import { getFullMediaUrl } from '../../api/client'
 import { Sun, Sunset, Moon, Calendar, ShieldCheck } from 'lucide-react'
 
 interface WelcomeGreetingProps {
@@ -45,47 +45,16 @@ export function WelcomeGreeting({
   compact = false,
   className = '',
 }: WelcomeGreetingProps) {
-  const { session, updateName } = useAuthStore()
-  const [resolvedName, setResolvedName] = useState<string>(() => {
-    if (propName) return propName
-    if (session?.name) return session.name
-    if (session?.email) {
-      const raw = session.email.split('@')[0].split('.')[0]
-      const clean = raw.replace(/[^a-zA-Z]/g, ' ').trim()
-      return clean ? clean.charAt(0).toUpperCase() + clean.slice(1) : raw
-    }
-    return ''
-  })
+  const session = useAuthStore((state) => state.session)
+  const rawEmailName = session?.email?.split('@')[0].split('.')[0]
+  const cleanEmailName = rawEmailName?.replace(/[^a-zA-Z]/g, ' ').trim()
+  const fallbackName = cleanEmailName
+    ? cleanEmailName.charAt(0).toUpperCase() + cleanEmailName.slice(1)
+    : rawEmailName || ''
+  const resolvedName = propName || session?.name || fallbackName
 
   const currentRole = propRole || session?.role || 'STUDENT'
   const { greeting, icon: GreetingIcon, color: iconColor } = getTimeGreeting()
-
-  // Background fetch user profile if session.name isn't populated yet
-  useEffect(() => {
-    if (propName) {
-      setResolvedName(propName)
-      return
-    }
-
-    if (session?.name) {
-      setResolvedName(session.name)
-      return
-    }
-
-    if (session?.accessToken) {
-      api
-        .get('/auth/me')
-        .then((res) => {
-          if (res.data?.name) {
-            setResolvedName(res.data.name)
-            updateName(res.data.name)
-          }
-        })
-        .catch(() => {
-          // Fallback gracefully to email-derived name
-        })
-    }
-  }, [propName, session?.name, session?.accessToken, updateName])
 
   // Formatted date string
   const todayFormatted = new Intl.DateTimeFormat('en-US', {

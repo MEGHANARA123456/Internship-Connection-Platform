@@ -27,12 +27,6 @@ class CompanyRegister(BaseModel):
     description: str | None = None
 
 
-class AdminRegister(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8)
-    signup_key: str = Field(min_length=1)
-
-
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
@@ -82,6 +76,7 @@ class TokenResponse(BaseModel):
     email: str | None = None
     avatar_url: str | None = None
     mfa_required: bool = False
+    is_first_login: bool = False
     access_token_expires_in: int | None = None
     refresh_token_expires_in: int | None = None
     access_token_expires_at: datetime | None = None

@@ -17,7 +17,7 @@ from app.schemas.admin import (
 )
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
-admin_only = Annotated[User, Depends(require_roles(UserRole.ADMIN))]
+admin_only = Annotated[User, Depends(require_roles(UserRole.ADMIN))]# type: ignore
 
 
 # ── Public / role-aware overview ──────────────────────────────────────────────
@@ -237,9 +237,9 @@ async def admin_user_growth(
 
         result.append(UserGrowthPoint(
             period=label,
-            students=await _count_role(UserRole.STUDENT),
-            companies=await _count_role(UserRole.COMPANY),
-            admins=await _count_role(UserRole.ADMIN),
+            students=await _count_role(UserRole.STUDENT),# type: ignore
+            companies=await _count_role(UserRole.COMPANY), # type: ignore
+            admins=await _count_role(UserRole.ADMIN),# type: ignore
         ).model_dump())
 
     return result
@@ -272,7 +272,7 @@ async def admin_funnel_by_company(
     result = []
     for (company_id, _) in rows:
         job_ids = [
-            j.id for j in await db.scalars(
+            j.id for j in await db.scalars(# type: ignore
                 select(Internship.id).where(Internship.company_id == company_id)
             )
         ]

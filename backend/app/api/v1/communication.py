@@ -4,21 +4,24 @@
 
 from datetime import datetime, timezone
 import logging
+import re
 from typing import Annotated
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, select, update
+from sqlalchemy.orm import selectinload
 
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
 from app.models import Application, CompanyProfile, Conversation, Interview, Internship, Message, Notification, StudentProfile, User, UserRole
 from app.api.v1.applications import application_transition_allowed
 from app.schemas.communication import ConversationCreate, InterviewCreate, InterviewResponse, InterviewUpdate, MessageCreate, MessageResponse, NotificationResponse
-from app.services.mail import send_dev_email
+from app.services.notify import BLOCKED_NOTIFICATION_TYPES, notify
 
 router = APIRouter(tags=["communication"])
 logger = logging.getLogger(__name__)
-participant = Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))]
+_CODE_PATTERN = re.compile(r"\b\d{4,8}\b")
+participant = Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))]# type: ignore
 
 
 def _is_external_url(value: str | None) -> bool:
@@ -59,10 +62,42 @@ async def create_conversation(data: ConversationCreate, user: participant, db: D
 
 @router.get("/contacts")
 async def list_contacts(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[dict]:
-    users = (await db.scalars(select(User).where(User.id != user.id, User.is_active == True).limit(20))).all()
+    contact_ids: set[int] = set()
+    if user.role == UserRole.STUDENT:
+        applied_company_ids = await db.scalars(
+            select(Internship.company_id)
+            .join(Application, Application.internship_id == Internship.id)
+            .where(Application.student_id == user.id)
+        )
+        conversation_company_ids = await db.scalars(
+            select(Conversation.company_id).where(Conversation.student_id == user.id)
+        )
+        contact_ids.update(applied_company_ids)
+        contact_ids.update(conversation_company_ids)
+        contact_role = UserRole.COMPANY
+    elif user.role == UserRole.COMPANY:
+        applicant_ids = await db.scalars(
+            select(Application.student_id)
+            .join(Internship, Application.internship_id == Internship.id)
+            .where(Internship.company_id == user.id)
+        )
+        contact_ids.update(applicant_ids)
+        contact_role = UserRole.STUDENT
+    else:
+        return []
+
+    users = (
+        await db.scalars(
+            select(User)
+            .options(selectinload(User.student_profile), selectinload(User.company_profile))
+            .where(User.id.in_(contact_ids), User.id != user.id, User.is_active == True, User.role == contact_role)
+            .order_by(User.id.desc())
+            .limit(20)
+        )
+    ).all() if contact_ids else []
     contacts = []
     for u in users:
-        name = u.email.split("@")[0]
+        name = "Student" if u.role == UserRole.STUDENT else "Company"
         avatar_url = None
         if u.role == UserRole.STUDENT and u.student_profile:
             name = u.student_profile.full_name
@@ -72,9 +107,8 @@ async def list_contacts(user: Annotated[User, Depends(get_current_user)], db: Db
             avatar_url = u.company_profile.avatar_url
         contacts.append({
             "id": u.id,
-            "email": u.email,
             "name": name,
-            "role": u.role.value,
+            "role": u.role.value,# type: ignore
             "avatar_url": avatar_url,
         })
     return contacts
@@ -263,7 +297,7 @@ async def send_message(conversation_id: int, data: MessageCreate, user: particip
 
 
 @router.post("/applications/{application_id}/interviews", response_model=InterviewResponse, status_code=201)
-async def schedule_interview(application_id: int, data: InterviewCreate, user: Annotated[User, Depends(require_roles(UserRole.COMPANY))], db: DbSession) -> dict:
+async def schedule_interview(application_id: int, data: InterviewCreate, user: Annotated[User, Depends(require_roles(UserRole.COMPANY))], db: DbSession) -> dict:# type: ignore
     application = await db.scalar(select(Application).join(Internship, Application.internship_id == Internship.id).where(Application.id == application_id, Internship.company_id == user.id))
     if application is None: raise HTTPException(404, "Application not found")
     
@@ -320,9 +354,16 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
                     </div>
                 </div>
                 """
-        db.add(Notification(user_id=student.id, notification_type="INTERVIEW_INVITE", title=notification_title, body=notification_body))
+        await notify(
+            db,
+            student.id,
+            "INTERVIEW_INVITE",
+            notification_title,
+            notification_body,
+            email=True,
+            html=html_body,
+        )
         await db.commit()
-        await send_dev_email(student.email, notification_title, notification_body, html=html_body, message_type="INTERVIEW_INVITE", db=db)
         try:
             from app.api.v1.ws import manager
             await manager.send_personal_message(
@@ -406,14 +447,34 @@ async def update_interview(interview_id: int, data: InterviewUpdate, user: parti
     if interview is None: raise HTTPException(404, "Interview not found")
     application = await db.scalar(select(Application).where(Application.id == interview.application_id))
     internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id)) if application else None
-    if application is None or (user.id != application.student_id and user.id != internship.company_id): raise HTTPException(403, "Interview access denied")
-    for key, value in data.model_dump(exclude_unset=True).items(): setattr(interview, key, value)
+    if application is None or (user.id != application.student_id and user.id != internship.company_id): raise HTTPException(403, "Interview access denied")# type: ignore
+    previous_status = interview.status
+    updates = data.model_dump(exclude_unset=True)
+    for key, value in updates.items(): setattr(interview, key, value)
+    if data.status in {"RESCHEDULED", "CANCELLED"} and data.status != previous_status:
+        title = "Interview rescheduled" if data.status == "RESCHEDULED" else "Interview cancelled"
+        action = "rescheduled" if data.status == "RESCHEDULED" else "cancelled"
+        internship_title = internship.title if internship else "your internship"
+        await notify(
+            db,
+            application.student_id,
+            f"INTERVIEW_{data.status}",
+            title,
+            f"Your interview for {internship_title} has been {action}.",
+        )
     await db.commit(); await db.refresh(interview); return interview
 
 
 @router.get("/notifications", response_model=list[NotificationResponse])
 async def notifications(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[Notification]:
-    return list(await db.scalars(select(Notification).where(Notification.user_id == user.id).order_by(Notification.created_at.desc())))
+    items = list(await db.scalars(select(Notification).where(Notification.user_id == user.id).order_by(Notification.created_at.desc())))
+    return [
+        item
+        for item in items
+        if item.notification_type not in BLOCKED_NOTIFICATION_TYPES
+        and not _CODE_PATTERN.search(item.title)
+        and not _CODE_PATTERN.search(item.body)
+    ]
 
 
 @router.post("/notifications/read-all", status_code=204)

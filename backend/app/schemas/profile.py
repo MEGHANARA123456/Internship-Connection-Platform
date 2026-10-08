@@ -20,7 +20,6 @@ class CompanyProfileUpdate(BaseModel):
     industry: str = Field(min_length=2, max_length=255)
     website: str | None = None
     description: str | None = None
-    verification_status: str = Field(default="PENDING", pattern="^(PENDING|VERIFIED|REJECTED)$")
     avatar_url: str | None = None
 
 
@@ -38,6 +37,7 @@ class ProfileResponse(BaseModel):
     website: str | None = None
     description: str | None = None
     verification_status: str | None = None
+    verification_note: str | None = None
     avatar_url: str | None = None
 
 

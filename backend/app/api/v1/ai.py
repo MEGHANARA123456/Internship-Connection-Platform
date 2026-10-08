@@ -2,7 +2,6 @@
 # Endpoints for AI-assisted features and AI-related backend actions.
 # -----------------------------------------------------------------------------
 
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,18 +9,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.v1.dependencies import DbSession, require_roles
-from app.core.config import get_settings
-from app.models import CompanyProfile, Internship, Resume, StudentProfile, User, UserRole
+from app.models import CompanyProfile, Internship, StudentProfile, User, UserRole
 from app.services.ai import (
     compute_ats_score,
     evaluate_mock_interview_answer,
+    get_student_resume_text,
     generate_mock_interview_questions,
     generate_tailored_pitch,
 )
-from app.services.pdf import extract_text_from_pdf
 
 router = APIRouter(prefix="/ai", tags=["ai"])
-student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]
+student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]# type: ignore
 
 
 class EvaluateAnswerRequest(BaseModel):
@@ -39,12 +37,7 @@ async def get_ats_score(internship_id: int, user: student_only, db: DbSession) -
     student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
     student_skills = [s.strip() for s in (student_prof.skills if student_prof else "").split(",") if s.strip()]
 
-    resume = await db.scalar(select(Resume).where(Resume.student_id == user.id))
-    resume_text = ""
-    if resume:
-        resume_path = Path(get_settings().resume_storage_path) / resume.stored_filename
-        if resume_path.is_file() and resume_path.suffix.lower() == ".pdf":
-            resume_text = extract_text_from_pdf(resume_path)
+    resume_text = await get_student_resume_text(db, user.id)
 
     job_skills = [s.strip() for s in (internship.skills or "").split(",") if s.strip()]
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import {
   TrendingUp,
@@ -80,6 +80,7 @@ export function DesktopAnalysisVisuals({
 
   // Interactive Visuals Action Menu state
   const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const [isViewMenuOpen, setIsViewMenuOpen] = useState(false)
   const [timeRange, setTimeRange] = useState<TimeRangeOption>('ALL')
   const [showPercentages, setShowPercentages] = useState(true)
   const [showMetricBadges, setShowMetricBadges] = useState(true)
@@ -87,6 +88,15 @@ export function DesktopAnalysisVisuals({
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
   const menuRef = useRef<HTMLDivElement>(null)
+  const viewMenuRef = useRef<HTMLDivElement>(null)
+  const viewTriggerRef = useRef<HTMLButtonElement>(null)
+  const viewItemRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const viewOptions = [
+    { key: 'funnel', label: 'Pipeline Funnel', icon: Filter },
+    { key: 'trends', label: 'Activity Trends', icon: TrendingUp },
+    { key: 'domains', label: 'Role Domains', icon: PieChart },
+    { key: 'market', label: 'Work Modes', icon: Layers },
+  ] as const
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
@@ -126,6 +136,55 @@ export function DesktopAnalysisVisuals({
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [isMenuOpen])
+
+  useEffect(() => {
+    if (!isViewMenuOpen) return
+
+    const selectedIndex = viewOptions.findIndex((view) => view.key === activeTab)
+    viewItemRefs.current[selectedIndex < 0 ? 0 : selectedIndex]?.focus()
+
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (event.target instanceof Node && !viewMenuRef.current?.contains(event.target)) {
+        setIsViewMenuOpen(false)
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsViewMenuOpen(false)
+        viewTriggerRef.current?.focus()
+      }
+    }
+
+    document.addEventListener('mousedown', handleOutsideClick)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isViewMenuOpen, activeTab])
+
+  const handleViewMenuKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | null = null
+    if (event.key === 'ArrowDown') nextIndex = (index + 1) % viewOptions.length
+    if (event.key === 'ArrowUp') nextIndex = (index - 1 + viewOptions.length) % viewOptions.length
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = viewOptions.length - 1
+    if (nextIndex !== null) {
+      event.preventDefault()
+      viewItemRefs.current[nextIndex]?.focus()
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setIsViewMenuOpen(false)
+      viewTriggerRef.current?.focus()
+    }
+  }
+
+  const selectView = (view: (typeof viewOptions)[number]['key']) => {
+    setActiveTab(view)
+    setIsViewMenuOpen(false)
+    viewTriggerRef.current?.focus()
+  }
 
   const fetchAnalytics = async () => {
     setIsRefreshing(true)
@@ -413,57 +472,71 @@ export function DesktopAnalysisVisuals({
         </div>
 
         {/* View Switcher Tabs & Actions Menu on analysis top */}
-        <div className="flex items-center gap-2 flex-wrap self-start lg:self-auto">
-          {/* Main Tab Switcher */}
-          <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl border border-slate-200 dark:border-slate-700/60">
-            <button
-              type="button"
-              onClick={() => setActiveTab('funnel')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeTab === 'funnel'
-                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              <Filter className="w-3.5 h-3.5" />
-              <span>Pipeline Funnel</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('trends')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeTab === 'trends'
-                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              <TrendingUp className="w-3.5 h-3.5" />
-              <span>Activity Trends</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('domains')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeTab === 'domains'
-                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              <PieChart className="w-3.5 h-3.5" />
-              <span>Role Domains</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('market')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeTab === 'market'
-                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              <span>Work Modes</span>
-            </button>
+        <div className="flex shrink-0 items-center gap-2 self-start lg:self-auto">
+          <div className="relative" ref={viewMenuRef}>
+            {(() => {
+              const selectedView = viewOptions.find((view) => view.key === activeTab) ?? viewOptions[0]
+              const SelectedIcon = selectedView.icon
+              return (
+                <>
+                  <button
+                    ref={viewTriggerRef}
+                    type="button"
+                    onClick={() => setIsViewMenuOpen((open) => !open)}
+                    onKeyDown={(event) => {
+                      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+                        event.preventDefault()
+                        setIsViewMenuOpen(true)
+                      }
+                    }}
+                    className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs transition-all hover:bg-white hover:text-indigo-600 dark:border-slate-700/60 dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-indigo-400"
+                    aria-label={`Analytics view: ${selectedView.label}`}
+                    aria-haspopup="menu"
+                    aria-expanded={isViewMenuOpen}
+                    aria-controls="analytics-view-menu"
+                  >
+                    <SelectedIcon className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>{selectedView.label}</span>
+                    <ChevronDown className={`h-3 w-3 transition-transform ${isViewMenuOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {isViewMenuOpen && (
+                    <div
+                      id="analytics-view-menu"
+                      role="menu"
+                      aria-label="Analytics views"
+                      className="absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl dark:border-slate-800 dark:bg-slate-900"
+                    >
+                      {viewOptions.map((view, index) => {
+                        const Icon = view.icon
+                        const isActive = activeTab === view.key
+                        return (
+                          <button
+                            key={view.key}
+                            ref={(element) => { viewItemRefs.current[index] = element }}
+                            type="button"
+                            role="menuitem"
+                            tabIndex={-1}
+                            onClick={() => selectView(view.key)}
+                            onKeyDown={(event) => handleViewMenuKeyDown(event, index)}
+                            className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs font-medium transition-colors ${
+                              isActive
+                                ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
+                                : 'text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <Icon className="h-3.5 w-3.5" />
+                              {view.label}
+                            </span>
+                            {isActive && <Check className="h-3.5 w-3.5" aria-label="Selected" />}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </>
+              )
+            })()}
           </div>
 
           {/* Refresh Action */}
@@ -907,7 +980,13 @@ export function DesktopAnalysisVisuals({
 
           {/* Interactive SVG Area & Line Chart */}
           <div className="w-full bg-slate-50 dark:bg-slate-950/60 rounded-xl border border-slate-200 dark:border-slate-800 p-4 relative overflow-hidden">
-            <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="w-full h-56 overflow-visible">
+            <svg
+              viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+              className="w-full h-56 overflow-visible"
+              role="img"
+              aria-label="Monthly application and offer activity chart"
+            >
+              <title>Monthly applications and offers</title>
               <defs>
                 <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.35" />
@@ -936,7 +1015,7 @@ export function DesktopAnalysisVisuals({
                     <text
                       x="10"
                       y={y + 4}
-                      className="text-[10px] fill-slate-400 dark:fill-slate-500 font-mono"
+                      className="text-[10px] fill-slate-400 dark:fill-slate-300 font-mono"
                     >
                       {Math.round((maxApps / 3) * (3 - row))}
                     </text>

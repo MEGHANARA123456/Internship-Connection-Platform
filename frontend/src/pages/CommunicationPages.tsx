@@ -9,10 +9,11 @@ import { Modal } from '../components/ui/Modal'
 import { EmptyState } from '../components/ui/EmptyState'
 import { CardSkeleton } from '../components/ui/LoadingSkeleton'
 import { ErrorState } from '../components/ui/ErrorState'
+import { PaginationControls } from '../components/ui/PaginationControls'
 import { VideoInterviewModal } from '../components/modals/VideoInterviewModal'
 import { ScheduleInterviewModal } from '../components/modals/ScheduleInterviewModal'
 import { useWebSocketChat } from '../lib/useWebSocketChat'
-import { requestNotificationPermission } from '../lib/notifications'
+import { isSensitiveNotification, maskCodes, requestNotificationPermission } from '../lib/notifications'
 import {
   Calendar,
   Clock,
@@ -60,6 +61,15 @@ export function InterviewsPage() {
   const [updatingId, setUpdatingId] = useState<number | null>(null)
   const [videoModalInterview, setVideoModalInterview] = useState<any | null>(null)
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false)
+  const [activeStatusTab, setActiveStatusTab] = useState('ALL')
+  const [page, setPage] = useState(1)
+
+  const statusTabs = [
+    { key: 'ALL', label: 'All', statuses: null },
+    { key: 'UPCOMING', label: 'Upcoming', statuses: ['SCHEDULED', 'RESCHEDULED'] },
+    { key: 'COMPLETED', label: 'Completed', statuses: ['COMPLETED'] },
+    { key: 'CANCELLED', label: 'Cancelled', statuses: ['CANCELLED'] },
+  ]
 
   const downloadIcs = (item: any) => {
     try {
@@ -123,6 +133,15 @@ export function InterviewsPage() {
     fetchInterviews()
   }, [])
 
+  const filteredInterviews = activeStatusTab === 'ALL'
+    ? interviews
+    : interviews.filter((item) => statusTabs.find((tab) => tab.key === activeStatusTab)?.statuses?.includes(item.status))
+  const totalPages = Math.max(1, Math.ceil(filteredInterviews.length / 10))
+  const pagedInterviews = filteredInterviews.slice((page - 1) * 10, page * 10)
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages))
+  }, [totalPages])
+
   const handleUpdateStatus = async (interviewId: number, newStatus: string) => {
     setUpdatingId(interviewId)
     try {
@@ -155,6 +174,41 @@ export function InterviewsPage() {
             Schedule Interview
           </Button>
         )}
+      </div>
+
+      <div className="mb-5 -mx-1 overflow-x-auto pb-1">
+        <div role="tablist" aria-label="Interview status" className="flex w-max min-w-full items-center gap-1 border-b border-slate-200 pb-2 dark:border-slate-800">
+          {statusTabs.map((tab) => {
+            const count = tab.statuses
+              ? interviews.filter((item) => tab.statuses?.includes(item.status)).length
+              : interviews.length
+            const selected = activeStatusTab === tab.key
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => {
+                  setActiveStatusTab(tab.key)
+                  setPage(1)
+                }}
+                className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                  selected
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
+                }`}
+              >
+                {tab.label}
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
+                  selected ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700'
+                }`}>
+                  {count}
+                </span>
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {/* 4-Stage Interview Process Roadmap */}
@@ -278,8 +332,8 @@ export function InterviewsPage() {
         </div>
       ) : error ? (
         <ErrorState message={error} onRetry={fetchInterviews} />
-      ) : interviews.length === 0 ? (
-        session?.role === 'COMPANY' ? (
+      ) : filteredInterviews.length === 0 ? (
+        interviews.length === 0 && activeStatusTab === 'ALL' && session?.role === 'COMPANY' ? (
           <EmptyState
             icon={Calendar}
             title="No scheduled interviews yet"
@@ -287,16 +341,22 @@ export function InterviewsPage() {
             actionLabel="Schedule an Interview"
             onAction={() => setIsScheduleModalOpen(true)}
           />
-        ) : (
+        ) : interviews.length === 0 && activeStatusTab === 'ALL' ? (
           <EmptyState
             icon={Calendar}
             title="No scheduled interviews yet"
             description="Once your application is reviewed and shortlisted by a recruiter, interview sessions will appear here with in-app video links and calendar invitations."
           />
+        ) : (
+          <EmptyState
+            icon={Calendar}
+            title={`No ${statusTabs.find((tab) => tab.key === activeStatusTab)?.label.toLowerCase()} interviews yet`}
+            description="Interviews with this status will appear here."
+          />
         )
       ) : (
         <div className="space-y-4">
-          {interviews.map((item) => {
+          {pagedInterviews.map((item) => {
             const dateObj = new Date(item.scheduled_at)
             const isCompany = session?.role === 'COMPANY'
 
@@ -443,6 +503,9 @@ export function InterviewsPage() {
             )
           })}
         </div>
+      )}
+      {!loading && !error && (
+        <PaginationControls currentPage={page} totalPages={totalPages} onPageChange={setPage} />
       )}
 
       {/* Embedded WebRTC In-App Video Room Modal */}
@@ -1280,7 +1343,7 @@ export function NotificationsPage() {
     setError(null)
     try {
       const res = await api.get('/notifications')
-      setNotifications(res.data || [])
+      setNotifications((res.data || []).filter((item: any) => !isSensitiveNotification(item)))
     } catch {
       setError('Failed to fetch notifications.')
     } finally {
@@ -1294,9 +1357,6 @@ export function NotificationsPage() {
     try {
       const res = await api.get('/me/emails')
       setEmails(res.data || [])
-      if (res.data && res.data.length > 0 && !expandedEmailId) {
-        setExpandedEmailId(res.data[0].id)
-      }
     } catch {
       setEmailError('Failed to retrieve your emails.')
     } finally {
@@ -1307,6 +1367,20 @@ export function NotificationsPage() {
   useEffect(() => {
     fetchNotifications()
     fetchUserEmails()
+  }, [])
+
+  useEffect(() => {
+    const handleRealtimeNotification = (event: Event) => {
+      const notification = (event as CustomEvent).detail
+      if (!notification || isSensitiveNotification(notification)) return
+      setNotifications((current) => [
+        notification,
+        ...current.filter((item) => item.id !== notification.id),
+      ])
+    }
+
+    window.addEventListener('app:notification', handleRealtimeNotification)
+    return () => window.removeEventListener('app:notification', handleRealtimeNotification)
   }, [])
 
   const handleMarkAllRead = async () => {
@@ -1327,7 +1401,7 @@ export function NotificationsPage() {
     }
   }
 
-  const unreadCount = notifications.filter((n) => !n.read_at).length
+  const unreadCount = notifications.filter((n) => !n.read_at && !isSensitiveNotification(n)).length
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
@@ -1374,7 +1448,10 @@ export function NotificationsPage() {
       <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 mb-6">
         <button
           type="button"
-          onClick={() => setActiveTab('notifications')}
+          onClick={() => {
+            setActiveTab('notifications')
+            fetchNotifications()
+          }}
           className={`pb-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
             activeTab === 'notifications'
               ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
@@ -1447,7 +1524,7 @@ export function NotificationsPage() {
                         <span className="w-2 h-2 rounded-full bg-indigo-600 inline-block" />
                       )}
                     </div>
-                    <p className="text-xs text-slate-600 dark:text-slate-300">{item.message}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-300">{item.body || item.message}</p>
                   </div>
                   <span className="text-[11px] text-slate-400 shrink-0">
                     {new Date(item.created_at).toLocaleDateString()}
@@ -1501,7 +1578,7 @@ export function NotificationsPage() {
                       <div className="space-y-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                            {mail.subject}
+                            {maskCodes(mail.subject)}
                           </h3>
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                             To: {mail.to}

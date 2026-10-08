@@ -78,10 +78,11 @@ async def _create_application(client: AsyncClient, sessions, company_headers: di
 
 @pytest.mark.anyio
 async def test_interview_api_handles_external_empty_and_legacy_links(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.api.v1 import auth, communication
+    from app.api.v1 import auth
+    from app.services import notify
 
     monkeypatch.setattr(auth, "send_dev_email", _noop_email)
-    monkeypatch.setattr(communication, "send_dev_email", _noop_email)
+    monkeypatch.setattr(notify, "send_dev_email", _noop_email)
     client, sessions, engine = await _create_test_context()
     try:
         company_headers = await _register_and_login(client, sessions, "interview-company@example.com", "COMPANY")

@@ -3,18 +3,37 @@
 # -----------------------------------------------------------------------------
 
 import re
+from pathlib import Path
 from typing import Any
 
-def compute_ats_score(
-    resume_text: str,
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.models import Resume
+from app.services.pdf import extract_text_from_pdf
+
+
+async def get_student_resume_text(db: AsyncSession, student_id: int) -> str:
+    resume = await db.scalar(select(Resume).where(Resume.student_id == student_id))
+    if resume is None:
+        return ""
+
+    resume_path = Path(get_settings().resume_storage_path) / resume.stored_filename
+    if resume_path.is_file() and resume_path.suffix.lower() == ".pdf":
+        return extract_text_from_pdf(resume_path)
+    return ""
+
+
+def compute_match(
     student_skills: list[str],
+    resume_text: str,
     job_title: str,
     job_description: str,
     job_skills: list[str],
 ) -> dict[str, Any]:
     # Normalize text
     full_candidate_text = f"{resume_text} {' '.join(student_skills)}".lower()
-    job_full_text = f"{job_title} {job_description} {' '.join(job_skills)}".lower()
 
     # Match skills
     normalized_job_skills = [s.strip().lower() for s in job_skills if s.strip()]
@@ -43,37 +62,50 @@ def compute_ats_score(
     raw_score = (skill_match_ratio * 70) + (title_ratio * 20) + (10 if len(resume_text) > 100 else 0)
     score = min(max(int(raw_score), 35), 98)
 
-    # Suggested improvement tips
+    return {
+        "score": score,
+        "matched_skills": [s.title() for s in matched_skills],
+        "missing_skills": [s.title() for s in missing_skills],
+    }
+
+
+def compute_ats_score(
+    resume_text: str,
+    student_skills: list[str],
+    job_title: str,
+    job_description: str,
+    job_skills: list[str],
+) -> dict[str, Any]:
+    match = compute_match(student_skills, resume_text, job_title, job_description, job_skills)
     suggestions = []
-    if missing_skills:
-        top_missing = missing_skills[:3]
-        suggestions.append(f"Add projects or experience demonstrating skills in: {', '.join(top_missing).title()}.")
+    if match["missing_skills"]:
+        suggestions.append(
+            f"Add projects or experience demonstrating skills in: {', '.join(match['missing_skills'][:3])}."
+        )
     if len(resume_text) < 200:
         suggestions.append("Upload a detailed PDF resume to showcase course projects, metrics, and technical accomplishments.")
     if not suggestions:
         suggestions.append("Your profile is exceptionally well-aligned! Emphasize measurable achievements in your cover note.")
 
     return {
-        "score": score,
-        "matched_skills": [s.title() for s in matched_skills],
-        "missing_skills": [s.title() for s in missing_skills],
-        "strengths": [f"Demonstrated proficiency in {', '.join(matched_skills[:3]).title()}." if matched_skills else "Academic foundation"],
+        **match,
+        "strengths": [
+            f"Demonstrated proficiency in {', '.join(match['matched_skills'][:3])}."
+            if match["matched_skills"]
+            else "Academic foundation"
+        ],
         "suggestions": suggestions,
     }
 
 
-def compute_match_score_fast(student_skills: list[str], job_skills: list[str], job_title: str = "") -> dict[str, Any]:
-    normalized_job_skills = [s.strip().lower() for s in job_skills if s.strip()]
-    normalized_student_skills = [s.strip().lower() for s in student_skills if s.strip()]
-
-    if not normalized_job_skills:
-        return {"score": 85 if normalized_student_skills else 70, "matched_skills": []}
-
-    matched = [s for s in normalized_job_skills if s in normalized_student_skills]
-    ratio = len(matched) / len(normalized_job_skills)
-
-    score = min(max(int(45 + ratio * 53), 45), 98)
-    return {"score": score, "matched_skills": [s.title() for s in matched]}
+def compute_match_score_fast(
+    student_skills: list[str],
+    job_skills: list[str],
+    job_title: str = "",
+    resume_text: str = "",
+    job_description: str = "",
+) -> dict[str, Any]:
+    return compute_match(student_skills, resume_text, job_title, job_description, job_skills)
 
 
 

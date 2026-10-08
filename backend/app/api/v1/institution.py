@@ -7,8 +7,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 
-from app.api.v1.dependencies import DbSession, get_current_user_optional
-from app.models import Application, CompanyProfile, Internship, StudentProfile, User
+from app.api.v1.dependencies import DbSession, require_roles
+from app.models import Application, CompanyProfile, Internship, StudentProfile, User, UserRole
 
 router = APIRouter(prefix="/institution", tags=["institution"])
 
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/institution", tags=["institution"])
 @router.get("/placement-stats")
 async def get_placement_stats(
     db: DbSession,
-    current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
+    current_user: Annotated[User, Depends(require_roles(UserRole.ADMIN))],
 ) -> dict:
     """Institutional Placement Statistics for College TPO / University Portal strictly from database."""
     # Total registered students

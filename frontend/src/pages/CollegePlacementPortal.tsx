@@ -42,8 +42,27 @@ export function CollegePlacementPortal() {
   }
 
   useEffect(() => {
-    fetchStats()
-  }, [])
+    if (session?.role === 'ADMIN') fetchStats()
+  }, [session?.role])
+
+  if (session?.role !== 'ADMIN') {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+        <div className="max-w-lg mx-auto text-center space-y-4">
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white">Administrator sign-in required</h1>
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            Sign in with an administrator account to view institutional placement statistics.
+          </p>
+          <Link
+            to="/login"
+            className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+          >
+            Go to login
+          </Link>
+        </div>
+      </div>
+    )
+  }
 
   const handleExportReport = () => {
     if (!data) return

@@ -23,7 +23,6 @@ import {
   Smartphone,
   Monitor,
   Bookmark,
-  GraduationCap,
   PlusCircle,
   Lock,
   BarChart3,
@@ -31,6 +30,7 @@ import {
 import { useThemeStore } from '../../store/theme'
 import { useViewModeStore } from '../../store/viewMode'
 import { useWebSocketChat } from '../../lib/useWebSocketChat'
+import { isSensitiveNotification } from '../../lib/notifications'
 
 export function Navbar() {
   const { session, logout } = useAuthStore()
@@ -87,7 +87,7 @@ export function Navbar() {
         .get('/notifications')
         .then((res) => {
           if (!isMounted) return
-          const unread = res.data.filter((n: { read_at?: string | null }) => !n.read_at).length
+          const unread = res.data.filter((n: { read_at?: string | null; notification_type?: string; title?: string; body?: string }) => !n.read_at && !isSensitiveNotification(n)).length
           setUnreadCount(unread)
         })
         .catch(() => { })
@@ -95,19 +95,24 @@ export function Navbar() {
 
     fetchNotifications()
 
-    const handleRealtimeNotification = () => {
+    const handleRealtimeNotification = (event: Event) => {
       if (isMounted) {
-        setUnreadCount((prev) => prev + 1)
+        const notification = (event as CustomEvent).detail
+        if (notification && !isSensitiveNotification(notification)) {
+          setUnreadCount((prev) => prev + 1)
+        }
         fetchNotifications()
       }
     }
 
     window.addEventListener('app:notification', handleRealtimeNotification)
-    const interval = setInterval(fetchNotifications, 60000)
+    window.addEventListener('focus', fetchNotifications)
+    const interval = setInterval(fetchNotifications, 30000)
 
     return () => {
       isMounted = false
       window.removeEventListener('app:notification', handleRealtimeNotification)
+      window.removeEventListener('focus', fetchNotifications)
       clearInterval(interval)
     }
   }, [session?.accessToken])
@@ -238,15 +243,11 @@ export function Navbar() {
                         </Link>
 
                         <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800/80">
-                          <Link to="/saved" onClick={() => setNavMenuOpen(false)} className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60">
+                          <Link to="/saved" onClick={() => setNavMenuOpen(false)} className={`flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium ${isActive('/saved') ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}>
                             <Bookmark className="w-3.5 h-3.5 text-amber-500" />
                             <span>Saved Jobs</span>
                           </Link>
-                          <Link to="/college" onClick={() => setNavMenuOpen(false)} className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60">
-                            <GraduationCap className="w-3.5 h-3.5 text-indigo-500" />
-                            <span>Placement Hub</span>
-                          </Link>
-                          <Link to="/student" onClick={() => setNavMenuOpen(false)} className="flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60">
+                          <Link to="/student/analytics" onClick={() => setNavMenuOpen(false)} className={`flex items-center gap-1.5 p-1.5 px-2 rounded-lg text-xs font-medium ${isActive('/student/analytics') ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}>
                             <BarChart3 className="w-3.5 h-3.5 text-emerald-500" />
                             <span>Analytics</span>
                           </Link>
@@ -312,7 +313,7 @@ export function Navbar() {
                             <Layers className="w-4 h-4" />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <span className="text-xs font-bold">Admin Console</span>
+                            <span className="text-xs font-bold">Admin Dashboard</span>
                             <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Platform ecosystem metrics & system health</p>
                           </div>
                         </Link>

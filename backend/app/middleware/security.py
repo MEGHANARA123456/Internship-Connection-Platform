@@ -38,4 +38,8 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=(), payment=()"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+        if not request.url.path.startswith(("/docs", "/redoc", "/openapi.json")):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+            )
         return response

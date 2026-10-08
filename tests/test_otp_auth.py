@@ -2,11 +2,11 @@ from datetime import timedelta
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.v1.dependencies import get_db
 from app.main import app
-from app.models import User, UserRole
+from app.models import EmailMessage, Notification, User, UserRole
 from app.models.base import Base
 from app.services.mail import get_emails_for_recipient
 
@@ -51,7 +51,7 @@ async def test_otp_password_reset_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         emails = get_emails_for_recipient(test_email)
         assert len(emails) >= 1
         latest_email = emails[0]
-        assert "Password Reset" in latest_email["subject"] or "OTP" in latest_email["subject"]
+        assert latest_email["subject"] == "InternSphere Password Reset Code"
 
         # Check OTP in database
         async with sessions() as session:
@@ -61,6 +61,15 @@ async def test_otp_password_reset_flow(monkeypatch: pytest.MonkeyPatch) -> None:
             assert len(user.reset_token) == 6
             assert user.reset_token.isdigit()
             otp = user.reset_token
+            assert otp in latest_email["body"]
+            password_reset_email_count = await session.scalar(
+                select(func.count()).select_from(EmailMessage).where(EmailMessage.user_id == user.id)
+            )
+            notification_count = await session.scalar(
+                select(func.count()).select_from(Notification).where(Notification.user_id == user.id)
+            )
+            assert password_reset_email_count >= 1
+            assert notification_count == 0
 
         # 3. Test wrong OTP on /verify-otp
         wrong_otp_resp = await client.post(

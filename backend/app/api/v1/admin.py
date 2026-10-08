@@ -5,13 +5,18 @@
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 
 from app.api.v1.dependencies import DbSession, require_roles
-from app.models import Application, AuditLog, CompanyProfile, Internship, Report, User, UserRole
+from app.core.config import get_settings
+from app.core.security import hash_password
+from app.models import Application, AuditLog, CompanyDocument, CompanyProfile, Internship, Report, User, UserRole
 from app.models.user import StudentProfile
 from app.schemas.admin import (
+    AdminCreate,
+    AdminUserDeletionRequest,
     AuditLogResponse,
     CompanyListItem,
     CompanyPostingItem,
@@ -26,9 +31,14 @@ from app.schemas.admin import (
     CompanyProfileBrief,
 )
 from app.services.audit import write_audit
+from app.services.account_deletion import erase_user
+from app.services.email_validation import validate_email_format
+from app.services.mail import send_dev_email
+from app.services.notify import notify
+from app.services.company_documents import company_document_path
 
-router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_roles(UserRole.ADMIN))])
-admin_user = Annotated[User, Depends(require_roles(UserRole.ADMIN))]
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_roles(UserRole.ADMIN))]) # type: ignore
+admin_user = Annotated[User, Depends(require_roles(UserRole.ADMIN))] # type: ignore
 REPORT_TRANSITIONS = {"OPEN": {"INVESTIGATING"}, "INVESTIGATING": {"RESOLVED"}, "RESOLVED": set()}
 
 
@@ -83,6 +93,52 @@ async def search_users(
     return list(await db.scalars(query))
 
 
+@router.post("/admins", response_model=UserAdminResponse, status_code=201)
+async def create_admin(
+    data: AdminCreate,
+    db: DbSession,
+    user: admin_user,
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> User:
+    try:
+        email = validate_email_format(data.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if await db.scalar(select(User.id).where(User.email == email)):
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    new_admin = User(
+        email=email,
+        password_hash=hash_password(data.password),
+        role=UserRole.ADMIN,
+        is_active=True,
+        is_verified=True,
+    )
+    db.add(new_admin)
+    await db.flush()
+    await write_audit(
+        db,
+        actor=user,
+        action="admin_created",
+        target_type="user",
+        target_id=new_admin.id,
+        metadata={"email": email},
+        ip_address=_get_ip(request),
+    )
+    await db.commit()
+    await db.refresh(new_admin)
+
+    frontend_url = (get_settings().frontend_url or "http://localhost:5174").rstrip("/")
+    body = (
+        f"You were added as an InternSphere administrator by {user.email}. "
+        f"Sign in at {frontend_url}/login. Please enable two-factor authentication."
+    )
+    background_tasks.add_task(send_dev_email, email, "InternSphere administrator account", body)
+    return new_admin
+
+
 @router.get("/users/{user_id}", response_model=UserDetailResponse)
 async def view_user_detail(user_id: int, db: DbSession, user: admin_user) -> dict[str, Any]:
     """Return full user profile including student/company data, applications, and recent audit events."""
@@ -99,6 +155,7 @@ async def view_user_detail(user_id: int, db: DbSession, user: admin_user) -> dic
         "is_verified": found.is_verified,
         "mfa_enabled": found.mfa_enabled,
         "suspended_at": found.suspended_at,
+        "created_at": found.created_at,
         "student_profile": None,
         "company_profile": None,
         "applications": None,
@@ -163,7 +220,7 @@ async def view_user_detail(user_id: int, db: DbSession, user: admin_user) -> dic
             action=a.action,
             target_type=a.target_type,
             target_id=a.target_id,
-            metadata=a.metadata_,
+            metadata=a.metadata_, # type: ignore
             ip_address=a.ip_address,
             created_at=a.created_at,
         )
@@ -173,11 +230,43 @@ async def view_user_detail(user_id: int, db: DbSession, user: admin_user) -> dic
     return result
 
 
+@router.delete("/users/{user_id}")
+async def delete_user_account(
+    user_id: int,
+    payload: AdminUserDeletionRequest,
+    db: DbSession,
+    user: admin_user,
+) -> dict[str, Any]:
+    target = await db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if payload.confirmation_email.strip().casefold() != target.email.strip().casefold():
+        raise HTTPException(status_code=400, detail="Confirmation email does not match the target user")
+    return await erase_user(
+        db,
+        target,
+        reason=payload.reason,
+        actor=user,
+        admin_action=True,
+    )
+
+
 @router.post("/users/{user_id}/suspend", response_model=UserAdminResponse)
 async def suspend_user(user_id: int, db: DbSession, user: admin_user, request: Request) -> User:
     found = await db.get(User, user_id)
     if found is None:
         raise HTTPException(404, "User not found")
+    if user_id == user.id:
+        raise HTTPException(400, "You cannot suspend your own account")
+    if found.role == UserRole.ADMIN and found.is_active:
+        active_admin_count = await db.scalar(
+            select(func.count()).select_from(User).where(
+                User.role == UserRole.ADMIN,
+                User.is_active.is_(True),
+            )
+        ) or 0
+        if active_admin_count <= 1:
+            raise HTTPException(400, "At least one active administrator is required")
     found.is_active = False
     found.suspended_at = datetime.now(timezone.utc)
     await write_audit(
@@ -220,18 +309,88 @@ def _company_output(profile: CompanyProfile) -> dict:
         "website": profile.website,
         "description": profile.description,
         "verification_status": profile.verification_status,
+        "verification_note": profile.verification_note,
     }
+
+
+def _company_document_output(document: CompanyDocument) -> dict:
+    return {
+        "id": document.id,
+        "company_id": document.company_id,
+        "document_type": document.document_type,
+        "original_filename": document.original_filename,
+        "content_type": document.content_type,
+        "file_size": document.file_size,
+        "created_at": document.created_at,
+    }
+
+
+@router.get("/companies/{user_id}/documents")
+async def company_verification_documents(
+    user_id: int, db: DbSession, user: admin_user
+) -> list[dict]:
+    profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user_id))
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Company profile not found")
+    documents = await db.scalars(
+        select(CompanyDocument)
+        .where(CompanyDocument.company_id == user_id)
+        .order_by(CompanyDocument.created_at.desc(), CompanyDocument.id.desc())
+    )
+    return [_company_document_output(document) for document in documents]
+
+
+@router.get("/companies/{user_id}/documents/{document_id}/download")
+async def download_company_verification_document(
+    user_id: int, document_id: int, db: DbSession, user: admin_user
+) -> FileResponse:
+    document = await db.scalar(
+        select(CompanyDocument).where(
+            CompanyDocument.id == document_id,
+            CompanyDocument.company_id == user_id,
+        )
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Company document not found")
+    path = company_document_path(document.stored_filename)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Company document file not found")
+    return FileResponse(path, media_type=document.content_type, filename=document.original_filename)
 
 
 @router.get("/verifications")
 @router.get("/companies/unverified")
 async def pending_verifications(db: DbSession, user: admin_user) -> list[dict]:
-    return [
-        _company_output(profile)
-        for profile in await db.scalars(
-            select(CompanyProfile).where(CompanyProfile.verification_status == "PENDING")
+    profiles = list(
+        (
+            await db.execute(
+                select(CompanyProfile, User.created_at)
+                .join(User, User.id == CompanyProfile.user_id)
+                .where(CompanyProfile.verification_status == "PENDING")
+                .order_by(CompanyProfile.id)
+            )
+        ).all()
+    )
+    company_ids = [profile.user_id for profile, _ in profiles]
+    documents_by_company: dict[int, list[dict]] = {}
+    if company_ids:
+        documents = await db.scalars(
+            select(CompanyDocument)
+            .where(CompanyDocument.company_id.in_(company_ids))
+            .order_by(CompanyDocument.created_at.desc(), CompanyDocument.id.desc())
         )
-    ]
+        for document in documents:
+            documents_by_company.setdefault(document.company_id, []).append(
+                _company_document_output(document)
+            )
+
+    result = []
+    for profile, submitted_at in profiles:
+        output = _company_output(profile)
+        output["submitted_at"] = submitted_at
+        output["documents"] = documents_by_company.get(profile.user_id, [])
+        result.append(output)
+    return result
 
 
 @router.get("/companies", response_model=list[CompanyListItem])
@@ -268,10 +427,11 @@ async def list_all_companies(
             industry=p.industry,
             website=p.website,
             verification_status=p.verification_status,
+            verification_note=p.verification_note,
             posting_count=posting_counts.get(p.user_id, 0),
         )
         for p in profiles
-    ]
+    ] # type: ignore
 
 
 @router.post("/companies/{user_id}/verification")
@@ -284,15 +444,47 @@ async def verify_company(
     if profile is None:
         raise HTTPException(404, "Company profile not found")
     new_status = "VERIFIED" if data.status in {"VERIFIED", "PUBLISHED"} else "REJECTED"
+    reason = data.reason.strip() if data.reason else ""
+    if new_status == "REJECTED" and not reason:
+        raise HTTPException(400, "A reason is required to reject company verification.")
+    if new_status == "VERIFIED":
+        business_registration = await db.scalar(
+            select(CompanyDocument.id).where(
+                CompanyDocument.company_id == user_id,
+                CompanyDocument.document_type == "BUSINESS_REGISTRATION",
+            ).limit(1)
+        )
+        if business_registration is None:
+            raise HTTPException(
+                400,
+                "A BUSINESS_REGISTRATION document must be uploaded before approving this company.",
+            )
     action = "company_verified" if new_status == "VERIFIED" else "company_rejected"
     profile.verification_status = new_status
+    profile.verification_note = reason if new_status == "REJECTED" else None
     await write_audit(
         db, actor=user, action=action,
         target_type="company", target_id=user_id,
-        metadata={"company_name": profile.company_name, "reason": data.reason},
+        metadata={"company_name": profile.company_name, "reason": reason or None},
         ip_address=_get_ip(request),
     )
+    notification_title = "Company verified" if new_status == "VERIFIED" else "Company verification rejected"
+    notification_body = (
+        "Your company account has been verified."
+        if new_status == "VERIFIED"
+        else f"Your company account verification was rejected. Reason: {reason}"
+    )
+    await notify(db, user_id, "COMPANY_VERIFICATION", notification_title, notification_body)
+    company_email = await db.scalar(select(User.email).where(User.id == user_id))
     await db.commit()
+    if company_email:
+        await send_dev_email(
+            company_email,
+            notification_title,
+            notification_body,
+            message_type="COMPANY_VERIFICATION",
+            db=db,
+        )
     await db.refresh(profile)
     return _company_output(profile)
 
@@ -326,7 +518,7 @@ async def company_postings(
             created_at=p.created_at,
         )
         for p in postings
-    ]
+    ] # type: ignore
 
 
 @router.post("/companies/{company_user_id}/postings/{internship_id}/moderate", response_model=dict)
@@ -351,6 +543,14 @@ async def moderate_company_posting(
         target_type="posting", target_id=internship_id,
         metadata={"title": item.title, "reason": data.reason, "company_user_id": company_user_id},
         ip_address=_get_ip(request),
+    )
+    action_text = {"PUBLISHED": "approved", "REJECTED": "rejected", "CLOSED": "closed"}[data.status]
+    await notify(
+        db,
+        item.company_id,
+        "INTERNSHIP_REVIEW",
+        f"Internship {action_text}",
+        f"Your internship {item.title} was {action_text}.",
     )
     await db.commit()
     return {"id": item.id, "status": item.status}
@@ -405,6 +605,14 @@ async def moderate_internship(
         target_type="posting", target_id=internship_id,
         metadata={"title": item.title, "reason": data.reason},
         ip_address=_get_ip(request),
+    )
+    action_text = {"PUBLISHED": "approved", "REJECTED": "rejected", "CLOSED": "closed"}[data.status]
+    await notify(
+        db,
+        item.company_id,
+        "INTERNSHIP_REVIEW",
+        f"Internship {action_text}",
+        f"Your internship {item.title} was {action_text}.",
     )
     await db.commit()
     return {"id": item.id, "status": item.status}
@@ -495,7 +703,7 @@ async def get_audit_logs(
             action=a.action,
             target_type=a.target_type,
             target_id=a.target_id,
-            metadata=a.metadata_,
+            metadata=a.metadata_, # type: ignore
             ip_address=a.ip_address,
             created_at=a.created_at,
         )

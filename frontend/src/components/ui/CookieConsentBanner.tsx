@@ -4,21 +4,30 @@ import { ShieldCheck, Cookie, Settings, Check, X, Lock } from 'lucide-react'
 import { Button } from './Button'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
+import {
+  COOKIE_CONSENT_KEY,
+  deleteCookie,
+  getCookieConsent,
+  setCookie,
+  THEME_COOKIE_KEY,
+} from '../../lib/cookies'
 
 export interface CookiePreferences {
   necessary: boolean // always true
+  functional: boolean
   analytics: boolean
   marketing: boolean
   doNotSell: boolean // CCPA
   consentedAt: string
 }
 
-const STORAGE_KEY = 'internsphere_cookie_consent'
+const STORAGE_KEY = COOKIE_CONSENT_KEY
 
 export function CookieConsentBanner() {
   const { session } = useAuthStore()
   const [isOpen, setIsOpen] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  const [functional, setFunctional] = useState(false)
   const [analytics, setAnalytics] = useState(false)
   const [marketing, setMarketing] = useState(false)
   const [doNotSell, setDoNotSell] = useState(true)
@@ -26,13 +35,22 @@ export function CookieConsentBanner() {
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (!saved) {
+      const cookieConsent = getCookieConsent()
+      if (cookieConsent) {
+        setFunctional(cookieConsent.functional)
+        setAnalytics(cookieConsent.analytics)
+        return
+      }
+
       // Delay slightly for smooth entrance
       const timer = setTimeout(() => setIsOpen(true), 800)
       return () => clearTimeout(timer)
     } else {
       try {
         const parsed = JSON.parse(saved) as CookiePreferences
-        setAnalytics(parsed.analytics)
+        const cookieConsent = getCookieConsent()
+        setFunctional(cookieConsent?.functional ?? parsed.functional ?? false)
+        setAnalytics(cookieConsent?.analytics ?? parsed.analytics)
         setMarketing(parsed.marketing)
         setDoNotSell(parsed.doNotSell ?? true)
       } catch {
@@ -52,6 +70,25 @@ export function CookieConsentBanner() {
 
   const savePreferences = async (prefs: CookiePreferences) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs))
+    setFunctional(prefs.functional)
+    setAnalytics(prefs.analytics)
+    setMarketing(prefs.marketing)
+    setDoNotSell(prefs.doNotSell)
+    const cookieConsent = {
+      necessary: true,
+      functional: prefs.functional,
+      analytics: prefs.analytics,
+      consentedAt: prefs.consentedAt,
+    }
+    setCookie(STORAGE_KEY, JSON.stringify(cookieConsent), 365)
+
+    const savedTheme = localStorage.getItem('theme')
+    if (prefs.functional && (savedTheme === 'light' || savedTheme === 'dark')) {
+      setCookie(THEME_COOKIE_KEY, savedTheme, 365)
+    } else {
+      deleteCookie(THEME_COOKIE_KEY)
+    }
+
     setIsOpen(false)
     setModalOpen(false)
 
@@ -73,6 +110,7 @@ export function CookieConsentBanner() {
   const handleAcceptAll = () => {
     savePreferences({
       necessary: true,
+      functional: true,
       analytics: true,
       marketing: true,
       doNotSell: false,
@@ -83,6 +121,7 @@ export function CookieConsentBanner() {
   const handleDeclineOptional = () => {
     savePreferences({
       necessary: true,
+      functional: false,
       analytics: false,
       marketing: false,
       doNotSell: true,
@@ -93,6 +132,7 @@ export function CookieConsentBanner() {
   const handleSaveCustom = () => {
     savePreferences({
       necessary: true,
+      functional,
       analytics,
       marketing,
       doNotSell,
@@ -218,6 +258,28 @@ export function CookieConsentBanner() {
               <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3">
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-slate-900 dark:text-white">
+                    Functional Preferences
+                  </span>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Remembers your display preferences, including your light or dark theme.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-0.5">
+                  <input
+                    type="checkbox"
+                    aria-label="Functional Preferences"
+                    checked={functional}
+                    onChange={(e) => setFunctional(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600" />
+                </label>
+              </div>
+
+              {/* Category 3: Performance & Analytics */}
+              <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">
                     Performance & Analytics
                   </span>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
@@ -235,7 +297,7 @@ export function CookieConsentBanner() {
                 </label>
               </div>
 
-              {/* Category 3: Communications & Marketing */}
+              {/* Category 4: Communications & Marketing */}
               <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3">
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-slate-900 dark:text-white">
@@ -256,7 +318,7 @@ export function CookieConsentBanner() {
                 </label>
               </div>
 
-              {/* Category 4: CCPA Opt-Out */}
+              {/* Category 5: CCPA Opt-Out */}
               <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3">
                 <div className="space-y-1">
                   <div className="flex items-center gap-1.5">
@@ -297,6 +359,7 @@ export function CookieConsentBanner() {
                   variant="outline"
                   size="sm"
                   onClick={() => {
+                    setFunctional(false)
                     setAnalytics(false)
                     setMarketing(false)
                     setDoNotSell(true)

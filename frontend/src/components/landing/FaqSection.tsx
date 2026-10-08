@@ -19,7 +19,7 @@ const faqs = [
   },
   {
     q: "Is my data private?",
-    a: "Absolutely. We are fully GDPR and CCPA compliant. Your profile is only visible to companies you apply to or if you explicitly opt-in to our talent discovery pool."
+    a: "You can export your data, delete your account, and manage your consent settings through the Privacy Center. Your profile is visible to companies you apply to or if you opt in to talent discovery."
   }
 ]
 

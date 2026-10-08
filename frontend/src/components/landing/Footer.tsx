@@ -41,7 +41,7 @@ export function Footer() {
         <div className="pt-8 border-t border-slate-900 flex flex-col md:flex-row items-center justify-between gap-4 text-xs">
           <p>&copy; 2026 InternSphere. All rights reserved.</p>
           <div className="flex items-center gap-4">
-             <span className="text-emerald-500 font-medium">GDPR & CCPA Compliant</span>
+             <span className="text-emerald-500 font-medium">Privacy-first by design</span>
              <button type="button" onClick={() => window.dispatchEvent(new Event('open:cookie-preferences'))} className="hover:text-indigo-400 transition-colors cursor-pointer">
                 Cookie Preferences
              </button>

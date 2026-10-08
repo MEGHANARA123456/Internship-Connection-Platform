@@ -34,6 +34,8 @@ import {
   UserCheck,
   XCircle,
   GripVertical,
+  FileText,
+  UploadCloud,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 
@@ -41,6 +43,7 @@ import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisV
 
 export function CompanyJobsPage() {
   const [jobs, setJobs] = useState<any[]>([])
+  const [companyProfile, setCompanyProfile] = useState<any | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [submittingId, setSubmittingId] = useState<number | null>(null)
@@ -61,6 +64,7 @@ export function CompanyJobsPage() {
 
   useEffect(() => {
     fetchJobs()
+    api.get('/profiles/company').then(({ data }) => setCompanyProfile(data)).catch(() => undefined)
   }, [])
 
   const handleSubmitForApproval = async (jobId: number) => {
@@ -92,6 +96,28 @@ export function CompanyJobsPage() {
         customSubtitle="Welcome to your hiring command center. Review candidate applications, publish new roles, and coordinate interviews."
         className="mb-6"
       />
+
+      {companyProfile && companyProfile.verification_status !== 'VERIFIED' && (
+        <div role="status" className={`mb-6 flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${
+          companyProfile.verification_status === 'REJECTED'
+            ? 'border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200'
+            : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200'
+        }`}>
+          <div>
+            <p className="text-sm font-semibold">
+              {companyProfile.verification_status === 'REJECTED' ? 'Company verification needs attention' : 'Company verification is pending'}
+            </p>
+            <p className="mt-1 text-xs opacity-90">
+              {companyProfile.verification_reason || (companyProfile.verification_status === 'REJECTED'
+                ? 'Review the feedback and replace the requested verification documents.'
+                : 'Your profile and documents are under review. Posting access may be limited until your company is verified.')}
+            </p>
+          </div>
+          <Link to="/profile/company" className="shrink-0 text-xs font-semibold underline underline-offset-2">
+            Review company profile
+          </Link>
+        </div>
+      )}
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
         <div>
@@ -1060,6 +1086,11 @@ export function CompanyProfilePage() {
   const [saved, setSaved] = useState(false)
   const [serverError, setServerError] = useState('')
   const [avatarUrl, setAvatarUrl] = useState<string | null>(session?.avatar_url || null)
+  const [documentError, setDocumentError] = useState('')
+  const [uploadingDocument, setUploadingDocument] = useState<string | null>(null)
+  const [documentProgress, setDocumentProgress] = useState<Record<string, number>>({})
+  const [documentTypeToAdd, setDocumentTypeToAdd] = useState('BUSINESS_REGISTRATION')
+  const [deletingDocumentId, setDeletingDocumentId] = useState<number | null>(null)
 
   const {
     register,
@@ -1075,6 +1106,16 @@ export function CompanyProfilePage() {
       try {
         const res = await api.get('/profiles/company')
         setProfile(res.data)
+        try {
+          const documentResponse = await api.get('/profiles/company/documents')
+          const documentData = documentResponse.data
+          const documentList = Array.isArray(documentData)
+            ? documentData
+            : documentData?.documents || documentData?.items || []
+          setProfile((current: any) => ({ ...current, verification_documents: documentList }))
+        } catch (error: any) {
+          setDocumentError(error.response?.data?.detail || 'Could not load company verification documents.')
+        }
         setValue('company_name', res.data.company_name)
         setValue('industry', res.data.industry)
         setValue('website', res.data.website || '')
@@ -1103,6 +1144,69 @@ export function CompanyProfilePage() {
     }
   }
 
+  const uploadVerificationDocument = async (documentType: string, file?: File) => {
+    if (!file) return
+    const extension = file.name.split('.').pop()?.toLowerCase()
+    const mimeTypes: Record<string, string> = {
+      pdf: 'application/pdf',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+    }
+    if (!extension || mimeTypes[extension] !== file.type) {
+      setDocumentError('Choose a PDF, JPG, or PNG document.')
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setDocumentError('File must be 5 MB or smaller.')
+      return
+    }
+    setUploadingDocument(documentType)
+    setDocumentError('')
+    setDocumentProgress((current) => ({ ...current, [documentType]: 0 }))
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('document_type', documentType)
+      const response = await api.post('/profiles/company/documents', formData, {
+        onUploadProgress: (event) => {
+          if (event.total) setDocumentProgress((current) => ({ ...current, [documentType]: Math.round((event.loaded / event.total!) * 100) }))
+        },
+      })
+      const nextDocument = response.data?.document || response.data || {
+        document_type: documentType,
+        original_filename: file.name,
+        status: 'PENDING',
+      }
+      setProfile((current: any) => ({
+        ...current,
+        verification_documents: [...(current?.verification_documents || current?.documents || []), nextDocument],
+        documents: undefined,
+      }))
+      setDocumentProgress((current) => ({ ...current, [documentType]: 100 }))
+    } catch (error: any) {
+      setDocumentError(error.response?.data?.detail || 'The document could not be uploaded. Please try again.')
+    } finally {
+      setUploadingDocument(null)
+    }
+  }
+
+  const deleteVerificationDocument = async (documentId: number) => {
+    setDeletingDocumentId(documentId)
+    setDocumentError('')
+    try {
+      await api.delete(`/profiles/company/documents/${documentId}`)
+      setProfile((current: any) => ({
+        ...current,
+        verification_documents: (current?.verification_documents || []).filter((doc: any) => doc.id !== documentId),
+      }))
+    } catch (error: any) {
+      setDocumentError(error.response?.data?.detail || 'Could not delete this verification document.')
+    } finally {
+      setDeletingDocumentId(null)
+    }
+  }
+
   if (loading) {
     return (
       <div className="max-w-2xl mx-auto py-10 px-4">
@@ -1114,7 +1218,7 @@ export function CompanyProfilePage() {
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8 w-full space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Company Profile</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Company Profile</h1>
         <p className="text-xs text-slate-500 mt-1">Manage public organization details and verification status.</p>
       </div>
 
@@ -1127,16 +1231,81 @@ export function CompanyProfilePage() {
       />
 
       {profile && (
-        <div className="p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+        <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between gap-3">
           <div className="space-y-0.5">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
               Verification Status
             </span>
             <p className="text-sm font-bold text-slate-800">{profile.company_name}</p>
           </div>
-          <Badge status={profile.verification_status}>{profile.verification_status}</Badge>
+          <Badge status={profile.verification_status}>
+            {profile.verification_status === 'VERIFIED'
+              ? 'Verified'
+              : profile.verification_status === 'REJECTED'
+                ? 'Rejected'
+                : 'Pending'}
+          </Badge>
         </div>
       )}
+
+      <Card className="bg-white dark:bg-slate-900">
+        <CardHeader>
+          <CardTitle>Verification documents</CardTitle>
+          <CardDescription>Document review status, reviewer feedback, and secure re-upload.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {(profile?.verification_note || profile?.verification_reason || profile?.rejection_reason) && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">
+              <strong>Reviewer feedback:</strong> {profile.verification_note || profile.verification_reason || profile.rejection_reason}
+            </div>
+          )}
+          {documentError && <p role="alert" className="text-xs font-medium text-rose-600 dark:text-rose-400">{documentError}</p>}
+          {(profile?.verification_documents || profile?.documents || []).length === 0 && (
+            <p className="text-xs text-slate-500 dark:text-slate-400">No documents have been submitted yet. Upload your business registration document to start verification.</p>
+          )}
+          {(profile?.verification_documents || profile?.documents || []).map((doc: any, index: number) => {
+            const type = doc.document_type || doc.type || `DOCUMENT_${index}`
+            return <div key={doc.id ?? type} className="flex flex-col gap-3 rounded-lg border border-slate-200 p-3 sm:flex-row sm:items-center dark:border-slate-700">
+              <FileText className="h-5 w-5 shrink-0 text-indigo-600 dark:text-indigo-300" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold text-slate-800 dark:text-slate-100">{doc.original_filename || doc.filename || type.replace(/_/g, ' ')}</p>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                  <Badge status={doc.status || doc.verification_status || 'PENDING'} />
+                  {doc.review_reason && <span>{doc.review_reason}</span>}
+                  {doc.rejection_reason && <span>{doc.rejection_reason}</span>}
+                  {(doc.created_at || doc.uploaded_at) && <span>Uploaded {new Date(doc.uploaded_at || doc.created_at).toLocaleDateString()}</span>}
+                </div>
+              </div>
+              {(doc.status === 'REJECTED' || doc.verification_status === 'REJECTED' || profile?.verification_status === 'REJECTED') && (
+                <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                  <UploadCloud className="h-3.5 w-3.5" /> Re-upload
+                  <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className="sr-only" aria-label={`Re-upload ${type.replace(/_/g, ' ')}`} onChange={(event) => uploadVerificationDocument(type, event.target.files?.[0])} />
+                </label>
+              )}
+              {profile?.verification_status !== 'VERIFIED' && doc.id != null && <Button type="button" variant="ghost" size="sm" isLoading={deletingDocumentId === doc.id} aria-label={`Delete ${doc.original_filename || type}`} onClick={() => void deleteVerificationDocument(doc.id)}>Delete</Button>}
+              {uploadingDocument === type && <span className="text-[11px] text-indigo-600 dark:text-indigo-300">{documentProgress[type] || 0}%</span>}
+            </div>
+          })}
+          {(profile?.verification_documents || profile?.documents || []).length >= 5 ? (
+            <p className="border-t border-slate-200 pt-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+              You have reached the five-document limit.
+            </p>
+          ) : (
+          <div className="flex flex-col gap-2 border-t border-slate-200 pt-3 sm:flex-row dark:border-slate-700">
+            <select aria-label="Document type to add" value={documentTypeToAdd} onChange={(event) => setDocumentTypeToAdd(event.target.value)} className="h-9 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-xs dark:border-slate-700 dark:bg-slate-800">
+              <option value="BUSINESS_REGISTRATION">Business registration</option>
+              <option value="GST_OR_PAN">GST or PAN</option>
+              <option value="AUTHORIZATION_LETTER">Authorization letter</option>
+              <option value="OTHER">Other</option>
+            </select>
+            <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+              <UploadCloud className="h-3.5 w-3.5" /> Add document (max 5 MB)
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className="sr-only" aria-label="Add verification document" onChange={(event) => uploadVerificationDocument(documentTypeToAdd, event.target.files?.[0])} />
+            </label>
+          </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="bg-white">
         <CardHeader>

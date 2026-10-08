@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.api.v1.dependencies import get_db
 from app.core.security import create_token
 from app.main import app
-from app.models import User, UserRole
+from app.models import CompanyProfile, User, UserRole
 from app.models.base import Base
 
 
@@ -35,6 +35,11 @@ async def test_complete_recruitment_lifecycle(monkeypatch: pytest.MonkeyPatch) -
             users = (await session.scalars(select(User))).all()
             for u in users:
                 u.is_verified = True
+            company_profile = await session.scalar(
+                select(CompanyProfile).where(CompanyProfile.user_id == company.json()["id"])
+            )
+            assert company_profile is not None
+            company_profile.verification_status = "VERIFIED"
             await session.commit()
         student_login = await client.post("/api/v1/auth/login", json={"email": student_data["email"], "password": student_data["password"]})
         company_login = await client.post("/api/v1/auth/login", json={"email": company_data["email"], "password": company_data["password"]})
@@ -66,6 +71,6 @@ async def test_complete_recruitment_lifecycle(monkeypatch: pytest.MonkeyPatch) -
         assert selected.status_code == 200
         notifications = await client.get("/api/v1/notifications", headers=student_headers)
         assert notifications.status_code == 200
-        assert any("Selected" in notification["title"] for notification in notifications.json())
+        assert any(notification["title"] == "Offer update" for notification in notifications.json())
     app.dependency_overrides.clear()
     await engine.dispose()

@@ -7,12 +7,23 @@
   --primary: #4f46e5;
   --primary-hover: #4338ca;
   --primary-light: #eef2ff;
-  --text-main: #0f172a;
+  --page-background: #f8fafc;
+  --surface: #ffffff;
+  --surface-muted: #f1f5f9;
+  --border-color: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
   --text-muted: #64748b;
-  --bg-page: #f8fafc;
-  --bg-card: #ffffff;
-  --border: #e2e8f0;
-  
+  --accent: #4f46e5;
+  --text-main: var(--text-primary);
+  --bg-page: var(--page-background);
+  --bg-card: var(--surface);
+  --bg-surface: var(--surface);
+  --bg-subtle: var(--surface-muted);
+  --bg-hover: var(--surface-muted);
+  --border: var(--border-color);
+
+  color-scheme: light;
   font-family: var(--font-sans);
   color: var(--text-main);
   background-color: var(--bg-page);
@@ -26,11 +37,22 @@
   --primary: #6366f1;
   --primary-hover: #4f46e5;
   --primary-light: #1e1b4b;
-  --text-main: #f8fafc;
+  --page-background: #0b0f19;
+  --surface: #131b2e;
+  --surface-muted: #1e293b;
+  --border-color: #334155;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
   --text-muted: #94a3b8;
-  --bg-page: #0b0f19;
-  --bg-card: #131b2e;
-  --border: #1e293b;
+  --accent: #818cf8;
+  --text-main: var(--text-primary);
+  --bg-page: var(--page-background);
+  --bg-card: var(--surface);
+  --bg-surface: var(--surface);
+  --bg-subtle: var(--surface-muted);
+  --bg-hover: var(--surface-muted);
+  --border: var(--border-color);
+  color-scheme: dark;
 }
 
 body {
@@ -40,6 +62,110 @@ body {
   background-color: var(--bg-page);
   color: var(--text-main);
   transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  color: var(--text-main);
+}
+
+option {
+  color: var(--text-primary);
+  background-color: var(--surface);
+}
+
+/* Legacy utility classes without explicit dark variants use the shared tokens. */
+.dark .bg-white:not([class*='dark:bg-']) {
+  background-color: var(--bg-surface) !important;
+}
+.dark .bg-slate-50:not([class*='dark:bg-']) {
+  background-color: var(--bg-page) !important;
+}
+.dark .bg-slate-100:not([class*='dark:bg-']) {
+  background-color: var(--bg-subtle) !important;
+}
+.dark .bg-slate-200:not([class*='dark:bg-']) {
+  background-color: var(--bg-hover) !important;
+}
+.dark .text-slate-950:not([class*='dark:text-']),
+.dark .text-slate-900:not([class*='dark:text-']),
+.dark .text-slate-800:not([class*='dark:text-']) {
+  color: var(--text-main) !important;
+}
+.dark .text-slate-700:not([class*='dark:text-']),
+.dark .text-slate-600:not([class*='dark:text-']) {
+  color: #cbd5e1 !important;
+}
+.dark .text-slate-500:not([class*='dark:text-']),
+.dark .text-slate-400:not([class*='dark:text-']) {
+  color: var(--text-muted) !important;
+}
+.dark .text-gray-950:not([class*='dark:text-']),
+.dark .text-gray-900:not([class*='dark:text-']),
+.dark .text-gray-800:not([class*='dark:text-']) {
+  color: var(--text-primary) !important;
+}
+.dark .text-gray-700:not([class*='dark:text-']),
+.dark .text-gray-600:not([class*='dark:text-']) {
+  color: var(--text-secondary) !important;
+}
+.dark .text-gray-500:not([class*='dark:text-']),
+.dark .text-gray-400:not([class*='dark:text-']) {
+  color: var(--text-muted) !important;
+}
+.dark .border-slate-100:not([class*='dark:border-']),
+.dark .border-slate-200:not([class*='dark:border-']),
+.dark .border-slate-300:not([class*='dark:border-']) {
+  border-color: var(--border) !important;
+}
+.dark .border-gray-100:not([class*='dark:border-']),
+.dark .border-gray-200:not([class*='dark:border-']),
+.dark .border-gray-300:not([class*='dark:border-']) {
+  border-color: var(--border) !important;
+}
+.dark .bg-indigo-50:not([class*='dark:bg-']),
+.dark .bg-blue-50:not([class*='dark:bg-']),
+.dark .bg-purple-50:not([class*='dark:bg-']),
+.dark .bg-emerald-50:not([class*='dark:bg-']),
+.dark .bg-amber-50:not([class*='dark:bg-']),
+.dark .bg-rose-50:not([class*='dark:bg-']) {
+  background-color: var(--surface-muted) !important;
+}
+.dark .text-indigo-700:not([class*='dark:text-']) {
+  color: #c7d2fe !important;
+}
+.dark .text-blue-700:not([class*='dark:text-']) {
+  color: #bfdbfe !important;
+}
+.dark .text-purple-700:not([class*='dark:text-']) {
+  color: #e9d5ff !important;
+}
+.dark .text-emerald-700:not([class*='dark:text-']) {
+  color: #a7f3d0 !important;
+}
+.dark .text-amber-700:not([class*='dark:text-']) {
+  color: #fde68a !important;
+}
+.dark .text-rose-700:not([class*='dark:text-']) {
+  color: #fecdd3 !important;
+}
+.dark input:not([class*='dark:bg-']),
+.dark select:not([class*='dark:bg-']),
+.dark textarea:not([class*='dark:bg-']) {
+  background-color: var(--bg-surface);
+  border-color: var(--border);
+}
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #94a3b8;
 }
 
 #root {

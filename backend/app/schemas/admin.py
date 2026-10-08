@@ -5,7 +5,9 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field, field_validator
+
+from app.core.config import get_settings
 
 
 # ── Basic User ────────────────────────────────────────────────────────────────
@@ -18,8 +20,35 @@ class UserAdminResponse(BaseModel):
     is_verified: bool
     mfa_enabled: bool = False
     suspended_at: datetime | None
+    created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @computed_field
+    @property
+    def email_verification_required(self) -> bool:
+        role = self.role.value if hasattr(self.role, "value") else str(self.role)
+        settings = get_settings()
+        if role == "COMPANY":
+            return settings.require_company_email_verification
+        return settings.require_email_verification and role != "ADMIN"
+
+
+class AdminCreate(BaseModel):
+    email: str
+    password: str = Field(min_length=10)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, password: str) -> str:
+        if not any(character.isalpha() for character in password) or not any(character.isdigit() for character in password):
+            raise ValueError("Password must contain at least one letter and one digit")
+        return password
+
+
+class AdminUserDeletionRequest(BaseModel):
+    confirmation_email: str
+    reason: str = Field(min_length=5)
 
 
 class ModerationStatus(BaseModel):
@@ -117,6 +146,7 @@ class CompanyListItem(BaseModel):
     industry: str
     website: str | None
     verification_status: str
+    verification_note: str | None = None
     posting_count: int
 
 

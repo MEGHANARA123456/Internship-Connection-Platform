@@ -17,6 +17,7 @@ from app.main import app
 from app.models import (
     Application,
     AuditLog,
+    CompanyDocument,
     CompanyProfile,
     Internship,
     User,
@@ -152,9 +153,17 @@ async def test_audit_log_created_on_verify_company(db_setup) -> None:
         user_id=company_user.id, company_name="AcmeCorp",
         industry="Tech", verification_status="PENDING",
     )
+    registration_document = CompanyDocument(
+        company_id=company_user.id,
+        document_type="BUSINESS_REGISTRATION",
+        original_filename="registration.pdf",
+        stored_filename="a" * 32 + ".pdf",
+        content_type="application/pdf",
+        file_size=8,
+    )
 
     async with sessions() as session:
-        session.add_all([admin, company_user, cp])
+        session.add_all([admin, company_user, cp, registration_document])
         await session.commit()
 
     app.dependency_overrides[get_current_user] = lambda: admin

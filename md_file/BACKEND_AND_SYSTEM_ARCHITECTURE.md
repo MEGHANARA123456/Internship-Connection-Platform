@@ -209,7 +209,6 @@ Centralized typed configuration using Pydantic Settings:
   - `mailpit_host`, `mailpit_port`: SMTP / API coordinates for transactional emails.
   - `max_resume_size_mb` (5), `resume_storage_path` ("storage/resumes").
   - `rate_limit_requests` (120), `rate_limit_window_seconds` (60).
-  - `admin_signup_key`: Secret bootstrap key for admin registrations.
   - `gemini_api_key`: Optional API key for Google Gemini / generative AI services.
 
 ---
@@ -305,7 +304,7 @@ SQLAlchemy 2.0 Declarative ORM entities:
 ### 3.13 Pydantic Schemas (`backend/app/schemas/*`)
 Provides runtime input validation, type coercion, and OpenAPI JSON serialization:
 - **`auth.py`**:
-  - `StudentRegister`, `CompanyRegister`, `AdminRegister`: Registration payloads with strict `min_length`, graduation year range (`ge=2000, le=2100`), and `EmailStr` format validation.
+  - `StudentRegister`, `CompanyRegister`: Registration payloads with strict `min_length`, graduation year range (`ge=2000, le=2100`), and `EmailStr` format validation.
   - `LoginRequest`, `TokenResponse`, `RefreshRequest`, `LogoutRequest`.
   - `CheckEmailRequest`: Pre-signup real-time email existence check.
   - `UserResponse`: Returns public user data without password hashes.
@@ -558,7 +557,7 @@ To prevent remote code execution, denial-of-service, or path traversal attacks:
 | **Auth** | `POST` | `/api/v1/auth/check-email` | Public | Real-time pre-signup check for email availability. |
 | | `POST` | `/api/v1/auth/register/student` | Public | Registers a new student and creates `student_profiles`. |
 | | `POST` | `/api/v1/auth/register/company` | Public | Registers a new company and creates `company_profiles`. |
-| | `POST` | `/api/v1/auth/register/admin` | Public (Secret Key) | Registers an admin account verified with `admin_signup_key`. |
+| | `POST` | `/api/v1/admin/admins` | Admin | Creates a verified administrator account. |
 | | `POST` | `/api/v1/auth/login` | Public | Authenticates credentials; returns Access & Refresh tokens. |
 | | `POST` | `/api/v1/auth/refresh` | Public | Rotates refresh token and issues new access token. |
 | | `POST` | `/api/v1/auth/logout` | Authenticated | Revokes refresh token in database. |

@@ -146,7 +146,7 @@ export function VideoInterviewModal({
       isOpen={isOpen}
       onClose={handleEndCall}
       title="Secure In-App Video Interview"
-      description={`Encrypted WebRTC Session • Room #${interviewId} • ${roleName}`}
+      description={`In-app interview room • Room #${interviewId} • ${roleName}`}
       maxWidth="4xl"
     >
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -179,7 +179,7 @@ export function VideoInterviewModal({
 
             <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-indigo-600/80 backdrop-blur-md px-2.5 py-1 rounded-full text-[11px] text-white font-semibold">
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>P2P WebRTC Encrypted</span>
+              <span>In-app interview room</span>
             </div>
 
             {/* Picture-in-picture remote simulator badge */}

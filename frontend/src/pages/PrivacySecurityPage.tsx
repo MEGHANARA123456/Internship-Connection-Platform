@@ -171,6 +171,14 @@ export function PrivacySecurityPage() {
                 Privacy Policy
               </Button>
             </Link>
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white/10 hover:bg-white/20 text-white border-white/20"
+              onClick={() => window.dispatchEvent(new Event('open:cookie-preferences'))}
+            >
+              Cookie Preferences
+            </Button>
           </div>
         </div>
       </div>

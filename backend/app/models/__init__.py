@@ -5,6 +5,7 @@
 from app.models.user import (
     Application,
     AuditLog,
+    CompanyDocument,
     CompanyProfile,
     CompanyReview,
     Conversation,
@@ -26,6 +27,7 @@ from app.models.user import (
 __all__ = [
     "Application",
     "AuditLog",
+    "CompanyDocument",
     "CompanyProfile",
     "CompanyReview",
     "Conversation",
@@ -43,4 +45,3 @@ __all__ = [
     "User",
     "UserRole",
 ]
-

@@ -11,7 +11,7 @@ export function Testimonials() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="p-8 rounded-3xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm">
             <span className="inline-block px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-xs font-bold tracking-wider">
-              STUDENT
+              Sample feedback
             </span>
             <p className="text-slate-700 dark:text-slate-300 italic text-lg leading-relaxed">
               "The structured application process made finding my summer internship incredibly straightforward. Knowing all companies were verified gave me peace of mind."
@@ -20,7 +20,7 @@ export function Testimonials() {
           
           <div className="p-8 rounded-3xl bg-slate-950 dark:bg-slate-900 border border-slate-800 space-y-4 shadow-xl">
             <span className="inline-block px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-400 text-xs font-bold tracking-wider">
-              RECRUITER
+              Sample feedback
             </span>
             <p className="text-slate-300 italic text-lg leading-relaxed">
               "We've cut our hiring time in half. The built-in scheduling and verified student profiles allow us to focus entirely on interviewing the right candidates."
@@ -29,7 +29,7 @@ export function Testimonials() {
           
           <div className="p-8 rounded-3xl bg-slate-950 dark:bg-slate-900 border border-slate-800 space-y-4 shadow-xl">
             <span className="inline-block px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-400 text-xs font-bold tracking-wider">
-              RECRUITER
+              Sample feedback
             </span>
             <p className="text-slate-300 italic text-lg leading-relaxed">
               "The quality of the applicant pool is consistently high. Having a single platform for tracking, messaging, and scheduling is a game-changer for our small team."
@@ -38,7 +38,7 @@ export function Testimonials() {
           
           <div className="p-8 rounded-3xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm">
             <span className="inline-block px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-xs font-bold tracking-wider">
-              STUDENT
+              Sample feedback
             </span>
             <p className="text-slate-700 dark:text-slate-300 italic text-lg leading-relaxed">
               "I applied to three roles and heard back from two within a week. The real-time tracking feature removed all the anxiety of the waiting game."

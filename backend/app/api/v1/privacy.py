@@ -3,17 +3,15 @@
 # Implements Data Portability, Right to Erasure, Consent Management, and Opt-Outs.
 # -----------------------------------------------------------------------------
 
-import os
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, desc, select
+from sqlalchemy import desc, select
 
 from app.api.v1.dependencies import DbSession, get_current_user
-from app.core.config import get_settings
 from app.core.security import verify_password
 from app.models import (
     Application,
@@ -23,13 +21,13 @@ from app.models import (
     Internship,
     Interview,
     Message,
-    RefreshToken,
     Resume,
     SavedInternship,
     StudentProfile,
     User,
     UserRole,
 )
+from app.services.account_deletion import erase_user
 
 router = APIRouter(prefix="/privacy", tags=["privacy"])
 
@@ -385,40 +383,4 @@ async def delete_user_account(
             detail="Incorrect password. Authentication verification failed.",
         )
 
-    # 1. Clean up stored resume file from disk if present
-    if user.role == UserRole.STUDENT:
-        resume = await db.scalar(select(Resume).where(Resume.student_id == user.id))
-        if resume:
-            storage_path = os.path.join(get_settings().resume_storage_path, resume.stored_filename)
-            if os.path.exists(storage_path):
-                try:
-                    os.remove(storage_path)
-                except OSError:
-                    pass
-
-    # 2. Revoke all refresh tokens
-    await db.execute(delete(RefreshToken).where(RefreshToken.user_id == user.id))
-
-    # 3. Create immutable compliance record of the deletion
-    audit_entry = AuditLog(
-        actor_id=None,  # User ID detached per GDPR anonymization
-        actor_email=f"anonymized_user_{user.id}@deleted.local",
-        action="GDPR_RIGHT_TO_ERASURE_EXECUTED",
-        target_type="USER",
-        target_id=user.id,
-        metadata_={
-            "deletion_timestamp": datetime.now(timezone.utc).isoformat(),
-            "reason": payload.reason or "User direct request",
-            "regulatory_claim": "GDPR Art. 17 / CCPA § 1798.105",
-        },
-    )
-    db.add(audit_entry)
-
-    # 4. Delete user record (cascades profile, applications, saved internships)
-    await db.delete(user)
-    await db.commit()
-
-    return {
-        "success": True,
-        "message": "Your account and all associated personal data have been permanently deleted in accordance with GDPR and CCPA.",
-    }
+    return await erase_user(db, user, reason=payload.reason)

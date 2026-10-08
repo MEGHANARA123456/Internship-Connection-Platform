@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api } from '../api/client'
+import { api, downloadAuthenticatedFile } from '../api/client'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
@@ -29,13 +29,17 @@ import {
   ChevronDown,
   ChevronUp,
   Activity,
+  Eye,
+  EyeOff,
+  LayoutDashboard,
+  Trash2,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 import { useAuthStore } from '../store/auth'
 import { AccountSecurityCard } from '../components/auth/AccountSecurityCard'
 
-// --- 1. Admin Console Dashboard ---
+// --- 1. Admin Dashboard ---
 
 export function AdminDashboardPage() {
   const { session } = useAuthStore()
@@ -148,7 +152,7 @@ export function AdminDashboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Platform Admin Console</h1>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Platform Admin Dashboard</h1>
             <Badge status="ADMIN" className="text-[10px] sm:text-[11px] font-semibold py-0.5 px-2">
               Super Admin
             </Badge>
@@ -271,6 +275,8 @@ export function AdminDashboardPage() {
       </div>
 
       <AdminAnalyticsCharts refreshKey={analysisRefreshKey} />
+
+      <AdminAdministratorsSection />
 
       {/* Live Action Queues Preview */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -418,6 +424,158 @@ export function AdminDashboardPage() {
   )
 }
 
+export function AdminAdministratorsSection() {
+  const { session } = useAuthStore()
+  const [admins, setAdmins] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [actionId, setActionId] = useState<number | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  const fetchAdmins = async () => {
+    try {
+      const response = await api.get('/admin/users?role=ADMIN')
+      setAdmins(response.data || [])
+    } catch {
+      setError('Failed to load administrators.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void fetchAdmins()
+  }, [])
+
+  const handleToggleSuspend = async (admin: any) => {
+    setActionId(admin.id)
+    try {
+      if (admin.is_active) {
+        await api.post(`/admin/users/${admin.id}/suspend`)
+      } else {
+        await api.post(`/admin/users/${admin.id}/reactivate`)
+      }
+      await fetchAdmins()
+    } catch {
+      setError('Failed to update administrator status.')
+    } finally {
+      setActionId(null)
+    }
+  }
+
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSubmitting(true)
+    setError('')
+    setSuccess('')
+    try {
+      await api.post('/admin/admins', { email: email.trim().toLowerCase(), password })
+      setEmail('')
+      setPassword('')
+      setSuccess('Administrator added successfully.')
+      await fetchAdmins()
+    } catch (requestError: any) {
+      setError(
+        requestError.response?.status === 409
+          ? 'Email already registered'
+          : requestError.response?.data?.detail || 'Failed to add administrator.'
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Card className="bg-white p-5 sm:p-6 space-y-5">
+      <div>
+        <h2 className="text-sm font-bold text-slate-900">Administrators</h2>
+        <p className="text-xs text-slate-500 mt-1">Manage administrator access and add trusted administrators.</p>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-slate-500">Loading administrators...</p>
+      ) : admins.length === 0 ? (
+        <p className="text-xs text-slate-500">No administrators found.</p>
+      ) : (
+        <div className="divide-y divide-slate-100">
+          {admins.map((admin) => (
+            <div key={admin.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-xs">
+              <span className="font-semibold text-slate-800">{admin.email}</span>
+              <div className="flex items-center gap-3 text-slate-500">
+                <span>{admin.is_active ? 'Active' : 'Suspended'}</span>
+                <span>
+                  {admin.created_at
+                    ? new Date(admin.created_at).toLocaleDateString()
+                    : '—'}
+                </span>
+                {admin.id !== session?.userId && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    isLoading={actionId === admin.id}
+                    onClick={() => void handleToggleSuspend(admin)}
+                    className={admin.is_active ? 'text-rose-600 hover:bg-rose-50' : 'text-emerald-600 hover:bg-emerald-50'}
+                    leftIcon={admin.is_active ? <Ban className="h-3.5 w-3.5" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                  >
+                    {admin.is_active ? 'Suspend' : 'Reactivate'}
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-3 border-t border-slate-100 pt-4">
+        <h3 className="text-xs font-bold text-slate-800">Add administrator</h3>
+        {error && <p role="alert" className="text-xs text-rose-600">{error}</p>}
+        {success && <p role="status" className="text-xs text-emerald-600">{success}</p>}
+        <label className="block space-y-1.5 text-xs font-semibold text-slate-700">
+          <span>Email</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            autoComplete="email"
+            required
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-normal focus:outline-none focus:ring-2 focus:ring-purple-500"
+          />
+        </label>
+        <label className="block space-y-1.5 text-xs font-semibold text-slate-700">
+          <span>Password</span>
+          <span className="relative block">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="new-password"
+              minLength={10}
+              required
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 text-xs font-normal focus:outline-none focus:ring-2 focus:ring-purple-500"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((visible) => !visible)}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              className="absolute inset-y-0 right-2 flex items-center text-slate-500"
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </span>
+        </label>
+        <p className="text-[11px] text-slate-500">At least 10 characters, including a letter and a digit.</p>
+        <Button type="submit" size="sm" isLoading={submitting}>
+          Add administrator
+        </Button>
+      </form>
+    </Card>
+  )
+}
+
 function AdminAnalyticsCharts({ refreshKey }: { refreshKey: number }) {
   const [growth, setGrowth] = useState<any[]>([])
   const [actions, setActions] = useState<any[]>([])
@@ -454,6 +612,7 @@ function AdminAnalyticsCharts({ refreshKey }: { refreshKey: number }) {
 // --- 2. User Management ---
 
 export function AdminUsersPage() {
+  const { session } = useAuthStore()
   const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -462,9 +621,14 @@ export function AdminUsersPage() {
   const [actionId, setActionId] = useState<number | null>(null)
   const [selectedUser, setSelectedUser] = useState<any | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [userToDelete, setUserToDelete] = useState<any | null>(null)
+  const [deleteReason, setDeleteReason] = useState('')
+  const [confirmationEmail, setConfirmationEmail] = useState('')
+  const [deletingUser, setDeletingUser] = useState(false)
+  const [successToast, setSuccessToast] = useState('')
 
-  const fetchUsers = async () => {
-    setLoading(true)
+  const fetchUsers = async (showLoading = true) => {
+    if (showLoading) setLoading(true)
     setError(null)
     try {
       const res = await api.get('/admin/users')
@@ -472,7 +636,7 @@ export function AdminUsersPage() {
     } catch {
       setError('Failed to fetch platform users.')
     } finally {
-      setLoading(false)
+      if (showLoading) setLoading(false)
     }
   }
 
@@ -493,6 +657,33 @@ export function AdminUsersPage() {
       alert('Failed to update user status.')
     } finally {
       setActionId(null)
+    }
+  }
+
+  const handleDeleteUser = async () => {
+    if (!userToDelete) return
+
+    setDeletingUser(true)
+    try {
+      await api.delete(`/admin/users/${userToDelete.id}`, {
+        data: {
+          confirmation_email: confirmationEmail,
+          reason: deleteReason.trim(),
+        },
+      })
+      const deletedUser = userToDelete
+      setUsers((current) => current.filter((user) => user.id !== deletedUser.id))
+      if (selectedUser?.id === deletedUser.id) setSelectedUser(null)
+      setUserToDelete(null)
+      setDeleteReason('')
+      setConfirmationEmail('')
+      setSuccessToast(`${deletedUser.email} was permanently deleted.`)
+      window.setTimeout(() => setSuccessToast(''), 4000)
+      void fetchUsers(false)
+    } catch (error: any) {
+      alert(error.response?.data?.detail || 'Failed to permanently delete user.')
+    } finally {
+      setDeletingUser(false)
     }
   }
 
@@ -522,11 +713,17 @@ export function AdminUsersPage() {
           <p className="text-xs text-slate-500 mt-1">Audit user accounts and manage active status.</p>
         </div>
         <Link to="/admin">
-          <Button variant="outline" size="sm">
-            Console
+          <Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>
+            Dashboard
           </Button>
         </Link>
       </div>
+
+      {successToast && (
+        <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+          {successToast}
+        </div>
+      )}
 
       {/* Filter Bar */}
       <div className="bg-white p-3.5 rounded-xl border border-slate-200 flex flex-col sm:flex-row gap-3">
@@ -551,6 +748,9 @@ export function AdminUsersPage() {
           <option value="COMPANY">Company</option>
           <option value="ADMIN">Admin</option>
         </select>
+        <span className="self-center whitespace-nowrap text-xs font-semibold text-slate-500">
+          {users.length} users
+        </span>
       </div>
 
       {loading ? (
@@ -562,7 +762,7 @@ export function AdminUsersPage() {
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full min-w-[1040px] text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase tracking-wider font-semibold">
                 <tr>
                   <th className="p-3.5">ID</th>
@@ -571,7 +771,7 @@ export function AdminUsersPage() {
                   <th className="p-3.5">Status</th>
                   <th className="p-3.5">Email Verified</th>
                   <th className="p-3.5">2FA / MFA</th>
-                  <th className="p-3.5 text-right">Actions</th>
+                  <th className="p-3.5 w-[250px] text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -588,7 +788,9 @@ export function AdminUsersPage() {
                       </Badge>
                     </td>
                     <td className="p-3.5">
-                      {u.is_verified ? (
+                      {u.role === 'COMPANY' && u.email_verification_required === false ? (
+                        <span className="text-slate-500 dark:text-slate-400">Not required</span>
+                      ) : u.is_verified ? (
                         <span className="text-emerald-600 font-medium">Verified</span>
                       ) : (
                         <span className="text-slate-400">Pending</span>
@@ -599,18 +801,33 @@ export function AdminUsersPage() {
                         {u.mfa_enabled ? 'Active' : 'Disabled'}
                       </Badge>
                     </td>
-                    <td className="p-3.5 text-right" onClick={(event) => event.stopPropagation()}>
-                      {u.role !== 'ADMIN' && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          isLoading={actionId === u.id}
-                          onClick={() => handleToggleSuspend(u)}
-                          className={u.is_active ? 'text-rose-600 hover:bg-rose-50' : 'text-emerald-600 hover:bg-emerald-50'}
-                          leftIcon={u.is_active ? <Ban className="w-3.5 h-3.5" /> : <RotateCcw className="w-3.5 h-3.5" />}
-                        >
-                          {u.is_active ? 'Suspend' : 'Reactivate'}
-                        </Button>
+                    <td className="p-3.5 text-right whitespace-nowrap" onClick={(event) => event.stopPropagation()}>
+                      {u.id !== session?.userId && (
+                        <div className="inline-flex items-center justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            isLoading={actionId === u.id}
+                            onClick={() => handleToggleSuspend(u)}
+                            className={`h-9 w-[112px] shrink-0 justify-center whitespace-nowrap px-2 ${u.is_active ? 'text-rose-600 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/40' : 'text-emerald-600 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/40'}`}
+                            leftIcon={u.is_active ? <Ban className="w-3.5 h-3.5" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                          >
+                            {u.is_active ? 'Suspend' : 'Reactivate'}
+                          </Button>
+                          <Button
+                            variant="danger"
+                            aria-label={`Delete user ${u.email}`}
+                            title="Delete user"
+                            onClick={() => {
+                              setUserToDelete(u)
+                              setDeleteReason('')
+                              setConfirmationEmail('')
+                            }}
+                            className="h-9 w-9 shrink-0 p-0"
+                          >
+                            <Trash2 aria-hidden="true" className="h-4 w-4" />
+                          </Button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -620,6 +837,74 @@ export function AdminUsersPage() {
           </div>
         </div>
       )}
+
+      <Modal
+        isOpen={!!userToDelete}
+        onClose={() => {
+          if (deletingUser) return
+          setUserToDelete(null)
+          setDeleteReason('')
+          setConfirmationEmail('')
+        }}
+        title="Permanently delete user"
+        description="This action cannot be undone."
+      >
+        {userToDelete && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-sm dark:border-rose-900 dark:bg-rose-950/30">
+              <p className="font-semibold text-rose-800 dark:text-rose-300">{userToDelete.email}</p>
+              <p className="mt-1 text-xs text-rose-700 dark:text-rose-400">Role: {userToDelete.role}</p>
+              <p className="mt-3 text-xs leading-relaxed text-rose-800 dark:text-rose-300">
+                Permanently delete this account and its profile, applications, saved internships, and related data. Company internships will also be removed. This cannot be reversed.
+              </p>
+            </div>
+            <Textarea
+              label="Reason for deletion"
+              value={deleteReason}
+              onChange={(event) => setDeleteReason(event.target.value)}
+              placeholder="Enter a reason (at least 5 characters)"
+              required
+              minLength={5}
+            />
+            <div className="space-y-1.5">
+              <label htmlFor="delete-confirmation-email" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                Type the exact email to confirm
+              </label>
+              <input
+                id="delete-confirmation-email"
+                type="email"
+                value={confirmationEmail}
+                onChange={(event) => setConfirmationEmail(event.target.value)}
+                autoComplete="off"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              />
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 pt-4 dark:border-slate-800">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={deletingUser}
+                onClick={() => {
+                  setUserToDelete(null)
+                  setDeleteReason('')
+                  setConfirmationEmail('')
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                isLoading={deletingUser}
+                disabled={deleteReason.trim().length < 5 || confirmationEmail !== userToDelete.email}
+                onClick={() => void handleDeleteUser()}
+              >
+                Delete permanently
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {selectedUser && (
         <div className="fixed inset-0 z-40 bg-slate-950/30" onClick={() => setSelectedUser(null)}>
@@ -667,12 +952,21 @@ export function AdminVerificationsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [actionId, setActionId] = useState<number | null>(null)
+  const [rejectingCompany, setRejectingCompany] = useState<any | null>(null)
+  const [rejectionReason, setRejectionReason] = useState('')
+  const [documentError, setDocumentError] = useState('')
+  const [openingDocument, setOpeningDocument] = useState<string | null>(null)
+  const [documentPreview, setDocumentPreview] = useState<{
+    url: string
+    contentType: string
+    filename: string
+  } | null>(null)
 
   const fetchCompanies = async () => {
     setLoading(true)
     setError(null)
     try {
-      const res = await api.get('/admin/companies/unverified')
+      const res = await api.get('/admin/verifications')
       setCompanies(res.data || [])
     } catch {
       setError('Failed to fetch unverified companies.')
@@ -685,15 +979,63 @@ export function AdminVerificationsPage() {
     fetchCompanies()
   }, [])
 
-  const handleVerify = async (userId: number, status: 'VERIFIED' | 'REJECTED') => {
+  useEffect(() => () => {
+    if (documentPreview) URL.revokeObjectURL(documentPreview.url)
+  }, [documentPreview])
+
+  const handleVerify = async (userId: number, status: 'VERIFIED' | 'REJECTED', reason?: string) => {
     setActionId(userId)
     try {
-      await api.post(`/admin/companies/${userId}/verification`, { status })
-      fetchCompanies()
+      await api.post(`/admin/companies/${userId}/verification`, { status, ...(reason ? { reason } : {}) })
+      setRejectingCompany(null)
+      setRejectionReason('')
+      await fetchCompanies()
     } catch {
-      alert('Failed to update company verification status.')
+      setDocumentError('Failed to update company verification status.')
     } finally {
       setActionId(null)
+    }
+  }
+
+  const viewDocument = async (doc: any, company: any) => {
+    const url = doc.id != null
+      ? `/admin/companies/${company.user_id}/documents/${doc.id}/download`
+      : doc.download_url || doc.file_url || doc.url
+    if (!url) {
+      setDocumentError('This document does not include a view/download URL.')
+      return
+    }
+    const key = `${company.user_id}:${doc.id ?? doc.document_type ?? doc.filename}`
+    setOpeningDocument(key)
+    setDocumentError('')
+    try {
+      const response = await api.get(url, { responseType: 'blob' })
+      const contentType = String(response.headers['content-type'] || doc.content_type || '')
+      const blobUrl = URL.createObjectURL(new Blob([response.data], { type: contentType }))
+      setDocumentPreview({
+        url: blobUrl,
+        contentType,
+        filename: doc.original_filename || doc.filename || 'company-document',
+      })
+    } catch (error: any) {
+      setDocumentError(error.response?.data?.detail || 'Could not retrieve this document.')
+    } finally {
+      setOpeningDocument(null)
+    }
+  }
+
+  const downloadDocument = async (doc: any, company: any) => {
+    const url = doc.id != null
+      ? `/admin/companies/${company.user_id}/documents/${doc.id}/download`
+      : doc.download_url || doc.file_url || doc.url
+    if (!url) {
+      setDocumentError('This document does not include a download URL.')
+      return
+    }
+    try {
+      await downloadAuthenticatedFile(url, doc.original_filename || doc.filename || 'company-document')
+    } catch (error: any) {
+      setDocumentError(error.response?.data?.detail || 'Could not download this document.')
     }
   }
 
@@ -701,12 +1043,12 @@ export function AdminVerificationsPage() {
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Company Verifications</h1>
-          <p className="text-xs text-slate-500 mt-1">Review newly registered employers before granting posting rights.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Company Verifications</h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Review newly registered employers before granting posting rights.</p>
         </div>
         <Link to="/admin">
-          <Button variant="outline" size="sm">
-            Console
+          <Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>
+            Dashboard
           </Button>
         </Link>
       </div>
@@ -726,14 +1068,20 @@ export function AdminVerificationsPage() {
         />
       ) : (
         <div className="space-y-3">
+          {documentError && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">{documentError}</div>}
           {companies.map((comp) => (
-            <Card key={comp.user_id} className="p-5 bg-white">
+            <Card key={comp.user_id} className="p-5 bg-white dark:bg-slate-900">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2.5">
                     <h3 className="text-base font-bold text-slate-900">{comp.company_name}</h3>
                     <Badge status="PENDING">Pending Review</Badge>
                   </div>
+                  {comp.submitted_at && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Submitted {new Date(comp.submitted_at).toLocaleDateString()}
+                    </p>
+                  )}
                   <p className="text-xs text-slate-500">
                     Industry: <strong className="text-slate-700">{comp.industry}</strong>
                     {comp.website && (
@@ -752,10 +1100,38 @@ export function AdminVerificationsPage() {
                     )}
                   </p>
                   {comp.description && (
-                    <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-md border border-slate-100 mt-2">
+                    <p className="text-xs text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 p-2.5 rounded-md border border-slate-100 dark:border-slate-700 mt-2">
                       {comp.description}
                     </p>
                   )}
+                  <div className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Verification documents</p>
+                    {(comp.verification_documents || comp.documents || []).length ? (
+                      <ul className="space-y-2">
+                        {(comp.verification_documents || comp.documents).map((doc: any, index: number) => {
+                          const key = `${comp.user_id}:${doc.id ?? doc.document_type ?? index}`
+                          return <li key={key} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-medium text-slate-800 dark:text-slate-100">{doc.original_filename || doc.filename || doc.document_type?.replace(/_/g, ' ') || `Document ${index + 1}`}</p>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                {doc.document_type?.replace(/_/g, ' ') || 'Supporting document'}
+                                {doc.file_size ? ` · ${(doc.file_size / (1024 * 1024)).toFixed(1)} MB` : ''}
+                                {(doc.uploaded_at || doc.created_at || comp.created_at) ? ` · ${new Date(doc.uploaded_at || doc.created_at || comp.created_at).toLocaleDateString()}` : ''}
+                              </p>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <Button size="sm" variant="outline" isLoading={openingDocument === key} onClick={() => void viewDocument(doc, comp)}>
+                                View
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => void downloadDocument(doc, comp)}>
+                                Download
+                              </Button>
+                            </div>
+                          </li>
+                        })}
+                      </ul>
+                    ) : <p className="text-xs text-slate-500 dark:text-slate-400">No verification document metadata was returned for this company.</p>}
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
@@ -773,7 +1149,11 @@ export function AdminVerificationsPage() {
                     size="sm"
                     variant="danger"
                     isLoading={actionId === comp.user_id}
-                    onClick={() => handleVerify(comp.user_id, 'REJECTED')}
+                    onClick={() => {
+                      setRejectingCompany(comp)
+                      setRejectionReason('')
+                      setDocumentError('')
+                    }}
                     leftIcon={<XCircle className="w-3.5 h-3.5" />}
                   >
                     Reject
@@ -784,6 +1164,50 @@ export function AdminVerificationsPage() {
           ))}
         </div>
       )}
+      <Modal
+        isOpen={documentPreview !== null}
+        onClose={() => setDocumentPreview(null)}
+        title={documentPreview?.filename || 'Verification document'}
+        description="Private company verification document"
+        maxWidth="4xl"
+      >
+        {documentPreview && (
+          documentPreview.contentType.startsWith('image/')
+            ? <img src={documentPreview.url} alt={documentPreview.filename} className="mx-auto max-h-[70vh] max-w-full object-contain" />
+            : documentPreview.contentType === 'application/pdf'
+              ? <iframe title={documentPreview.filename} src={documentPreview.url} className="h-[70vh] w-full rounded-lg border border-slate-200 dark:border-slate-700" />
+              : <p className="text-sm text-slate-600 dark:text-slate-300">Preview is not available for this file type. Use Download instead.</p>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={!!rejectingCompany}
+        onClose={() => {
+          if (actionId !== null) return
+          setRejectingCompany(null)
+          setRejectionReason('')
+        }}
+        title="Reject company verification"
+        description="Provide specific feedback so the company knows what to correct."
+      >
+        <div className="space-y-4">
+          <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{rejectingCompany?.company_name}</p>
+          <Textarea
+            label="Reason for rejection"
+            required
+            minLength={5}
+            value={rejectionReason}
+            onChange={(event) => setRejectionReason(event.target.value)}
+            placeholder="Explain which information or document needs correction."
+          />
+          <div className="flex justify-end gap-2 border-t border-slate-200 pt-4 dark:border-slate-800">
+            <Button variant="outline" disabled={actionId !== null} onClick={() => setRejectingCompany(null)}>Cancel</Button>
+            <Button variant="danger" isLoading={actionId === rejectingCompany?.user_id} disabled={rejectionReason.trim().length < 5 || actionId !== null} onClick={() => rejectingCompany && void handleVerify(rejectingCompany.user_id, 'REJECTED', rejectionReason.trim())}>
+              Reject verification
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
@@ -835,8 +1259,8 @@ export function AdminModerationPage() {
           <p className="text-xs text-slate-500 mt-1">Review submitted internships to ensure legitimacy and compliance.</p>
         </div>
         <Link to="/admin">
-          <Button variant="outline" size="sm">
-            Console
+          <Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>
+            Dashboard
           </Button>
         </Link>
       </div>
@@ -971,8 +1395,8 @@ export function AdminReportsPage() {
           <p className="text-xs text-slate-500 mt-1">Review complaints submitted by students and employers.</p>
         </div>
         <Link to="/admin">
-          <Button variant="outline" size="sm">
-            Console
+          <Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>
+            Dashboard
           </Button>
         </Link>
       </div>
@@ -1108,7 +1532,7 @@ export function AdminCompaniesPage() {
 
   return (
     <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
-      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Company Directory</h1><p className="mt-1 text-xs text-slate-500">Review verification status and posting activity.</p></div><Link to="/admin"><Button variant="outline" size="sm">Console</Button></Link></div>
+      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Company Directory</h1><p className="mt-1 text-xs text-slate-500">Review verification status and posting activity.</p></div><Link to="/admin"><Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>Dashboard</Button></Link></div>
       {loading ? <TableSkeleton /> : companies.length === 0 ? <EmptyState title="No companies found" description="Registered companies will appear here." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Company</th><th className="p-3">Industry</th><th className="p-3">Verification</th><th className="p-3">Postings</th><th className="p-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map((company) => <tr key={company.id}><td className="p-3 font-semibold text-slate-800"><Link className="hover:text-indigo-600" to={`/admin/companies/${company.user_id}/postings`}>{company.company_name}</Link></td><td className="p-3 text-slate-600">{company.industry}</td><td className="p-3"><Badge status={company.verification_status}>{company.verification_status}</Badge></td><td className="p-3 text-slate-600">{company.posting_count}</td><td className="p-3 text-right"><div className="flex justify-end gap-2">{company.verification_status !== 'VERIFIED' && <Button size="sm" variant="primary" onClick={() => verify(company.user_id, 'VERIFIED')} leftIcon={<CheckCircle2 className="h-3.5 w-3.5" />}>Verify</Button>}{company.verification_status !== 'REJECTED' && <Button size="sm" variant="outline" className="text-rose-600" onClick={() => verify(company.user_id, 'REJECTED')} leftIcon={<XCircle className="h-3.5 w-3.5" />}>Reject</Button>}</div></td></tr>)}</tbody></table></div>}
     </div>
   )
@@ -1165,7 +1589,7 @@ export function AdminAuditLogsPage() {
 
   return (
     <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
-      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Audit Logs</h1><p className="mt-1 text-xs text-slate-500">Search administrative actions and inspect their metadata.</p></div><Link to="/admin"><Button variant="outline" size="sm">Console</Button></Link></div>
+      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Audit Logs</h1><p className="mt-1 text-xs text-slate-500">Search administrative actions and inspect their metadata.</p></div><Link to="/admin"><Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>Dashboard</Button></Link></div>
       <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:flex-wrap"><input value={actor} onChange={(event) => { setPage(1); setActor(event.target.value) }} placeholder="Actor email" className="rounded-lg border border-slate-300 px-3 py-2 text-xs" /><select value={action} onChange={(event) => { setPage(1); setAction(event.target.value) }} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="">All actions</option><option value="user_suspended">User suspended</option><option value="user_reinstated">User reinstated</option><option value="company_verified">Company verified</option><option value="company_rejected">Company rejected</option><option value="posting_approved">Posting approved</option><option value="posting_rejected">Posting rejected</option><option value="posting_removed">Posting removed</option><option value="report_resolved">Report resolved</option></select><select value={targetType} onChange={(event) => { setPage(1); setTargetType(event.target.value) }} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="">All targets</option><option value="user">User</option><option value="company">Company</option><option value="posting">Posting</option></select><label className="flex items-center gap-2 text-xs text-slate-500">From<input type="date" value={dateFrom} onChange={(event) => { setPage(1); setDateFrom(event.target.value) }} className="rounded-lg border border-slate-300 px-2 py-2 text-xs text-slate-700" /></label><label className="flex items-center gap-2 text-xs text-slate-500">To<input type="date" value={dateTo} onChange={(event) => { setPage(1); setDateTo(event.target.value) }} className="rounded-lg border border-slate-300 px-2 py-2 text-xs text-slate-700" /></label></div>
       {logs.length === 0 ? <EmptyState icon={ClipboardList} title="No audit events" description="No actions match the current filters." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Actor</th><th className="p-3">Action</th><th className="p-3">Target</th><th className="p-3">Timestamp</th><th className="p-3" /></tr></thead><tbody className="divide-y divide-slate-100">{logs.map((log) => <tr key={log.id}><td className="p-3 text-slate-700">{log.actor_email || 'System'}</td><td className="p-3"><Badge status="ADMIN">{log.action}</Badge></td><td className="p-3 text-slate-600">{log.target_type || '—'} #{log.target_id || '—'}</td><td className="p-3 text-slate-500">{new Date(log.created_at).toLocaleString()}</td><td className="p-3 text-right"><Button size="sm" variant="outline" onClick={() => setExpanded(expanded === log.id ? null : log.id)} leftIcon={expanded === log.id ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}>Metadata</Button>{expanded === log.id && <pre className="mt-2 max-w-xs overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-left text-[10px] text-emerald-300">{JSON.stringify(log.metadata || {}, null, 2)}</pre>}</td></tr>)}</tbody></table></div>}
       <div className="flex items-center justify-between text-xs text-slate-500"><span>{total} total events</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</Button><span className="px-2 py-2">Page {page}</span><Button size="sm" variant="outline" disabled={page * pageSize >= total} onClick={() => setPage((current) => current + 1)}>Next</Button></div></div>
