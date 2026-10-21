@@ -11,6 +11,7 @@ from app.core.security import create_token
 from app.main import app
 from app.models import (
     CompanyProfile,
+    EmailMessage,
     Internship,
     Notification,
     StudentProfile,
@@ -49,6 +50,11 @@ def access_headers(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
 @pytest.mark.anyio
 async def test_apply_notifies_company_and_student_and_lists_newest_first() -> None:
     async with client_with_database() as (client, sessions):
@@ -67,7 +73,12 @@ async def test_apply_notifies_company_and_student_and_lists_newest_first() -> No
                         graduation_year=2027,
                         skills="Python",
                     ),
-                    CompanyProfile(user_id=company.id, company_name="Example Co", industry="Technology"),
+                    CompanyProfile(
+                        user_id=company.id,
+                        company_name="Example Co",
+                        industry="Technology",
+                        verification_status="VERIFIED",
+                    ),
                 ]
             )
             internship = Internship(
@@ -102,14 +113,64 @@ async def test_apply_notifies_company_and_student_and_lists_newest_first() -> No
             headers=access_headers(student),
         )
         assert response.status_code == 201
+        application_id = response.json()["id"]
 
         company_alerts = await client.get("/api/v1/notifications", headers=access_headers(company))
         student_alerts = await client.get("/api/v1/notifications", headers=access_headers(student))
+        timeline = await client.get(
+            f"/api/v1/applications/{application_id}/timeline",
+            headers=access_headers(student),
+        )
         assert company_alerts.status_code == 200
         assert student_alerts.status_code == 200
+        assert timeline.status_code == 200
+        assert timeline.json()["steps"][0]["key"] == "APPLIED"
         assert company_alerts.json()[0]["title"] == "New application: Taylor Student applied to Backend Intern"
         assert company_alerts.json()[1]["title"] == "Older update"
         assert student_alerts.json()[0]["title"] == "Application submitted for Backend Intern"
+        assert company_alerts.json()[0]["application_id"] == application_id
+        assert student_alerts.json()[0]["application_id"] == application_id
+
+
+@pytest.mark.anyio
+async def test_pre_migration_notification_without_application_and_email_links_is_returned() -> None:
+    async with client_with_database() as (client, sessions):
+        async with sessions() as db:
+            student = User(email="legacy-notification@gmail.com", password_hash="fake", role=UserRole.STUDENT)
+            db.add(student)
+            await db.flush()
+            notification = Notification(
+                user_id=student.id,
+                application_id=None,
+                notification_type="GENERAL",
+                title="A legacy alert",
+                body="No application link was stored.",
+            )
+            db.add(notification)
+            db.add(
+                EmailMessage(
+                    user_id=student.id,
+                    recipient_email=student.email,
+                    sender_email="noreply@internship.local",
+                    subject="Old message",
+                    message_type="GENERAL",
+                    body="Old mail without identifiers",
+                    application_id=None,
+                    message_id=None,
+                    delivered_via_smtp=False,
+                )
+            )
+            await db.commit()
+            headers = access_headers(student)
+
+        notification_response = await client.get("/api/v1/notifications", headers=headers)
+        mailbox_response = await client.get("/api/v1/me/emails", headers=headers)
+
+        assert notification_response.status_code == 200
+        assert notification_response.json()[0]["application_id"] is None
+        assert notification_response.json()[0]["gmail_url"] is None
+        assert mailbox_response.status_code == 200
+        assert mailbox_response.json()[0]["gmail_url"] is None
 
 
 @pytest.mark.anyio

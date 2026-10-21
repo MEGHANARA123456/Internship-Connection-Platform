@@ -20,6 +20,5 @@ COPY alembic.ini .
 # Expose the FastAPI port
 EXPOSE 8000
 
-# IMPORTANT: Run database migrations before starting the API server.
-# This means Alembic is part of the app startup process for this backend.
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
+# The FastAPI lifespan applies Alembic migrations before serving requests.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

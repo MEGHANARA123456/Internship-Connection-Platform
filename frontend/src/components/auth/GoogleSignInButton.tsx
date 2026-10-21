@@ -5,6 +5,7 @@ import { useAuthStore } from '../../store/auth'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { AlertCircle } from 'lucide-react'
+import { routes } from '../../lib/routes'
 
 declare global {
   interface Window {
@@ -25,6 +26,7 @@ interface GoogleSignInButtonProps {
   buttonText?: string
   className?: string
   onError?: (msg: string) => void
+  keepSignedIn?: boolean
 }
 
 export function GoogleSignInButton({
@@ -32,6 +34,7 @@ export function GoogleSignInButton({
   buttonText = 'Continue with Google',
   className = '',
   onError,
+  keepSignedIn = false,
 }: GoogleSignInButtonProps) {
   const navigate = useNavigate()
   const setSession = useAuthStore((state) => state.setSession)
@@ -65,14 +68,14 @@ export function GoogleSignInButton({
       refreshTokenExpiresAt: data.refresh_token_expires_at ?? null,
       accessTokenExpiresIn: data.access_token_expires_in ?? null,
       refreshTokenExpiresIn: data.refresh_token_expires_in ?? null,
-    })
+    }, keepSignedIn ? 'local' : 'session')
 
     if (data.role === 'ADMIN') {
-      navigate('/admin')
+      navigate(routes.admin)
     } else if (data.role === 'COMPANY') {
-      navigate('/company/jobs')
+      navigate(routes.companyJobs())
     } else {
-      navigate('/opportunities')
+      navigate(routes.opportunities)
     }
   }
 

@@ -30,8 +30,7 @@
    - 3.17 AI Services & Matching Suite (`backend/app/services/ai.py`)
    - 3.18 AI API Endpoints (`backend/app/api/v1/ai.py`)
    - 3.19 Real-Time WebSockets & WebRTC Signaling (`backend/app/api/v1/ws.py`)
-   - 3.20 College Placement Portal & TPO Analytics (`backend/app/api/v1/institution.py`)
-   - 3.21 Backend Test Suite Architecture (`backend/tests/*`)
+   - 3.20 Backend Test Suite Architecture (`backend/tests/*`)
 4. [Separately: Complete Imports & Suggested Alternatives Catalog](#4-separately-complete-imports--suggested-alternatives-catalog)
 5. [Authentication, Authorization & Security Architecture](#5-authentication-authorization--security-architecture)
 6. [API Endpoints Reference Matrix](#6-api-endpoints-reference-matrix)
@@ -155,7 +154,8 @@ Specifies pinned top-level production dependencies:
 - Multi-stage lightweight `python:3.12-slim` container.
 - Installs `requirements.txt` without caching wheels (`--no-cache-dir`) to keep images small (<150MB).
 - Exposes port `8000`.
-- Launches via `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
+- Launches via `uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1` without reload; `docker-compose.dev.yml` adds `--reload`.
+- Keep one worker until both the WebSocket manager and rate limiter use shared Redis-backed state.
 
 ---
 
@@ -208,7 +208,10 @@ Centralized typed configuration using Pydantic Settings:
   - `access_token_expire_minutes` (30), `refresh_token_expire_days` (7).
   - `mailpit_host`, `mailpit_port`: SMTP / API coordinates for transactional emails.
   - `max_resume_size_mb` (5), `resume_storage_path` ("storage/resumes").
-  - `rate_limit_requests` (120), `rate_limit_window_seconds` (60).
+  - `rate_limit_requests` (300), `rate_limit_window_seconds` (60), with authenticated-user keys.
+  - `auth_rate_limit_requests` (10), `auth_rate_limit_window_seconds` (60), with IP and email buckets.
+  - `trusted_proxies`: comma-separated IP/CIDR allowlist for `X-Forwarded-For`.
+  - `rate_limit_backend` (`memory` by default) and optional `rate_limit_redis_url`.
   - `gemini_api_key`: Optional API key for Google Gemini / generative AI services.
 
 ---
@@ -449,20 +452,7 @@ Provides bi-directional real-time communication for instant messaging, live typi
 
 ---
 
-### 3.20 College Placement Portal & TPO Analytics (`backend/app/api/v1/institution.py`)
-Provides aggregated macro metrics and departmental breakdowns for university Placement Cells and Training & Placement Officers (TPO).
-- **Imports**:
-  - `typing.Annotated`: Dependency injection annotations.
-  - `fastapi.APIRouter, Depends`: Router declaration and authorization.
-  - `sqlalchemy.func, select`: SQL aggregations (`count`, `avg`, `distinct`, `group_by`).
-  - `app.api.v1.dependencies.DbSession, get_current_user`: Authenticated user session.
-  - `app.models.*`: Models (`Application`, `Internship`, `StudentProfile`, `User`).
-- **Endpoints**:
-  - `GET /api/v1/institution/placement-stats`: Computes total student headcount, overall placement rates, total placed candidates, active hiring partners, average stipend packages, department-wise placement distributions, and recent placement offer records.
-
----
-
-### 3.21 Backend Test Suite Architecture (`backend/tests/*`)
+### 3.20 Backend Test Suite Architecture (`backend/tests/*`)
 Automated testing harness validating system security, role boundaries, API schemas, and business workflows.
 - **Imports Across Tests**:
   - `pytest`: Test orchestrator with `@pytest.mark.anyio` async fixtures.
@@ -477,7 +467,6 @@ Automated testing harness validating system security, role boundaries, API schem
   - `test_communication.py`: Tests chat message posting, conversation listing, and interview scheduling.
   - `test_admin.py`: Tests admin moderation dashboard, company verification, user suspension, and reports investigation.
   - `test_ai.py`: Verifies unauthorized access guards on AI evaluation endpoints.
-  - `test_institution.py`: Verifies institutional placement endpoints require valid authentication tokens.
 
 ---
 
@@ -607,7 +596,6 @@ To prevent remote code execution, denial-of-service, or path traversal attacks:
 | | `POST` | `/api/v1/ai/internships/{id}/generate-pitch` | Student | Crafts tailored 2-paragraph cover pitch aligned with job requirements. |
 | | `GET` | `/api/v1/ai/internships/{id}/mock-interview` | Student | Generates 5 technical & behavioral questions with rubrics for role. |
 | | `POST` | `/api/v1/ai/mock-interview/evaluate` | Student | Submits mock interview answer and receives instant score and feedback. |
-| **Institution** | `GET` | `/api/v1/institution/placement-stats` | Authenticated | Aggregated university placement KPIs, department distributions, and offers. |
 | **WebSockets** | `WS` | `/api/v1/ws/chat/{user_id}` | Authenticated | Real-time bi-directional chat, typing bubbles, and presence broadcasts. |
 | | `WS` | `/api/v1/ws/video-signal/{interview_id}` | Authenticated | Relays WebRTC SDP offers/answers and ICE candidate signals between peers. |
 
@@ -623,7 +611,7 @@ To prevent remote code execution, denial-of-service, or path traversal attacks:
 - **WebSockets Connection**: `useWebSocketChat` establishes an async connection to `ws://localhost:8010/api/v1/ws/chat/{user_id}` with automatic reconnects, tracking active presence and typing statuses.
 - **WebRTC Video Signaling**: `VideoInterviewModal` establishes a signaling connection to `ws://localhost:8010/api/v1/ws/video-signal/{interview_id}` to exchange SDP offers and ICE candidates for zero-server-overhead peer-to-peer video streams.
 - **Theme Engine**: Built with Zustand (`frontend/src/store/theme.ts`) supporting `dark`, `light`, and `system` modes, synchronized with Tailwind CSS `@custom-variant dark` variables.
-- **Interactive Modals**: Includes Live ATS Gauges (`ApplyModal.tsx`), AI Mock Interview Room (`MockInterviewModal.tsx`), In-App Offer Letters with HTML5 Canvas Digital Signatures (`OfferLetterModal.tsx`), Timed Technical Skill Quizzes (`SkillQuizModal.tsx`), and Faculty Endorsements (`RecommendationModal.tsx`).
+- **Interactive Modals**: Includes Live ATS Gauges (`ApplyModal.tsx`), AI Mock Interview Room (`MockInterviewModal.tsx`), In-App Offer Letters with HTML5 Canvas Digital Signatures (`OfferLetterModal.tsx`), and Timed Technical Skill Quizzes (`SkillQuizModal.tsx`).
 
 ### 7.2 Docker Compose Services
 - **`backend`**: FastAPI running on internal port 8000, mapped to host port **8010**.
@@ -700,7 +688,6 @@ docker exec -it internshipconnectionplatform-backend-1 alembic upgrade head
    - 8.6 AI ATS Resume Matcher, Pitch Generator & Mock Interview Arena
    - 8.7 Verified Company Reviews & Rating Engine
    - 8.8 Saved Internships Bookmark System
-   - 8.9 College Placement Office (TPO) Analytics & Reporting
 9. [Security, RBAC & Protection Mechanisms](#9-security-rbac--protection-mechanisms)
 10. [Local Development, Docker & Deployment Guide](#10-local-development-docker--deployment-guide)
 
@@ -721,10 +708,7 @@ The **Internship Connection Platform** is an enterprise-grade, asynchronous, rea
    - Author detailed internship openings with custom requirements, stipend tiers, work modes (Remote, Hybrid, On-site), and location parameters.
    - Manage applicant funnels with visual candidate pipelines, filter by ATS compatibility, execute bulk status changes, issue formal offer letters, and schedule interviews with calendar and video room links.
 
-3. **Colleges / Training & Placement Officers (TPO)**:
-   - Access the dedicated institutional portal (`/institution/portal`) to monitor real-time placement statistics, department-wise employment ratios, average stipend levels, active recruiters, and top recruiting partners directly sourced from live database records without mock data.
-
-4. **Platform Administrators**:
+3. **Platform Administrators**:
    - Executive control center (`/admin`) monitoring system-wide growth, user account management, instant account suspension/reactivation, corporate profile vetting, listing content moderation, and user complaint investigation.
 
 ---
@@ -762,7 +746,6 @@ flowchart TD
             ReviewsRouter["Company Reviews (`/companies`)"]
             AIRouter["AI & ATS Suite (`/ai`)"]
             AdminRouter["Admin Operations (`/admin`)"]
-            InstRouter["College Placement (`/institution`)"]
             MailRouter["Mailbox Isolation (`/me/emails`)"]
             WSRouter["WebSocket & WebRTC Signaling (`/ws`)"]
         end
@@ -878,7 +861,6 @@ Internship Connection Platform/
 │   │   │       ├── auth.py                  # Register, OTP verify, login, refresh & Google SSO
 │   │   │       ├── communication.py         # Contacts, 1-on-1 chat, interviews & notifications
 │   │   │       ├── dependencies.py          # FastApi Depends: DbSession, JWT auth & RBAC guards
-│   │   │       ├── institution.py           # College Placement Officer (TPO) statistics APIs
 │   │   │       ├── internships.py           # Job posting, browse, search, filters & save/unsave
 │   │   │       ├── mailbox.py               # Authenticated per-user isolated email inbox APIs
 │   │   │       ├── profiles.py              # Student/Company profile fetch, update & avatar uploads
@@ -937,7 +919,6 @@ Internship Connection Platform/
 │       ├── test_email_validation.py         # Tests disposable email detection logic
 │       ├── test_google_auth.py              # Tests mocked Google OAuth2 SSO verification flow
 │       ├── test_health.py                   # Tests API health-check endpoint and ping status
-│       ├── test_institution.py              # Tests institutional TPO placement metrics queries
 │       ├── test_integration.py              # Full end-to-end user journey integration tests
 │       ├── test_internships.py              # Tests internship creation, update and browsing
 │       ├── test_live_stack.py               # Tests live server integration against running DB
@@ -993,7 +974,6 @@ Internship Connection Platform/
         │   │   ├── ApplyModal.tsx           # Application submission modal with live ATS gauge & pitch
         │   │   ├── MockInterviewModal.tsx   # Interactive AI mock interview simulator modal
         │   │   ├── OfferLetterModal.tsx     # In-app formal offer letter viewer with digital signature
-        │   │   ├── RecommendationModal.tsx  # University faculty endorsement request modal
         │   │   ├── ReportModal.tsx          # Flagging modal for reporting scam/inappropriate content
         │   │   ├── ReviewCompanyModal.tsx   # 5-star rating & feedback modal for verified interns
         │   │   ├── ScheduleInterviewModal.tsx # Interview scheduler with video, phone & in-person options
@@ -1027,7 +1007,6 @@ Internship Connection Platform/
         │   ├── AdminPages.tsx               # Admin portal: User management, verification & moderation
         │   ├── ApplicationPages.tsx         # Legacy application router and redirect helper
         │   ├── AuthPages.tsx                # Login, registration, OTP verification & password reset
-        │   ├── CollegePlacementPortal.tsx   # University TPO dashboard with departmental analytics
         │   ├── CommunicationPages.tsx       # Full-featured messaging, interview room & notifications
         │   ├── CompanyPages.tsx             # Employer dashboard, job authoring & ATS candidate pipeline
         │   ├── InternshipPages.tsx          # Internship search, advanced filters & detailed view
@@ -1260,10 +1239,6 @@ Internship Connection Platform/
   - `GET /internships` & `POST /internships/{id}/moderate`: Moderates posted listings (`PUBLISHED`, `REJECTED`, `CLOSED`).
   - `GET /reports` & `PATCH /reports/{id}`: Investigates misconduct flags.
 
-- [`backend/app/api/v1/institution.py`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/backend/app/api/v1/institution.py)  
-  University & TPO portal analytics:
-  - `GET /placement-stats`: Aggregates placement rate percentages, total students placed, department-wise placement distributions, average stipend levels, and active recruiter partner statistics directly from PostgreSQL records.
-
 - [`backend/app/api/v1/analytics.py`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/backend/app/api/v1/analytics.py)  
   Platform recruitment funnel metrics:
   - `GET /overview`: Returns personal funnel stages (`applied`, `screened`, `interviews`, `offers`), monthly application velocity, and industry domain distributions dynamically tailored to student, company, or administrator roles.
@@ -1354,7 +1329,6 @@ The backend contains 23 automated Pytest test suites executing against an asynch
 - [`tests/test_resume_policy.py`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/backend/tests/test_resume_policy.py): Asserts non-PDF file uploads and oversized files are rejected with HTTP 400.
 - [`tests/test_ai.py`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/backend/tests/test_ai.py): Tests ATS score algorithms, keyword matching, and cover pitch generation.
 - [`tests/test_communication.py`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/backend/tests/test_communication.py): Validates 1-on-1 direct messaging, unread counts, and interview scheduling.
-- [`tests/test_institution.py`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/backend/tests/test_institution.py): Validates college TPO placement rate calculations and departmental aggregates.
 - [`tests/test_analytics_and_avatars.py`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/backend/tests/test_analytics_and_avatars.py): Validates recruitment funnel calculations and image uploads.
 - [`tests/test_admin.py`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/backend/tests/test_admin.py): Tests platform KPI aggregation, listing moderation, and misconduct reports.
 - [`tests/test_admin_signup.py`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/backend/tests/test_admin_signup.py): Asserts users cannot self-register with the `ADMIN` role through public APIs.
@@ -1389,7 +1363,6 @@ The backend contains 23 automated Pytest test suites executing against an asynch
     - Company: `/company/dashboard`, `/company/internships`, `/company/applications`, `/company/profile`.
     - Admin: `/admin`, `/admin/users`, `/admin/verifications`, `/admin/internships`, `/admin/reports`.
     - Communication: `/messages`, `/interviews`, `/notifications`.
-    - Institutional: `/institution/portal`.
   - Mounts the floating `MobileViewSimulator` drawer.
 
 - [`frontend/src/index.css`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/frontend/src/index.css)  
@@ -1494,9 +1467,6 @@ The backend contains 23 automated Pytest test suites executing against an asynch
 - [`SkillQuizModal.tsx`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/frontend/src/components/modals/SkillQuizModal.tsx)  
   Timed technical assessment modal with multiple-choice questions, live timer, and instant scoring to verify student skills.
 
-- [`RecommendationModal.tsx`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/frontend/src/components/modals/RecommendationModal.tsx)  
-  Modal allowing students to request formal academic endorsements from college faculty.
-
 - [`ReportModal.tsx`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/frontend/src/components/modals/ReportModal.tsx)  
   Flagging modal enabling users to report suspicious postings or behavior directly to platform moderators.
 
@@ -1544,12 +1514,6 @@ The backend contains 23 automated Pytest test suites executing against an asynch
   - Company Vetting: Review corporate legitimacy documents and approve/reject profiles.
   - Listing Moderation: Review and publish or close internship postings.
   - Report Resolution: Investigate user complaints and resolve misconduct flags.
-
-- [`CollegePlacementPortal.tsx`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/frontend/src/pages/CollegePlacementPortal.tsx)  
-  University Training & Placement Officer (TPO) dashboard:
-  - Institutional placement rates, total placed students, and average stipend figures.
-  - Departmental placement breakdowns across Computer Science, Data Science, Electrical, etc.
-  - Partner company recruitment activity logs.
 
 - [`ProfilePages.tsx`](file:///d:/shortfundly%20app/Internship%20Connection%20Platform/frontend/src/pages/ProfilePages.tsx)  
   Student and employer profile views supporting profile updates, resume uploads, and avatar customization.
@@ -1684,14 +1648,13 @@ erDiagram
 | `WS` | `/api/v1/ws/chat/{user_id}` | Authenticated | Real-time chat socket for live delivery and presence |
 | `WS` | `/api/v1/ws/video-signal/{interview_id}` | Authenticated | WebRTC signaling socket for peer-to-peer video calls |
 
-### AI Suite, Institutional Portal & Admin (`/api/v1/ai`, `/institution`, `/admin`)
+### AI Suite & Admin (`/api/v1/ai`, `/admin`)
 | Method | Endpoint | Access Level | Description |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/v1/ai/internships/{id}/ats-score` | Student | Computes live ATS score, skill overlap & tips from PDF |
 | `POST` | `/api/v1/ai/internships/{id}/generate-pitch` | Student | Generates tailored 2-paragraph cover pitch |
 | `GET` | `/api/v1/ai/internships/{id}/mock-interview` | Student | Generates 5 tailored technical & behavioral interview questions |
 | `POST` | `/api/v1/ai/mock-interview/evaluate` | Student | Evaluates mock interview answers with feedback & scores |
-| `GET` | `/api/v1/institution/placement-stats` | Authenticated | Aggregates college TPO placement metrics & department stats |
 | `GET` | `/api/v1/analytics/overview` | Authenticated | Returns role-specific funnel velocity and domain breakdowns |
 | `GET` | `/api/v1/admin/dashboard` | Admin | Fetches system-wide administrative KPIs |
 | `GET` | `/api/v1/admin/users` | Admin | Searches and filters users across the platform |
@@ -1767,10 +1730,6 @@ stateDiagram-v2
 - Students can bookmark opportunities via `POST /internships/{id}/save`.
 - Enforces unique constraint `uq_saved_internship` on `(student_id, internship_id)`.
 - Accessible via `/student/saved` with instant application triggers.
-
-### 8.9 College Placement Office (TPO) Analytics & Reporting
-- Dedicated portal at `/institution/portal` consuming `/api/v1/institution/placement-stats`.
-- Computes overall institutional placement rate, total placed students, average stipend, and departmental breakdowns directly from active database records.
 
 ---
 

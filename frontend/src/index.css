@@ -2,6 +2,27 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+@keyframes skeleton-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+.skeleton-shimmer {
+  background-image: linear-gradient(90deg, transparent 0%, rgb(255 255 255 / 45%) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+.dark .skeleton-shimmer {
+  background-image: linear-gradient(90deg, transparent 0%, rgb(255 255 255 / 8%) 50%, transparent 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer {
+    animation: none;
+  }
+}
+
 :root {
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   --primary: #4f46e5;
@@ -22,6 +43,9 @@
   --bg-subtle: var(--surface-muted);
   --bg-hover: var(--surface-muted);
   --border: var(--border-color);
+  --analytics-axis: #64748b;
+  --analytics-grid: #e2e8f0;
+  --analytics-surface: #ffffff;
 
   color-scheme: light;
   font-family: var(--font-sans);
@@ -52,6 +76,9 @@
   --bg-subtle: var(--surface-muted);
   --bg-hover: var(--surface-muted);
   --border: var(--border-color);
+  --analytics-axis: #94a3b8;
+  --analytics-grid: #334155;
+  --analytics-surface: #131b2e;
   color-scheme: dark;
 }
 

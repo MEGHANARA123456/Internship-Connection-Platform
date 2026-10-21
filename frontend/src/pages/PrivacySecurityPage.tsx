@@ -18,6 +18,8 @@ import { useAuthStore } from '../store/auth'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge'
+import { AccountSecurityCard } from '../components/security/AccountSecurityCard'
+import { routes } from '../lib/routes'
 
 export function PrivacySecurityPage() {
   const { session, logout } = useAuthStore()
@@ -131,7 +133,7 @@ export function PrivacySecurityPage() {
       })
       alert('Your account and all associated personal records have been permanently erased.')
       logout()
-      navigate('/login')
+      navigate(routes.login())
     } catch (err: any) {
       setDeleteError(err.response?.data?.detail || 'Account deletion failed. Check password.')
     } finally {
@@ -141,6 +143,12 @@ export function PrivacySecurityPage() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-8 animate-in fade-in duration-200">
+      {session && (
+        <section aria-labelledby="account-security-heading" className="space-y-3">
+          <h2 id="account-security-heading" className="text-lg font-bold text-slate-900 dark:text-white">Account security</h2>
+          <AccountSecurityCard userEmail={session.email} role={session.role} />
+        </section>
+      )}
       {/* Top Banner */}
       <div className="relative overflow-hidden p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white shadow-xl border border-indigo-900/50">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -165,7 +173,7 @@ export function PrivacySecurityPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            <Link to="/privacy">
+            <Link to={routes.privacyPolicy}>
               <Button variant="outline" size="sm" className="bg-white/10 hover:bg-white/20 text-white border-white/20">
                 <FileText className="w-4 h-4 mr-1.5" />
                 Privacy Policy
@@ -236,7 +244,7 @@ export function PrivacySecurityPage() {
             </div>
 
             <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-              <Link to="/forgot-password">
+              <Link to={routes.forgotPassword}>
                 <Button variant="outline" size="sm" className="w-full text-xs">
                   <KeyRound className="w-3.5 h-3.5 mr-1.5" />
                   Change or Reset Password

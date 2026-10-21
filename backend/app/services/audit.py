@@ -8,13 +8,9 @@ Call ``write_audit`` inside any admin mutation *before* the session commit so
 the audit row is persisted atomically with the mutation itself.
 """
 from __future__ import annotations
-
 from typing import Any
-
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import AuditLog, User
-
 
 async def write_audit(
     db: AsyncSession,

@@ -68,7 +68,6 @@ export function WelcomeGreeting({
     STUDENT: 'Ready to advance your career? Browse verified internships and track your applications.',
     COMPANY: 'Welcome to your hiring command center. Review candidates, schedule interviews, and publish open roles.',
     ADMIN: 'Platform operations dashboard. Oversee company verification, listing moderation, and ecosystem security.',
-    COLLEGE: 'Institutional placement portal. Track student career progress and corporate recruiter connections.',
   }[currentRole] || 'Welcome back to your dashboard.'
 
   const displayName = resolvedName || (currentRole === 'COMPANY' ? 'Recruiter' : currentRole === 'ADMIN' ? 'Administrator' : 'Student')
@@ -80,9 +79,7 @@ export function WelcomeGreeting({
       ? 'Verified Student'
       : currentRole === 'COMPANY'
       ? 'Registered Employer'
-      : currentRole === 'ADMIN'
-      ? 'System Admin'
-      : 'Campus Partner'
+      : 'Registered Member'
 
   if (compact) {
     return (

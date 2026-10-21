@@ -13,6 +13,7 @@ import { Modal } from '../components/ui/Modal'
 import { CheckCircle2, AlertCircle, KeyRound, UploadCloud, FileText, X } from 'lucide-react'
 import { GoogleSignInButton } from '../components/auth/GoogleSignInButton'
 import { Logo } from '../components/layout/Logo'
+import { routes } from '../lib/routes'
 
 // --- Validation Schemas ---
 
@@ -77,6 +78,7 @@ function AuthCardLayout({
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const setSession = useAuthStore((state) => state.setSession)
   const [serverError, setServerError] = useState('')
   const [resendingVerification, setResendingVerification] = useState(false)
@@ -89,13 +91,18 @@ export function LoginPage() {
   const [mfaError, setMfaError] = useState('')
   const [resendMfaLoading, setResendMfaLoading] = useState(false)
   const [resendMfaStatus, setResendMfaStatus] = useState('')
+  const [keepSignedIn, setKeepSignedIn] = useState(false)
   const [demoMailOpen, setDemoMailOpen] = useState(false)
-  const [postLoginPath, setPostLoginPath] = useState('/opportunities')
+  const [postLoginPath, setPostLoginPath] = useState<string>(routes.opportunities)
   const demoMode = import.meta.env.VITE_DEMO_MODE === 'true'
-  const mailpitUrl = import.meta.env.VITE_MAILPIT_URL || 'http://localhost:8025'
+  const mailpitUrl = import.meta.env.VITE_MAILPIT_URL
 
   const finishLogin = (role: string, isFirstLogin = false) => {
-    const target = role === 'ADMIN' ? '/admin' : role === 'COMPANY' ? '/company/jobs' : '/opportunities'
+    const requestedTarget = searchParams.get('next')
+    const safeTarget = requestedTarget?.startsWith('/') && !requestedTarget.startsWith('//')
+      ? requestedTarget
+      : null
+    const target = safeTarget ?? (role === 'ADMIN' ? routes.admin : role === 'COMPANY' ? routes.companyJobs() : routes.opportunities)
     if (demoMode && role === 'COMPANY' && isFirstLogin) {
       setPostLoginPath(target)
       setDemoMailOpen(true)
@@ -119,6 +126,7 @@ export function LoginPage() {
       setServerError('Please enter a valid email address first.')
       return
     }
+    window.localStorage.setItem('pendingVerificationEmail', email)
     setResendingVerification(true)
     setResendStatus('')
     try {
@@ -158,11 +166,15 @@ export function LoginPage() {
         refreshTokenExpiresAt: refresh_token_expires_at ?? null,
         accessTokenExpiresIn: access_token_expires_in ?? null,
         refreshTokenExpiresIn: refresh_token_expires_in ?? null,
-      })
+      }, keepSignedIn ? 'local' : 'session')
 
       finishLogin(role, res.data?.is_first_login === true)
     } catch (err: any) {
-      setMfaError(err.response?.data?.detail || 'Invalid or expired 2FA code. Please try again.')
+      setMfaError(
+        err.response?.status >= 500
+          ? 'Server error, please try again'
+          : err.response?.data?.detail || 'Invalid or expired 2FA code. Please try again.',
+      )
     } finally {
       setMfaLoading(false)
     }
@@ -188,7 +200,11 @@ export function LoginPage() {
         setTimeout(() => setResendMfaStatus(''), 6000)
       }
     } catch (err: any) {
-      setMfaError(err.response?.data?.detail || 'Failed to resend code. Please return to login.')
+      setMfaError(
+        err.response?.status >= 500
+          ? 'Server error, please try again'
+          : err.response?.data?.detail || 'Failed to resend code. Please return to login.',
+      )
     } finally {
       setResendMfaLoading(false)
     }
@@ -227,10 +243,14 @@ export function LoginPage() {
         refreshTokenExpiresAt: refresh_token_expires_at ?? null,
         accessTokenExpiresIn: access_token_expires_in ?? null,
         refreshTokenExpiresIn: refresh_token_expires_in ?? null,
-      })
+      }, keepSignedIn ? 'local' : 'session')
 
       finishLogin(role, response.data?.is_first_login === true)
     } catch (err: any) {
+      if (err.response?.status >= 500) {
+        setServerError('Server error, please try again')
+        return
+      }
       const detail = err.response?.data?.detail
       if (detail) {
         setServerError(detail)
@@ -347,11 +367,11 @@ export function LoginPage() {
         <div className="text-center space-y-1">
           <p>
             Don't have an account?{' '}
-            <Link to="/register-student" className="text-indigo-600 font-semibold hover:underline">
+            <Link to={routes.studentRegister} className="text-indigo-600 font-semibold hover:underline">
               Join as student
             </Link>{' '}
             or{' '}
-            <Link to="/register-company" className="text-indigo-600 font-semibold hover:underline">
+            <Link to={routes.companyRegister} className="text-indigo-600 font-semibold hover:underline">
               Register company
             </Link>
           </p>
@@ -405,11 +425,28 @@ export function LoginPage() {
           {...register('password')}
         />
 
+        <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+          <input
+            type="checkbox"
+            checked={keepSignedIn}
+            onChange={(event) => setKeepSignedIn(event.target.checked)}
+            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+          />
+          Keep me signed in on this device
+        </label>
+
         <div className="flex items-center justify-between text-xs">
-          <Link to="/forgot-password" className="text-indigo-600 hover:underline">
+          <Link to={routes.forgotPassword} className="text-indigo-600 hover:underline">
             Forgot password?
           </Link>
-          <Link to="/verify" className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline">
+          <Link
+            to={routes.verify({ email: getValues('email')?.trim() ?? '' })}
+            onClick={() => {
+              const email = getValues('email')?.trim()
+              if (email) window.localStorage.setItem('pendingVerificationEmail', email)
+            }}
+            className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+          >
             Verify email
           </Link>
         </div>
@@ -427,7 +464,7 @@ export function LoginPage() {
           </div>
         </div>
 
-        <GoogleSignInButton />
+        <GoogleSignInButton keepSignedIn={keepSignedIn} />
       </form>
       <Modal
         isOpen={demoMailOpen}
@@ -440,9 +477,13 @@ export function LoginPage() {
       >
         <div className="space-y-4">
           <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-300">Open the demo inbox to view your company emails.</p>
-          <a href={mailpitUrl} target="_blank" rel="noreferrer" className="inline-flex w-full items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">
-            Open mail inbox
-          </a>
+          {mailpitUrl ? (
+            <a href={mailpitUrl} target="_blank" rel="noreferrer" className="inline-flex w-full items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">
+              Open mail inbox
+            </a>
+          ) : (
+            <p className="text-sm text-slate-500">The demo inbox is not configured.</p>
+          )}
           <Button type="button" variant="outline" className="w-full" onClick={() => {
             setDemoMailOpen(false)
             navigate(postLoginPath)
@@ -499,6 +540,7 @@ export function StudentRegisterPage() {
         ...data,
         skills: data.skills || '',
       })
+      window.localStorage.setItem('pendingVerificationEmail', data.email)
       setCreatedUser(res.data)
     } catch (err: any) {
       if (err.response?.status === 409) {
@@ -516,7 +558,7 @@ export function StudentRegisterPage() {
       footer={
         <p className="text-center">
           Already have an account?{' '}
-          <Link to="/login" className="text-indigo-600 font-semibold hover:underline">
+          <Link to={routes.login()} className="text-indigo-600 font-semibold hover:underline">
             Sign in
           </Link>
         </p>
@@ -532,7 +574,7 @@ export function StudentRegisterPage() {
           <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700 font-medium">
             Your verification email has been sent. Check your registered inbox to continue.
           </div>
-          <Button variant="primary" className="w-full" onClick={() => navigate('/login')}>
+          <Button variant="primary" className="w-full" onClick={() => navigate(routes.login())}>
             Proceed to Sign In
           </Button>
         </div>
@@ -810,6 +852,7 @@ export function CompanyRegisterPage() {
         website: registrationData.website || null,
         description: registrationData.description || null,
       })
+      window.localStorage.setItem('pendingVerificationEmail', registrationData.email.trim().toLowerCase())
       setCreatedCompany(res.data)
       await loginAndUpload()
     } catch (err: any) {
@@ -831,7 +874,7 @@ export function CompanyRegisterPage() {
       footer={
         <p className="text-center">
           Already registered?{' '}
-          <Link to="/login" className="text-indigo-600 font-semibold hover:underline">
+          <Link to={routes.login()} className="text-indigo-600 font-semibold hover:underline">
             Sign in
           </Link>
         </p>
@@ -847,7 +890,7 @@ export function CompanyRegisterPage() {
           <div className="p-3 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 rounded-lg text-xs text-indigo-700 dark:text-indigo-300 font-medium">
             You can sign in any time to check verification status and manage your company profile.
           </div>
-          <Button variant="primary" className="w-full" onClick={() => navigate('/company/jobs')}>
+          <Button variant="primary" className="w-full" onClick={() => navigate(routes.companyJobs())}>
             Continue to company dashboard
           </Button>
           <Modal
@@ -858,7 +901,11 @@ export function CompanyRegisterPage() {
           >
             <div className="space-y-4">
               <p className="text-sm text-slate-600 dark:text-slate-300">Mail is captured locally in demo mode and is not sent to a real inbox.</p>
-              <a href={import.meta.env.VITE_MAILPIT_URL || 'http://localhost:8025'} target="_blank" rel="noreferrer" className="inline-flex w-full items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">Open demo mail inbox</a>
+              {import.meta.env.VITE_MAILPIT_URL ? (
+                <a href={import.meta.env.VITE_MAILPIT_URL} target="_blank" rel="noreferrer" className="inline-flex w-full items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">Open demo mail inbox</a>
+              ) : (
+                <p className="text-sm text-slate-500">The demo inbox is not configured.</p>
+              )}
               <Button type="button" variant="outline" className="w-full" onClick={() => setDemoMailOpen(false)}>Continue</Button>
             </div>
           </Modal>
@@ -873,7 +920,7 @@ export function CompanyRegisterPage() {
             <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
               Your company account is already created. Sign in and retry uploading the selected files; do not register again.
               {serverError.toLowerCase().includes('verification') && (
-                <p className="mt-2"><a href="/verify" target="_blank" rel="noreferrer" className="font-semibold underline">Verify your email in another tab</a>, then return here to retry. Your selected files will remain available.</p>
+                <p className="mt-2"><a href={routes.verify()} target="_blank" rel="noreferrer" className="font-semibold underline">Verify your email in another tab</a>, then return here to retry. Your selected files will remain available.</p>
               )}
             </div>
           )}
@@ -1110,7 +1157,7 @@ export function ForgotPasswordPage() {
         new_password: newPassword,
       })
       setSuccess(true)
-      setTimeout(() => navigate('/login'), 2500)
+      setTimeout(() => navigate(routes.login()), 2500)
     } catch (err: any) {
       const detail = err.response?.data?.detail
       setServerError(detail || 'Verification code is invalid or has expired. Please request a new one.')
@@ -1128,7 +1175,7 @@ export function ForgotPasswordPage() {
           : `We dispatched a 6-digit verification OTP to ${email}.`
       }
       footer={
-        <Link to="/login" className="text-indigo-600 hover:underline">
+        <Link to={routes.login()} className="text-indigo-600 hover:underline">
           Return to sign in
         </Link>
       }
@@ -1140,7 +1187,7 @@ export function ForgotPasswordPage() {
           <p className="text-xs text-slate-600 leading-relaxed">
             Your account password has been safely updated. You can now sign in with your new credentials.
           </p>
-          <Button variant="primary" className="w-full mt-2" onClick={() => navigate('/login')}>
+          <Button variant="primary" className="w-full mt-2" onClick={() => navigate(routes.login())}>
             Sign In Now
           </Button>
         </div>
@@ -1262,7 +1309,7 @@ export function ForgotPasswordPage() {
             >
               {resending ? 'Sending fresh code...' : "Didn't receive code? Resend"}
             </button>
-            <Link to="/login" className="text-slate-500 hover:underline">
+            <Link to={routes.login()} className="text-slate-500 hover:underline">
               Cancel
             </Link>
           </div>
@@ -1322,7 +1369,7 @@ export function ResetPasswordPage() {
         new_password: newPassword,
       })
       setSuccess(true)
-      setTimeout(() => navigate('/login'), 2000)
+      setTimeout(() => navigate(routes.login()), 2000)
     } catch (err: any) {
       const detail = err.response?.data?.detail
       setServerError(detail || 'Invalid or expired verification code. Please request a new link.')
@@ -1336,7 +1383,7 @@ export function ResetPasswordPage() {
       title="Set new password"
       description="Provide your verification code and choose a new password for your account."
       footer={
-        <Link to="/login" className="text-indigo-600 hover:underline">
+        <Link to={routes.login()} className="text-indigo-600 hover:underline">
           Back to sign in
         </Link>
       }
@@ -1410,21 +1457,65 @@ export function ResetPasswordPage() {
 
 export function VerifyEmailPage() {
   const { token: routeToken } = useParams()
+  const [searchParams] = useSearchParams()
   const [tokenInput, setTokenInput] = useState(routeToken || '')
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error' | 'already_verified'>('idle')
   const [message, setMessage] = useState('')
+  const [email, setEmail] = useState(() => (
+    searchParams.get('email')
+    || (typeof window !== 'undefined' ? window.localStorage.getItem('pendingVerificationEmail') : '')
+    || ''
+  ))
+  const [showResend, setShowResend] = useState(false)
+  const [resending, setResending] = useState(false)
+  const [resendMessage, setResendMessage] = useState('')
+  const [resendError, setResendError] = useState('')
+  const [cooldown, setCooldown] = useState(0)
 
-  const executeVerify = async (tok: string) => {
-    if (!tok.trim()) return
+  useEffect(() => {
+    const queryEmail = searchParams.get('email')
+    if (queryEmail) setEmail(queryEmail)
+  }, [searchParams])
+
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const timer = window.setInterval(() => setCooldown((remaining) => Math.max(0, remaining - 1)), 1000)
+    return () => window.clearInterval(timer)
+  }, [cooldown > 0])
+
+  const extractToken = (value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) return ''
+    try {
+      const parsed = new URL(trimmed)
+      const pathToken = parsed.pathname.match(/\/verify\/([^/]+)\/?$/)?.[1]
+      return decodeURIComponent(pathToken || parsed.searchParams.get('token') || '')
+    } catch {
+      return trimmed
+    }
+  }
+
+  const executeVerify = async (value: string) => {
+    const token = extractToken(value)
+    if (!token) return
     setStatus('loading')
     setMessage('')
     try {
-      const res = await api.get(`/auth/verify/${tok.trim()}`)
+      const res = await api.get(`/auth/verify/${encodeURIComponent(token)}`)
       setStatus('success')
       setMessage(res.data.message || 'Your email has been verified!')
-    } catch {
+    } catch (error: any) {
+      const detail = error.response?.data?.detail
+      const code = typeof detail === 'string' ? detail : detail?.code
       setStatus('error')
-      setMessage('Invalid or expired verification token.')
+      if (code === 'already_verified') {
+        setStatus('already_verified')
+        setMessage('Your email is already verified')
+      } else if (code === 'token_expired') {
+        setMessage('This verification link has expired.')
+      } else {
+        setMessage('Invalid or expired verification token.')
+      }
     }
   }
 
@@ -1434,12 +1525,39 @@ export function VerifyEmailPage() {
     }
   }, [routeToken])
 
+  const resendVerification = async () => {
+    const cleanEmail = email.trim()
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setResendError('Enter a valid email address.')
+      return
+    }
+    setResending(true)
+    setResendError('')
+    setResendMessage('')
+    try {
+      await api.post('/auth/resend-verification', { email: cleanEmail })
+      window.localStorage.setItem('pendingVerificationEmail', cleanEmail)
+      setResendMessage('Check your inbox. The new link is valid for 24 hours; older links no longer work')
+      setCooldown(60)
+    } catch (error: any) {
+      if (error.response?.status === 429) {
+        const retryAfter = Number(error.response.headers?.['retry-after'] ?? 60)
+        setCooldown(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 60)
+        setResendError('Please wait before requesting another verification email.')
+      } else {
+        setResendError('Could not request a new verification email. Please try again.')
+      }
+    } finally {
+      setResending(false)
+    }
+  }
+
   return (
     <AuthCardLayout
       title="Email Verification"
       description="Confirm your email to complete registration."
       footer={
-        <Link to="/login" className="text-indigo-600 hover:underline">
+        <Link to={routes.login()} className="text-indigo-600 hover:underline">
           Go to sign in
         </Link>
       }
@@ -1451,19 +1569,30 @@ export function VerifyEmailPage() {
             <h3 className="text-base font-semibold text-slate-900">Email Verified!</h3>
             <p className="text-xs text-slate-600">{message}</p>
             <div className="pt-3">
-              <Link to="/login">
+              <Link to={routes.login()}>
                 <Button variant="primary" size="sm">
                   Proceed to Sign in
                 </Button>
               </Link>
             </div>
           </div>
+        ) : status === 'already_verified' ? (
+          <div className="space-y-3 p-6 text-center">
+            <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-600" />
+            <h3 className="text-base font-semibold text-slate-900 dark:text-white">Your email is already verified</h3>
+            <Link to={routes.login()}><Button variant="primary" size="sm">Sign in</Button></Link>
+          </div>
         ) : (
           <div className="space-y-4 text-left">
             {status === 'error' && (
               <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700">
                 <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{message}</span>
+                <span className="flex-1">{message}</span>
+                {message.includes('expired') && (
+                  <button type="button" onClick={() => setShowResend(true)} className="shrink-0 font-semibold underline">
+                    Send a new verification email
+                  </button>
+                )}
               </div>
             )}
 
@@ -1483,6 +1612,32 @@ export function VerifyEmailPage() {
             >
               Verify account
             </Button>
+            <div className="border-t border-slate-200 pt-4 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setShowResend((visible) => !visible)}
+                className="text-left text-xs font-semibold text-indigo-700 underline hover:text-indigo-900 dark:text-indigo-300"
+              >
+                Didn't get the email or the link expired? Resend verification email
+              </button>
+              {showResend && (
+                <div className="mt-3 space-y-3">
+                  <Input
+                    label="Email address"
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="you@example.com"
+                  />
+                  <Button type="button" variant="outline" className="w-full" disabled={resending || cooldown > 0} isLoading={resending} onClick={() => void resendVerification()}>
+                    {resending ? 'Sending…' : cooldown > 0 ? `Resend email in ${cooldown}s` : 'Resend email'}
+                  </Button>
+                  {resendMessage && <p role="status" className="text-xs text-emerald-700 dark:text-emerald-300">{resendMessage}</p>}
+                  {resendError && <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">{resendError}</p>}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import type { ReactNode } from 'react'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, downloadAuthenticatedFile } from '../api/client'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
+import { DropdownSelect } from '../components/ui/DropdownSelect'
 import { Card } from '../components/ui/Card'
 import { EmptyState } from '../components/ui/EmptyState'
 import { TableSkeleton, CardSkeleton } from '../components/ui/LoadingSkeleton'
@@ -11,7 +13,6 @@ import { Modal } from '../components/ui/Modal'
 import { Textarea } from '../components/ui/Textarea'
 import {
   Users,
-  TrendingUp,
   ShieldCheck,
   Briefcase,
   AlertTriangle,
@@ -25,7 +26,6 @@ import {
   Building2,
   X,
   ClipboardList,
-  BarChart2,
   ChevronDown,
   ChevronUp,
   Activity,
@@ -35,14 +35,15 @@ import {
   Trash2,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
+import { auditActionLabel } from '../lib/auditActionLabels'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 import { useAuthStore } from '../store/auth'
-import { AccountSecurityCard } from '../components/auth/AccountSecurityCard'
+import { KpiCard } from '../components/dashboard/KpiCard'
+import { routes } from '../lib/routes'
 
 // --- 1. Admin Dashboard ---
 
 export function AdminDashboardPage() {
-  const { session } = useAuthStore()
   const [stats, setStats] = useState({
     usersCount: 0,
     studentsCount: 0,
@@ -55,50 +56,40 @@ export function AdminDashboardPage() {
   const [pendingCompanies, setPendingCompanies] = useState<any[]>([])
   const [pendingJobsList, setPendingJobsList] = useState<any[]>([])
   const [openReportsList, setOpenReportsList] = useState<any[]>([])
-  const [apiOnline, setApiOnline] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [analysisRefreshKey, setAnalysisRefreshKey] = useState(0)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   const fetchDashboardData = async () => {
+    setLoading(true)
     try {
-      // Check health
-      try {
-        const healthRes = await api.get('/health')
-        setApiOnline(healthRes.data?.status === 'ok')
-      } catch {
-        setApiOnline(false)
-      }
-
-      const [usersRes, compRes, jobsRes, repRes] = await Promise.all([
+      const [usersResult, companiesResult, jobsResult, reportsResult] = await Promise.allSettled([
         api.get('/admin/users'),
         api.get('/admin/companies/unverified'),
         api.get('/admin/internships'),
         api.get('/admin/reports'),
       ])
 
-      const users = usersRes.data || []
-      const unverified = compRes.data || []
-      const jobs = jobsRes.data || []
-      const reports = repRes.data || []
-
-      const pending = jobs.filter((j: any) => j.status === 'PENDING_APPROVAL')
-      const openReps = reports.filter((r: any) => r.status === 'OPEN')
-
-      setStats({
-        usersCount: users.length,
-        studentsCount: users.filter((u: any) => u.role === 'STUDENT').length,
-        companiesCount: users.filter((u: any) => u.role === 'COMPANY').length,
-        adminsCount: users.filter((u: any) => u.role === 'ADMIN').length,
-        unverifiedCompanies: unverified.length,
-        pendingJobs: pending.length,
-        openReports: openReps.length,
+      setStats((previous) => {
+        const users = usersResult.status === 'fulfilled' ? usersResult.value.data || [] : null
+        const companies = companiesResult.status === 'fulfilled' ? companiesResult.value.data || [] : null
+        const jobs = jobsResult.status === 'fulfilled' ? jobsResult.value.data || [] : null
+        const reports = reportsResult.status === 'fulfilled' ? reportsResult.value.data || [] : null
+        return {
+          usersCount: users ? users.length : previous.usersCount,
+          studentsCount: users ? users.filter((item: any) => item.role === 'STUDENT').length : previous.studentsCount,
+          companiesCount: users ? users.filter((item: any) => item.role === 'COMPANY').length : previous.companiesCount,
+          adminsCount: users ? users.filter((item: any) => item.role === 'ADMIN').length : previous.adminsCount,
+          unverifiedCompanies: companies ? companies.length : previous.unverifiedCompanies,
+          pendingJobs: jobs ? jobs.filter((item: any) => item.status === 'PENDING_APPROVAL').length : previous.pendingJobs,
+          openReports: reports ? reports.filter((item: any) => item.status === 'OPEN').length : previous.openReports,
+        }
       })
 
-      setPendingCompanies(unverified.slice(0, 4))
-      setPendingJobsList(pending.slice(0, 4))
-      setOpenReportsList(openReps.slice(0, 4))
+      if (companiesResult.status === 'fulfilled') setPendingCompanies((companiesResult.value.data || []).slice(0, 4))
+      if (jobsResult.status === 'fulfilled') setPendingJobsList((jobsResult.value.data || []).filter((item: any) => item.status === 'PENDING_APPROVAL').slice(0, 4))
+      if (reportsResult.status === 'fulfilled') setOpenReportsList((reportsResult.value.data || []).filter((item: any) => item.status === 'OPEN').slice(0, 4))
     } catch {
       // handled
     } finally {
@@ -154,7 +145,7 @@ export function AdminDashboardPage() {
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Platform Admin Dashboard</h1>
             <Badge status="ADMIN" className="text-[10px] sm:text-[11px] font-semibold py-0.5 px-2">
-              Super Admin
+              Admin
             </Badge>
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-2 sm:line-clamp-none">
@@ -162,21 +153,7 @@ export function AdminDashboardPage() {
           </p>
         </div>
 
-        <div className="flex items-center justify-between sm:justify-end gap-2.5 flex-wrap">
-          <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] sm:text-xs">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                apiOnline === true
-                  ? 'bg-emerald-500 animate-pulse'
-                  : apiOnline === false
-                  ? 'bg-rose-500'
-                  : 'bg-amber-400'
-              }`}
-            />
-            <span className="font-medium text-slate-700 dark:text-slate-300">
-              API: {apiOnline === true ? 'Online (8010)' : apiOnline === false ? 'Offline' : 'Connecting...'}
-            </span>
-          </div>
+        <div className="flex items-center justify-between gap-2.5 sm:justify-end">
           <Button
             size="sm"
             variant="outline"
@@ -191,93 +168,38 @@ export function AdminDashboardPage() {
       </div>
 
       {/* KPI Metrics Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <Link to="/admin/users">
-          <Card className="p-3.5 sm:p-5 bg-white dark:bg-slate-900 hover:border-purple-300 dark:hover:border-purple-600 transition-all group h-full flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">
-                  Total Users
-                </span>
-                <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-purple-600 group-hover:scale-110 transition-transform shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 sm:mt-2">
-                {loading ? '...' : stats.usersCount}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 mt-2 text-[10px] sm:text-[11px] text-slate-500 font-medium">
-              <span className="text-emerald-700 dark:text-emerald-400">{stats.studentsCount} Students</span>
-              <span>•</span>
-              <span className="text-indigo-700 dark:text-indigo-400">{stats.companiesCount} Comp</span>
-            </div>
-          </Card>
-        </Link>
-
-        <Link to="/admin/verifications">
-          <Card className="p-3.5 sm:p-5 bg-white dark:bg-slate-900 hover:border-amber-300 dark:hover:border-amber-600 transition-all group h-full flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">
-                  Verifications
-                </span>
-                <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-600 group-hover:scale-110 transition-transform shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 sm:mt-2">
-                {loading ? '...' : stats.unverifiedCompanies}
-              </p>
-            </div>
-            <p className="text-[10px] sm:text-[11px] text-slate-400 mt-2 truncate">Pending review</p>
-          </Card>
-        </Link>
-
-        <Link to="/admin/moderation">
-          <Card className="p-3.5 sm:p-5 bg-white dark:bg-slate-900 hover:border-indigo-300 dark:hover:border-indigo-600 transition-all group h-full flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">
-                  Job Queue
-                </span>
-                <Briefcase className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-600 group-hover:scale-110 transition-transform shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 sm:mt-2">
-                {loading ? '...' : stats.pendingJobs}
-              </p>
-            </div>
-            <p className="text-[10px] sm:text-[11px] text-slate-400 mt-2 truncate">Pending approval</p>
-          </Card>
-        </Link>
-
-        <Link to="/admin/reports">
-          <Card className="p-3.5 sm:p-5 bg-white dark:bg-slate-900 hover:border-rose-300 dark:hover:border-rose-600 transition-all group h-full flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">
-                  Disputes
-                </span>
-                <AlertTriangle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-600 group-hover:scale-110 transition-transform shrink-0" />
-              </div>
-              <p className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 sm:mt-2">
-                {loading ? '...' : stats.openReports}
-              </p>
-            </div>
-          </Card>
-        </Link>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
+        {[
+          { label: 'Total users', value: stats.usersCount, caption: `${stats.studentsCount} students · ${stats.companiesCount} companies`, href: routes.adminUsers(), icon: <Users className="h-4 w-4" />, info: 'Total accounts currently registered.' },
+          { label: 'Verifications', value: stats.unverifiedCompanies, caption: 'Pending review', href: routes.adminVerifications, icon: <ShieldCheck className="h-4 w-4" />, info: 'Company profiles awaiting verification.' },
+          { label: 'Job queue', value: stats.pendingJobs, caption: 'Pending approval', href: routes.adminModeration, icon: <Briefcase className="h-4 w-4" />, info: 'Internships awaiting moderation.' },
+          { label: 'Disputes', value: stats.openReports, caption: stats.openReports ? 'Open reports' : 'No open reports', href: routes.adminReports(), icon: <AlertTriangle className="h-4 w-4" />, info: 'Reports currently in the open state.' },
+        ].map((item) => (
+          <KpiCard
+            key={item.label}
+            label={item.label}
+            value={item.value.toLocaleString()}
+            caption={item.caption}
+            href={item.href}
+            icon={item.icon}
+            info={item.info}
+            loading={loading}
+          />
+        ))}
       </div>
 
-      {/* Desktop Ecosystem Analysis Visuals */}
-      <div className="hidden md:block">
+      {/* Ecosystem Analytics */}
+      <div>
         <DesktopAnalysisVisuals
           variant="admin"
+          fullAnalyticsMenu
           refreshKey={analysisRefreshKey}
-          title="Platform Ecosystem & Placement Analytics"
-          subtitle="Real-time tracking of candidate pipeline throughput, monthly placement velocity, and role demands"
+          title="Platform Analytics"
+          subtitle="User growth and administrative activity across the platform"
         />
       </div>
 
-      <AdminAnalyticsCharts refreshKey={analysisRefreshKey} />
-
       <AdminAdministratorsSection />
-
       {/* Live Action Queues Preview */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Company Verifications Queue */}
@@ -287,7 +209,7 @@ export function AdminDashboardPage() {
               <ShieldCheck className="w-4 h-4 text-amber-600" />
               <h2 className="text-sm font-bold text-slate-900">Companies Awaiting Vetting</h2>
             </div>
-            <Link to="/admin/verifications" className="text-xs text-purple-600 hover:text-purple-700 font-semibold">
+            <Link to={routes.adminVerifications} className="text-xs text-purple-600 hover:text-purple-700 font-semibold">
               View All ({stats.unverifiedCompanies}) →
             </Link>
           </div>
@@ -309,7 +231,8 @@ export function AdminDashboardPage() {
                       size="sm"
                       variant="primary"
                       className="text-[11px] py-1 px-2.5 bg-emerald-600 hover:bg-emerald-700 h-7"
-                      disabled={actionLoading === `comp-${c.user_id}`}
+                      isLoading={actionLoading === `comp-${c.user_id}`}
+                      disabled={actionLoading !== null && actionLoading !== `comp-${c.user_id}`}
                       onClick={() => handleQuickVerify(c.user_id, 'VERIFIED')}
                     >
                       Approve
@@ -318,7 +241,8 @@ export function AdminDashboardPage() {
                       size="sm"
                       variant="outline"
                       className="text-[11px] py-1 px-2.5 text-rose-600 hover:bg-rose-50 h-7"
-                      disabled={actionLoading === `comp-${c.user_id}`}
+                      isLoading={actionLoading === `comp-${c.user_id}`}
+                      disabled={actionLoading !== null && actionLoading !== `comp-${c.user_id}`}
                       onClick={() => handleQuickVerify(c.user_id, 'REJECTED')}
                     >
                       Reject
@@ -337,7 +261,7 @@ export function AdminDashboardPage() {
               <Briefcase className="w-4 h-4 text-indigo-600" />
               <h2 className="text-sm font-bold text-slate-900">Internships in Review Queue</h2>
             </div>
-            <Link to="/admin/moderation" className="text-xs text-purple-600 hover:text-purple-700 font-semibold">
+            <Link to={routes.adminModeration} className="text-xs text-purple-600 hover:text-purple-700 font-semibold">
               View All ({stats.pendingJobs}) →
             </Link>
           </div>
@@ -359,7 +283,8 @@ export function AdminDashboardPage() {
                       size="sm"
                       variant="primary"
                       className="text-[11px] py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700 h-7"
-                      disabled={actionLoading === `job-${j.id}`}
+                      isLoading={actionLoading === `job-${j.id}`}
+                      disabled={actionLoading !== null && actionLoading !== `job-${j.id}`}
                       onClick={() => handleQuickModerate(j.id, 'PUBLISHED')}
                     >
                       Publish
@@ -368,7 +293,8 @@ export function AdminDashboardPage() {
                       size="sm"
                       variant="outline"
                       className="text-[11px] py-1 px-2.5 text-rose-600 hover:bg-rose-50 h-7"
-                      disabled={actionLoading === `job-${j.id}`}
+                      isLoading={actionLoading === `job-${j.id}`}
+                      disabled={actionLoading !== null && actionLoading !== `job-${j.id}`}
                       onClick={() => handleQuickModerate(j.id, 'REJECTED')}
                     >
                       Reject
@@ -387,7 +313,7 @@ export function AdminDashboardPage() {
               <AlertTriangle className="w-4 h-4 text-rose-600" />
               <h2 className="text-sm font-bold text-slate-900">Recent Open Disputes & User Reports</h2>
             </div>
-            <Link to="/admin/reports" className="text-xs text-purple-600 hover:text-purple-700 font-semibold">
+            <Link to={routes.adminReports()} className="text-xs text-purple-600 hover:text-purple-700 font-semibold">
               View All ({stats.openReports}) →
             </Link>
           </div>
@@ -404,7 +330,7 @@ export function AdminDashboardPage() {
                     <p className="font-bold text-slate-900 truncate">Report #{r.id}: {r.reason}</p>
                     <p className="text-slate-400 text-[11px]">Reporter #{r.reporter_id} • Status: {r.status}</p>
                   </div>
-                  <Link to="/admin/reports">
+                  <Link to={routes.adminReports()}>
                     <Button size="sm" variant="outline" className="text-[11px] py-1 px-2.5 h-7">
                       Investigate
                     </Button>
@@ -416,10 +342,6 @@ export function AdminDashboardPage() {
         </Card>
       </div>
 
-      {/* Admin Account Security & Two-Factor Authentication */}
-      <div className="pt-2">
-        <AccountSecurityCard userEmail={session?.email} role="Admin" />
-      </div>
     </div>
   )
 }
@@ -576,40 +498,25 @@ export function AdminAdministratorsSection() {
   )
 }
 
-function AdminAnalyticsCharts({ refreshKey }: { refreshKey: number }) {
-  const [growth, setGrowth] = useState<any[]>([])
-  const [actions, setActions] = useState<any[]>([])
+// --- 2. User Management ---
 
-  useEffect(() => {
-    Promise.all([
-      api.get('/analytics/admin/user-growth?granularity=month&periods=6'),
-      api.get('/analytics/admin/admin-action-volume?days=14'),
-    ]).then(([growthRes, actionsRes]) => {
-      setGrowth(growthRes.data || [])
-      setActions(actionsRes.data || [])
-    }).catch(() => {
-      setGrowth([])
-      setActions([])
-    })
-  }, [refreshKey])
-
-  const maxGrowth = Math.max(...growth.map((item) => item.students + item.companies + item.admins), 1)
-  const maxAction = Math.max(...actions.map((item) => item.count), 1)
+function UserTablePill({ children, tone, icon }: { children: string; tone: 'emerald' | 'indigo' | 'purple' | 'green' | 'red' | 'amber' | 'slate'; icon?: ReactNode }) {
+  const tones = {
+    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300',
+    indigo: 'border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300',
+    purple: 'border-purple-200 bg-purple-50 text-purple-700 dark:border-purple-800 dark:bg-purple-950/50 dark:text-purple-300',
+    green: 'border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950/50 dark:text-green-300',
+    red: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-950/50 dark:text-rose-300',
+    amber: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300',
+    slate: 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300',
+  }
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      <Card className="bg-white p-6">
-        <div className="mb-5 flex items-center gap-2"><TrendingUp className="h-4 w-4 text-indigo-600" /><h2 className="text-sm font-bold text-slate-900">User growth</h2></div>
-        {growth.length === 0 ? <p className="text-xs text-slate-500">No signup data for this period.</p> : <div className="space-y-3">{growth.map((item) => <div key={item.period} title={`Students: ${item.students}, Companies: ${item.companies}, Admins: ${item.admins}`} className="flex items-center gap-3 text-xs"><span className="w-16 text-slate-500">{item.period}</span><div className="h-6 flex-1 overflow-hidden rounded bg-slate-100"><div className="h-full rounded bg-indigo-500" style={{ width: `${Math.max(3, ((item.students + item.companies + item.admins) / maxGrowth) * 100)}%` }} /></div><span className="w-12 text-right font-semibold text-slate-700">{item.students + item.companies + item.admins}</span></div>)}</div>}
-      </Card>
-      <Card className="bg-white p-6">
-        <div className="mb-5 flex items-center gap-2"><BarChart2 className="h-4 w-4 text-amber-600" /><h2 className="text-sm font-bold text-slate-900">Admin action volume</h2></div>
-        {actions.length === 0 ? <p className="text-xs text-slate-500">No admin actions for this period.</p> : <div className="space-y-3">{actions.slice(-8).map((item, index) => <div key={`${item.period}-${item.action}-${index}`} className="flex items-center gap-3 text-xs"><span className="w-28 truncate text-slate-500">{item.action}</span><div className="h-6 flex-1 overflow-hidden rounded bg-slate-100"><div className="h-full rounded bg-amber-500" style={{ width: `${Math.max(5, (item.count / maxAction) * 100)}%` }} /></div><span className="w-8 text-right font-semibold text-slate-700">{item.count}</span></div>)}</div>}
-      </Card>
-    </div>
+    <span className={`inline-flex h-7 w-28 shrink-0 items-center justify-center gap-1 rounded-full border px-2 text-center text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap ${tones[tone]}`}>
+      {icon}
+      {children}
+    </span>
   )
 }
-
-// --- 2. User Management ---
 
 export function AdminUsersPage() {
   const { session } = useAuthStore()
@@ -709,10 +616,10 @@ export function AdminUsersPage() {
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Platform Users</h1>
-          <p className="text-xs text-slate-500 mt-1">Audit user accounts and manage active status.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Platform Users</h1>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Audit user accounts and manage active status.</p>
         </div>
-        <Link to="/admin">
+        <Link to={routes.admin}>
           <Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>
             Dashboard
           </Button>
@@ -726,7 +633,7 @@ export function AdminUsersPage() {
       )}
 
       {/* Filter Bar */}
-      <div className="bg-white p-3.5 rounded-xl border border-slate-200 flex flex-col sm:flex-row gap-3">
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-900 sm:flex-row">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
           <input
@@ -734,23 +641,12 @@ export function AdminUsersPage() {
             placeholder="Search users by email..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-purple-500"
+            className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
           />
         </div>
 
-        <select
-          value={roleFilter}
-          onChange={(e) => setRoleFilter(e.target.value)}
-          className="px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white"
-        >
-          <option value="">All Roles</option>
-          <option value="STUDENT">Student</option>
-          <option value="COMPANY">Company</option>
-          <option value="ADMIN">Admin</option>
-        </select>
-        <span className="self-center whitespace-nowrap text-xs font-semibold text-slate-500">
-          {users.length} users
-        </span>
+        <DropdownSelect aria-label="Filter users by role" value={roleFilter} onChange={setRoleFilter} options={[{ label: 'All Roles', value: '' }, { label: 'Student', value: 'STUDENT' }, { label: 'Company', value: 'COMPANY' }, { label: 'Admin', value: 'ADMIN' }]} />
+        <span className="self-center whitespace-nowrap text-xs font-semibold text-slate-500 dark:text-slate-400">{users.length} users</span>
       </div>
 
       {loading ? (
@@ -760,46 +656,51 @@ export function AdminUsersPage() {
       ) : filtered.length === 0 ? (
         <EmptyState title="No matching users found" description="Adjust your filters to see more results." />
       ) : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xs dark:border-slate-800 dark:bg-slate-900">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1040px] text-left text-xs">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase tracking-wider font-semibold">
+            <table className="w-full min-w-[1120px] table-fixed text-left text-xs">
+              <colgroup>
+                <col className="w-[70px]" />
+                <col className="w-[250px]" />
+                <col className="w-[140px]" />
+                <col className="w-[140px]" />
+                <col className="w-[160px]" />
+                <col className="w-[140px]" />
+                <col className="w-[220px]" />
+              </colgroup>
+              <thead className="border-b border-slate-200 bg-slate-50 font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800/70 dark:text-slate-300">
                 <tr>
                   <th className="p-3.5">ID</th>
                   <th className="p-3.5">Email</th>
-                  <th className="p-3.5">Role</th>
-                  <th className="p-3.5">Status</th>
-                  <th className="p-3.5">Email Verified</th>
-                  <th className="p-3.5">2FA / MFA</th>
+                  <th className="p-3.5 text-center">Role</th>
+                  <th className="p-3.5 text-center">Status</th>
+                  <th className="p-3.5 text-center">Email Verified</th>
+                  <th className="p-3.5 text-center">2FA / MFA</th>
                   <th className="p-3.5 w-[250px] text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {filtered.map((u) => (
-                  <tr key={u.id} className="hover:bg-slate-50/50 cursor-pointer" onClick={() => openUserDetail(u.id)}>
-                    <td className="p-3.5 font-medium text-slate-900">#{u.id}</td>
-                    <td className="p-3.5 font-semibold text-slate-800">{u.email}</td>
-                    <td className="p-3.5">
-                      <Badge status={u.role}>{u.role}</Badge>
+                  <tr key={u.id} className="cursor-pointer hover:bg-slate-50/50 dark:hover:bg-slate-800/50" onClick={() => openUserDetail(u.id)}>
+                    <td className="p-3.5 font-medium text-slate-900 dark:text-slate-100">#{u.id}</td>
+                    <td className="p-3.5 font-semibold text-slate-800 dark:text-slate-200">{u.email}</td>
+                    <td className="p-3.5 text-center">
+                      <UserTablePill tone={u.role === 'STUDENT' ? 'emerald' : u.role === 'COMPANY' ? 'indigo' : 'purple'}>{u.role}</UserTablePill>
                     </td>
-                    <td className="p-3.5">
-                      <Badge status={u.is_active ? 'ACTIVE' : 'SUSPENDED'}>
-                        {u.is_active ? 'Active' : 'Suspended'}
-                      </Badge>
+                    <td className="p-3.5 text-center">
+                      <UserTablePill tone={u.is_active ? 'green' : 'red'}>{u.is_active ? 'ACTIVE' : 'SUSPENDED'}</UserTablePill>
                     </td>
-                    <td className="p-3.5">
+                    <td className="p-3.5 text-center">
                       {u.role === 'COMPANY' && u.email_verification_required === false ? (
-                        <span className="text-slate-500 dark:text-slate-400">Not required</span>
+                        <UserTablePill tone="slate">NOT REQUIRED</UserTablePill>
                       ) : u.is_verified ? (
-                        <span className="text-emerald-600 font-medium">Verified</span>
+                        <UserTablePill tone="green">VERIFIED</UserTablePill>
                       ) : (
-                        <span className="text-slate-400">Pending</span>
+                        <UserTablePill tone="amber">PENDING</UserTablePill>
                       )}
                     </td>
-                    <td className="p-3.5">
-                      <Badge variant={u.mfa_enabled ? 'emerald' : 'slate'}>
-                        {u.mfa_enabled ? 'Active' : 'Disabled'}
-                      </Badge>
+                    <td className="p-3.5 text-center">
+                      <UserTablePill tone={u.mfa_enabled ? 'green' : 'slate'}>{u.mfa_enabled ? 'ENABLED' : 'DISABLED'}</UserTablePill>
                     </td>
                     <td className="p-3.5 text-right whitespace-nowrap" onClick={(event) => event.stopPropagation()}>
                       {u.id !== session?.userId && (
@@ -1046,7 +947,7 @@ export function AdminVerificationsPage() {
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Company Verifications</h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Review newly registered employers before granting posting rights.</p>
         </div>
-        <Link to="/admin">
+        <Link to={routes.admin}>
           <Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>
             Dashboard
           </Button>
@@ -1258,7 +1159,7 @@ export function AdminModerationPage() {
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Job Moderation Queue</h1>
           <p className="text-xs text-slate-500 mt-1">Review submitted internships to ensure legitimacy and compliance.</p>
         </div>
-        <Link to="/admin">
+        <Link to={routes.admin}>
           <Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>
             Dashboard
           </Button>
@@ -1394,7 +1295,7 @@ export function AdminReportsPage() {
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Dispute & Flagged Reports</h1>
           <p className="text-xs text-slate-500 mt-1">Review complaints submitted by students and employers.</p>
         </div>
-        <Link to="/admin">
+        <Link to={routes.admin}>
           <Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>
             Dashboard
           </Button>
@@ -1512,6 +1413,7 @@ export function AdminReportsPage() {
 export function AdminCompaniesPage() {
   const [companies, setCompanies] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [actionId, setActionId] = useState<number | null>(null)
 
   const fetchCompanies = async () => {
     setLoading(true)
@@ -1526,14 +1428,21 @@ export function AdminCompaniesPage() {
   useEffect(() => { fetchCompanies() }, [])
 
   const verify = async (userId: number, status: 'VERIFIED' | 'REJECTED') => {
-    await api.post(`/admin/companies/${userId}/verification`, { status })
-    fetchCompanies()
+    setActionId(userId)
+    try {
+      await api.post(`/admin/companies/${userId}/verification`, { status })
+      await fetchCompanies()
+    } catch {
+      alert('Failed to update company verification status.')
+    } finally {
+      setActionId(null)
+    }
   }
 
   return (
     <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
-      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Company Directory</h1><p className="mt-1 text-xs text-slate-500">Review verification status and posting activity.</p></div><Link to="/admin"><Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>Dashboard</Button></Link></div>
-      {loading ? <TableSkeleton /> : companies.length === 0 ? <EmptyState title="No companies found" description="Registered companies will appear here." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Company</th><th className="p-3">Industry</th><th className="p-3">Verification</th><th className="p-3">Postings</th><th className="p-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map((company) => <tr key={company.id}><td className="p-3 font-semibold text-slate-800"><Link className="hover:text-indigo-600" to={`/admin/companies/${company.user_id}/postings`}>{company.company_name}</Link></td><td className="p-3 text-slate-600">{company.industry}</td><td className="p-3"><Badge status={company.verification_status}>{company.verification_status}</Badge></td><td className="p-3 text-slate-600">{company.posting_count}</td><td className="p-3 text-right"><div className="flex justify-end gap-2">{company.verification_status !== 'VERIFIED' && <Button size="sm" variant="primary" onClick={() => verify(company.user_id, 'VERIFIED')} leftIcon={<CheckCircle2 className="h-3.5 w-3.5" />}>Verify</Button>}{company.verification_status !== 'REJECTED' && <Button size="sm" variant="outline" className="text-rose-600" onClick={() => verify(company.user_id, 'REJECTED')} leftIcon={<XCircle className="h-3.5 w-3.5" />}>Reject</Button>}</div></td></tr>)}</tbody></table></div>}
+      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Company Directory</h1><p className="mt-1 text-xs text-slate-500">Review verification status and posting activity.</p></div><Link to={routes.admin}><Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>Dashboard</Button></Link></div>
+      {loading ? <TableSkeleton /> : companies.length === 0 ? <EmptyState title="No companies found" description="Registered companies will appear here." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Company</th><th className="p-3">Industry</th><th className="p-3">Verification</th><th className="p-3">Postings</th><th className="p-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map((company) => <tr key={company.id}><td className="p-3 font-semibold text-slate-800"><Link className="hover:text-indigo-600" to={routes.adminCompanyPostings(company.user_id)}>{company.company_name}</Link></td><td className="p-3 text-slate-600">{company.industry}</td><td className="p-3"><Badge status={company.verification_status}>{company.verification_status}</Badge></td><td className="p-3 text-slate-600">{company.posting_count}</td><td className="p-3 text-right"><div className="flex justify-end gap-2">{company.verification_status !== 'VERIFIED' && <Button size="sm" variant="primary" isLoading={actionId === company.user_id} disabled={actionId !== null && actionId !== company.user_id} onClick={() => void verify(company.user_id, 'VERIFIED')} leftIcon={<CheckCircle2 className="h-3.5 w-3.5" />}>Verify</Button>}{company.verification_status !== 'REJECTED' && <Button size="sm" variant="outline" className="text-rose-600" isLoading={actionId === company.user_id} disabled={actionId !== null && actionId !== company.user_id} onClick={() => void verify(company.user_id, 'REJECTED')} leftIcon={<XCircle className="h-3.5 w-3.5" />}>Reject</Button>}</div></td></tr>)}</tbody></table></div>}
     </div>
   )
 }
@@ -1559,8 +1468,8 @@ export function AdminCompanyPostingsPage() {
 
   return (
     <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
-      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Company Postings</h1><p className="mt-1 text-xs text-slate-500">Inspect applicant volume and moderate listings.</p></div><Link to="/admin/companies"><Button variant="outline" size="sm">Back to companies</Button></Link></div>
-      {loading ? <TableSkeleton /> : postings.length === 0 ? <EmptyState title="No postings found" description="This company has no internship postings." /> : <div className="space-y-3">{postings.map((posting) => <Card key={posting.id} className="flex flex-col gap-3 bg-white p-5 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><h2 className="font-bold text-slate-900">{posting.title}</h2><Badge status={posting.status}>{posting.status}</Badge></div><p className="mt-1 text-xs text-slate-500">{posting.applicant_count} applicants · Created {new Date(posting.created_at).toLocaleDateString()}</p></div><div className="flex gap-2">{posting.status !== 'PUBLISHED' && <Button size="sm" variant="primary" onClick={() => moderate(posting.id, 'PUBLISHED')}>Approve</Button>}{posting.status !== 'REJECTED' && <Button size="sm" variant="outline" className="text-rose-600" onClick={() => moderate(posting.id, 'REJECTED')}>Reject</Button>}{posting.status !== 'CLOSED' && <Button size="sm" variant="outline" onClick={() => moderate(posting.id, 'CLOSED')}>Remove</Button>}</div></Card>)}</div>}
+      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Company Postings</h1><p className="mt-1 text-xs text-slate-500">Inspect applicant volume and moderate listings.</p></div><Link to={routes.adminCompanies}><Button variant="outline" size="sm">Back to companies</Button></Link></div>
+      {loading ? <TableSkeleton /> : postings.length === 0 ? <EmptyState title="No postings found" description="This company has no internship postings." /> : <div className="space-y-3">{postings.map((posting) => <Card key={posting.id} className="flex flex-col gap-3 bg-white p-5 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><h2 className="font-bold text-slate-900 dark:text-white">{posting.title}</h2><Badge status={posting.status}>{posting.status === 'CLOSED' ? 'Closed' : posting.status}</Badge></div><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{posting.applicant_count} applicants · Created {new Date(posting.created_at).toLocaleDateString()}</p></div><div className="flex gap-2">{posting.status !== 'PUBLISHED' && <Button size="sm" variant="primary" onClick={() => moderate(posting.id, 'PUBLISHED')}>Approve</Button>}{posting.status !== 'REJECTED' && <Button size="sm" variant="outline" className="text-rose-600" onClick={() => moderate(posting.id, 'REJECTED')}>Reject</Button>}{posting.status !== 'CLOSED' && <Button size="sm" variant="outline" onClick={() => moderate(posting.id, 'CLOSED')}>Close</Button>}</div></Card>)}</div>}
     </div>
   )
 }
@@ -1568,30 +1477,87 @@ export function AdminCompanyPostingsPage() {
 // --- 8. Audit Log Explorer ---
 
 export function AdminAuditLogsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [logs, setLogs] = useState<any[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [actor, setActor] = useState('')
-  const [action, setAction] = useState('')
+  const [action, setAction] = useState(() => searchParams.get('action') || '')
+  const [range] = useState(() => searchParams.get('range') === '14d' ? '14d' : '')
   const [targetType, setTargetType] = useState('')
+  const [targetSearch, setTargetSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [expanded, setExpanded] = useState<number | null>(null)
   const pageSize = 25
 
   const fetchLogs = async () => {
-    const params = { page, page_size: pageSize, actor: actor || undefined, action: action || undefined, target_type: targetType || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined }
+    const params = { page, page_size: pageSize, actor: actor || undefined, action: action || undefined, range: range || undefined, target_type: targetType || undefined, search_target: targetSearch || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined }
     const res = await api.get('/admin/audit-logs', { params })
     setLogs(res.data.items || [])
     setTotal(res.data.total || 0)
   }
-  useEffect(() => { fetchLogs() }, [page, actor, action, targetType, dateFrom, dateTo])
+  useEffect(() => { fetchLogs() }, [page, actor, action, range, targetType, targetSearch, dateFrom, dateTo])
+
+  useEffect(() => {
+    const next = new URLSearchParams()
+    if (action) next.set('action', action)
+    if (range) next.set('range', range)
+    setSearchParams(next, { replace: true })
+  }, [action, range, setSearchParams])
+
+  const actionColor = (value: string) => {
+    const actionValue = value.toLowerCase()
+    if (/(approved|verified|reinstated)/.test(actionValue)) return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+    if (/(rejected|suspended)/.test(actionValue)) return 'bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300'
+    if (actionValue.includes('closed')) return 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
+    if (/(gdpr|export|erasure)/.test(actionValue)) return 'bg-violet-100 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300'
+    return 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+  }
+  const targetLabel = (value?: string | null) => {
+    if (!value) return null
+    if (value.toLowerCase() === 'posting' || value.toLowerCase() === 'internship') return 'Internship'
+    return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase()
+  }
 
   return (
     <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
-      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Audit Logs</h1><p className="mt-1 text-xs text-slate-500">Search administrative actions and inspect their metadata.</p></div><Link to="/admin"><Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>Dashboard</Button></Link></div>
-      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:flex-wrap"><input value={actor} onChange={(event) => { setPage(1); setActor(event.target.value) }} placeholder="Actor email" className="rounded-lg border border-slate-300 px-3 py-2 text-xs" /><select value={action} onChange={(event) => { setPage(1); setAction(event.target.value) }} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="">All actions</option><option value="user_suspended">User suspended</option><option value="user_reinstated">User reinstated</option><option value="company_verified">Company verified</option><option value="company_rejected">Company rejected</option><option value="posting_approved">Posting approved</option><option value="posting_rejected">Posting rejected</option><option value="posting_removed">Posting removed</option><option value="report_resolved">Report resolved</option></select><select value={targetType} onChange={(event) => { setPage(1); setTargetType(event.target.value) }} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="">All targets</option><option value="user">User</option><option value="company">Company</option><option value="posting">Posting</option></select><label className="flex items-center gap-2 text-xs text-slate-500">From<input type="date" value={dateFrom} onChange={(event) => { setPage(1); setDateFrom(event.target.value) }} className="rounded-lg border border-slate-300 px-2 py-2 text-xs text-slate-700" /></label><label className="flex items-center gap-2 text-xs text-slate-500">To<input type="date" value={dateTo} onChange={(event) => { setPage(1); setDateTo(event.target.value) }} className="rounded-lg border border-slate-300 px-2 py-2 text-xs text-slate-700" /></label></div>
-      {logs.length === 0 ? <EmptyState icon={ClipboardList} title="No audit events" description="No actions match the current filters." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Actor</th><th className="p-3">Action</th><th className="p-3">Target</th><th className="p-3">Timestamp</th><th className="p-3" /></tr></thead><tbody className="divide-y divide-slate-100">{logs.map((log) => <tr key={log.id}><td className="p-3 text-slate-700">{log.actor_email || 'System'}</td><td className="p-3"><Badge status="ADMIN">{log.action}</Badge></td><td className="p-3 text-slate-600">{log.target_type || '—'} #{log.target_id || '—'}</td><td className="p-3 text-slate-500">{new Date(log.created_at).toLocaleString()}</td><td className="p-3 text-right"><Button size="sm" variant="outline" onClick={() => setExpanded(expanded === log.id ? null : log.id)} leftIcon={expanded === log.id ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}>Metadata</Button>{expanded === log.id && <pre className="mt-2 max-w-xs overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-left text-[10px] text-emerald-300">{JSON.stringify(log.metadata || {}, null, 2)}</pre>}</td></tr>)}</tbody></table></div>}
+      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Audit Logs</h1><p className="mt-1 text-xs text-slate-500">Search administrative actions and inspect their metadata.</p></div><Link to={routes.admin}><Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>Dashboard</Button></Link></div>
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:flex-wrap sm:items-center"> <input value={actor} onChange={(event) => { setPage(1); setActor(event.target.value) }} placeholder="Actor email" className="h-10 min-w-0 flex-[1.5] rounded-lg border border-slate-300 px-3 text-sm" />
+        <DropdownSelect className="min-w-0 flex-1" aria-label="Filter audit logs by action" value={action} onChange={(value) => { setPage(1); setAction(value) }} options={[
+          { label: 'All actions', value: '' },
+          { label: 'User suspended', value: 'user_suspended' },
+          { label: 'Users reinstated', value: 'user_reinstated' },
+          { label: 'Company verified', value: 'company_verified' },
+          { label: 'Company rejected', value: 'company_rejected' },
+          { label: 'Postings approved', value: 'posting_approved' },
+          { label: 'Posting rejected', value: 'posting_rejected' },
+          { label: 'Posting removed', value: 'posting_removed' },
+          { label: 'Report resolved', value: 'report_resolved' },
+          { label: 'GDPR data export', value: 'gdpr_data_export' },
+        ]} />
+        <DropdownSelect className="min-w-0 flex-1" aria-label="Filter audit logs by target type" value={targetType} onChange={(value) => { setPage(1); setTargetType(value) }} options={[
+          { label: 'Target type', value: '' },
+          { label: 'User', value: 'user' },
+          { label: 'Company', value: 'company' },
+          { label: 'Internship', value: 'internship' },
+          { label: 'Report', value: 'report' },
+        ]} />
+        <input value={targetSearch} onChange={(event) => { setPage(1); setTargetSearch(event.target.value) }} placeholder="Search target" className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 text-sm" />
+
+        <label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-slate-500">From<input type="date" value={dateFrom} onChange={(event) => { setPage(1); setDateFrom(event.target.value) }} className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm text-slate-700" />
+        </label><label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-slate-500">To<input type="date" value={dateTo} onChange={(event) => { setPage(1); setDateTo(event.target.value) }} className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm text-slate-700" /></label></div>
+      {logs.length === 0 ? <EmptyState icon={ClipboardList} title="No audit events" description="No actions match the current filters." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Actor</th><th className="p-3">Action</th><th className="p-3">Target</th><th className="p-3">Timestamp</th><th className="p-3" /></tr></thead><tbody className="divide-y divide-slate-100">{logs.map((log) => {
+        const typeLabel = targetLabel(log.target_type)
+        const isDeleted = String(log.target_label || '').startsWith('Deleted ')
+        return <tr key={log.id}>
+          <td className="p-3 text-slate-700">{log.actor_email ? <span className="inline-flex flex-wrap items-center gap-1.5">{log.actor_email}{log.actor_role && <Badge status={log.actor_role} className="px-1.5 py-0 text-[9px]">{log.actor_role}</Badge>}</span> : 'System'}</td>
+          <td className="p-3"><span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${actionColor(log.action)}`}>{auditActionLabel(log.action)}</span></td>
+          <td className="p-3 text-slate-600">{!log.target_type || log.target_id == null ? '—' : <span className="inline-flex flex-wrap items-center gap-1.5"><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-300">{typeLabel || 'Target'}</span><span className={isDeleted ? 'text-slate-400 italic' : ''}>{log.target_label || `Deleted ${typeLabel?.toLowerCase() || 'target'}`}</span>{log.target_url && <Link to={log.target_url} className="font-semibold text-indigo-600 hover:underline dark:text-indigo-400">View</Link>}</span>}</td>
+          <td className="p-3 text-slate-500">{new Date(log.created_at).toLocaleString()}</td>
+          <td className="p-3 text-right"><Button size="sm" variant="outline" onClick={() => setExpanded(expanded === log.id ? null : log.id)} leftIcon={expanded === log.id ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}>Metadata</Button>{expanded === log.id && <pre className="mt-2 max-w-xs overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-left text-[10px] text-emerald-300">{JSON.stringify(log.metadata || {}, null, 2)}</pre>}</td>
+        </tr>
+      })}</tbody></table></div>}
       <div className="flex items-center justify-between text-xs text-slate-500"><span>{total} total events</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</Button><span className="px-2 py-2">Page {page}</span><Button size="sm" variant="outline" disabled={page * pageSize >= total} onClick={() => setPage((current) => current + 1)}>Next</Button></div></div>
     </div>
   )

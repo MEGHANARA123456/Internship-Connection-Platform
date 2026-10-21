@@ -19,7 +19,7 @@ interface OfferLetterModalProps {
   candidateName: string
   companyName: string
   roleTitle: string
-  stipend: number
+  stipend?: number | null
   startDate?: string
   offerSignedName?: string | null
   offerAcceptedAt?: string | null
@@ -34,7 +34,7 @@ export function OfferLetterModal({
   companyName,
   roleTitle,
   stipend,
-  startDate = 'October 1, 2026',
+  startDate,
   offerSignedName,
   offerAcceptedAt,
 }: OfferLetterModalProps) {
@@ -145,7 +145,7 @@ export function OfferLetterModal({
               </div>
             </div>
             <div className="text-right text-[11px] text-slate-500 dark:text-slate-400">
-              <span className="font-bold text-slate-800 dark:text-slate-200 block">Offer Ref: #OFF-2026-9041</span>
+              <span className="font-bold text-slate-800 dark:text-slate-200 block">Application #{applicationId}</span>
               <span>Date: {new Date().toLocaleDateString()}</span>
             </div>
           </div>
@@ -166,11 +166,11 @@ export function OfferLetterModal({
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Monthly Compensation:</span>
-                <span className="font-bold text-slate-900 dark:text-white">${stipend} USD / month</span>
+                <span className="font-bold text-slate-900 dark:text-white">{stipend == null ? 'Not specified' : `$${stipend} USD / month`}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Expected Start Date:</span>
-                <span className="font-bold text-slate-900 dark:text-white">{startDate}</span>
+                <span className="font-bold text-slate-900 dark:text-white">{startDate || 'Not specified'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Work Mode:</span>

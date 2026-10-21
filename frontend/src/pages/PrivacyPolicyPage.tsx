@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { ShieldCheck, Lock, ArrowLeft } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { routes } from '../lib/routes'
 
 export function PrivacyPolicyPage() {
   return (
@@ -9,14 +10,14 @@ export function PrivacyPolicyPage() {
       {/* Top Breadcrumb */}
       <div className="flex items-center justify-between">
         <Link
-          to="/"
+          to={routes.home}
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-indigo-600 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Back to Home</span>
         </Link>
 
-        <Link to="/privacy-center">
+        <Link to={routes.privacyCenter}>
           <Button variant="outline" size="sm" className="text-xs">
             <Lock className="w-3.5 h-3.5 mr-1 text-indigo-500" />
             Manage My Privacy & Security
@@ -149,7 +150,7 @@ export function PrivacyPolicyPage() {
             Under global privacy standards, you hold enforceable rights over your personal data:
           </p>
           <ul className="list-disc pl-5 space-y-1.5 text-xs sm:text-sm">
-            <li><strong>Right to Access & Portability (GDPR Art. 15/20 & CCPA):</strong> You may download your entire profile, applications, and message archive in structured JSON format instantly via the <Link to="/privacy-center" className="text-indigo-600 dark:text-indigo-400 font-semibold underline">Privacy Center</Link>.</li>
+            <li><strong>Right to Access & Portability (GDPR Art. 15/20 & CCPA):</strong> You may download your entire profile, applications, and message archive in structured JSON format instantly via the <Link to={routes.privacyCenter} className="text-indigo-600 dark:text-indigo-400 font-semibold underline">Privacy Center</Link>.</li>
             <li><strong>Right to Erasure / &ldquo;Right to be Forgotten&rdquo; (GDPR Art. 17 & CCPA):</strong> You can permanently delete your account and personal records at any time.</li>
             <li><strong>Right to Rectification (GDPR Art. 16):</strong> Modify your personal profile and skills at any time.</li>
             <li><strong>Right to Restrict or Object (GDPR Art. 18/21):</strong> Withdraw marketing or analytics consent with one click.</li>

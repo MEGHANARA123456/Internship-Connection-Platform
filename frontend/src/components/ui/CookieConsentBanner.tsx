@@ -11,6 +11,7 @@ import {
   setCookie,
   THEME_COOKIE_KEY,
 } from '../../lib/cookies'
+import { routes } from '../../lib/routes'
 
 export interface CookiePreferences {
   necessary: boolean // always true
@@ -171,7 +172,7 @@ export function CookieConsentBanner() {
 
             <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800/80">
               <Link
-                to="/privacy"
+                to={routes.privacyPolicy}
                 className="text-[11px] font-medium text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 underline underline-offset-2"
               >
                 Review Privacy Policy &rarr;
@@ -348,7 +349,7 @@ export function CookieConsentBanner() {
             {/* Footer Actions */}
             <div className="p-4 bg-slate-50 dark:bg-slate-900/90 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
               <Link
-                to="/privacy"
+                to={routes.privacyPolicy}
                 onClick={() => setModalOpen(false)}
                 className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
               >

@@ -22,15 +22,22 @@ class InternshipInput(BaseModel):
     deadline: date
 
 
+class InternshipCloseRequest(BaseModel):
+    reject_pending: bool = False
+    note: str | None = Field(default=None, max_length=300)
+
+
 class InternshipResponse(InternshipInput):
     id: int
     company_id: int
     status: Status
     created_at: datetime
+    closed_at: datetime | None = None
     company_name: str | None = None
     is_saved: bool | None = None
     match_score: int | None = None
     matched_skills: list[str] | None = None
+    applicant_count: int | None = None
 
 
 

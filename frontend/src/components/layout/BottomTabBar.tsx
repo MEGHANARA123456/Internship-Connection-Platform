@@ -12,7 +12,9 @@ import {
   PlusCircle,
   Building,
   Home,
+  Calendar,
 } from 'lucide-react'
+import { routes } from '../../lib/routes'
 
 export function BottomTabBar() {
   const { session } = useAuthStore()
@@ -22,44 +24,46 @@ export function BottomTabBar() {
   const getTabs = () => {
     if (role === 'ADMIN') {
       return [
-        { to: '/admin', label: 'Overview', icon: LayoutDashboard },
-        { to: '/admin/verifications', label: 'Verify', icon: CheckCircle2 },
-        { to: '/admin/moderation', label: 'Moderate', icon: ShieldAlert },
-        { to: '/admin/users', label: 'Users', icon: Users },
+        { to: routes.admin, label: 'Overview', icon: LayoutDashboard },
+        { to: routes.adminVerifications, label: 'Verify', icon: CheckCircle2 },
+        { to: routes.adminModeration, label: 'Moderate', icon: ShieldAlert },
+        { to: routes.adminUsers(), label: 'Users', icon: Users },
       ]
     }
 
     if (role === 'STUDENT') {
       return [
-        { to: '/opportunities', label: 'Discover', icon: Briefcase },
-        { to: '/applications', label: 'Applied', icon: Layers },
-        { to: '/messages', label: 'Messages', icon: MessageSquare },
-        { to: '/profile/student', label: 'Profile', icon: User },
+        { to: routes.opportunities, label: 'Discover', icon: Briefcase },
+        { to: routes.applications(), label: 'Applied', icon: Layers },
+        { to: routes.interviews({ tab: 'upcoming' }), label: 'Interviews', icon: Calendar },
+        { to: routes.messages(), label: 'Messages', icon: MessageSquare },
+        { to: routes.studentProfile, label: 'Profile', icon: User },
       ]
     }
 
     if (role === 'COMPANY') {
       return [
-        { to: '/company/jobs', label: 'My Jobs', icon: Briefcase },
-        { to: '/company/internships/new', label: 'Post Role', icon: PlusCircle },
-        { to: '/messages', label: 'Messages', icon: MessageSquare },
-        { to: '/profile/company', label: 'Profile', icon: Building },
+        { to: routes.companyJobs(), label: 'My Jobs', icon: Briefcase },
+        { to: routes.newCompanyInternship, label: 'Post Role', icon: PlusCircle },
+        { to: routes.interviews({ tab: 'upcoming' }), label: 'Interviews', icon: Calendar },
+        { to: routes.messages(), label: 'Messages', icon: MessageSquare },
+        { to: routes.companyProfile, label: 'Profile', icon: Building },
       ]
     }
 
     // Default / Public
     return [
-      { to: '/', label: 'Home', icon: Home },
-      { to: '/opportunities', label: 'Internships', icon: Briefcase },
-      { to: '/login', label: 'Sign In', icon: User },
+      { to: routes.home, label: 'Home', icon: Home },
+      { to: routes.opportunities, label: 'Internships', icon: Briefcase },
+      { to: routes.login(), label: 'Sign In', icon: User },
     ]
   }
 
   const tabs = getTabs()
 
   const checkIsActive = (path: string) => {
-    if (path === '/') return location.pathname === '/'
-    if (path === '/admin') return location.pathname === '/admin'
+    if (path === routes.home) return location.pathname === routes.home
+    if (path === routes.admin) return location.pathname === routes.admin
     return location.pathname.startsWith(path)
   }
 

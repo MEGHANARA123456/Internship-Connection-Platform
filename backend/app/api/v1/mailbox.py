@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.api.v1.dependencies import get_current_user
 from app.api.v1.dependencies import DbSession
 from app.models import EmailMessage, User
+from app.services.mail import visible_gmail_url
 
 router = APIRouter(tags=["mailbox"])
 
@@ -30,6 +31,7 @@ async def _get_user_emails(user: User, db: DbSession) -> list[dict]:
             "message_type": message.message_type,
             "body": message.body,
             "html": message.html,
+            "gmail_url": visible_gmail_url(message, user.email),
             "created_at": message.created_at,
         }
         for message in messages

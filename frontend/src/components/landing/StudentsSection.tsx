@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { routes } from '../../lib/routes'
 import { Button } from '../ui/Button'
 import { Search, Building } from 'lucide-react'
 import { Badge } from '../ui/Badge'
@@ -19,7 +20,7 @@ export function StudentsSection() {
               Discover verified internships tailored to your skills. Apply with a single click, track your applications in real-time, and get hired faster.
             </p>
             <div className="flex flex-wrap items-center gap-4 pt-2">
-              <Link to="/register-student">
+              <Link to={routes.studentRegister}>
                 <Button variant="primary" size="md" className="rounded-3xl px-6 bg-indigo-600 hover:bg-indigo-700 text-white border-0 shadow-lg shadow-indigo-600/20">
                   Sign up for free &rarr;
                 </Button>

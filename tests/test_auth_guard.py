@@ -21,6 +21,11 @@ async def test_auth_guard_and_differentiations():
     app.dependency_overrides[get_db] = override_db
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        removed_institution_route = await client.get("/api/v1/institution/placement-stats")
+        assert removed_institution_route.status_code == 404
+        removed_endorsement_route = await client.get("/api/v1/public/endorsements/x")
+        assert removed_endorsement_route.status_code == 404
+
         # 1. Company registration should reject personal email domains.
         bad_company = await client.post(
             "/api/v1/auth/register/company",
@@ -79,7 +84,9 @@ async def test_auth_guard_and_differentiations():
             json={"email": "alice@university.edu"},
         )
         assert resend_resp.status_code == 200
-        assert "Verification link has been sent" in resend_resp.json()["message"]
+        assert resend_resp.json()["message"] == (
+            "If an account exists and still needs verification, a new email has been sent"
+        )
 
         # Portal mismatch: Student trying to sign in through COMPANY portal
         mismatch_login = await client.post(

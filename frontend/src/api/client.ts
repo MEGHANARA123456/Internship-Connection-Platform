@@ -1,5 +1,5 @@
-import axios from 'axios'
-import { useAuthStore } from '../store/auth'
+import axios, { type InternalAxiosRequestConfig } from 'axios'
+import { useAuthStore, type Session } from '../store/auth'
 
 const getBaseUrl = () => {
   if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
@@ -23,7 +23,19 @@ export const api = axios.create({
   },
 })
 
-// Request interceptor: attach token
+type RetriableRequest = InternalAxiosRequestConfig & {
+  _retry?: boolean
+  _rateLimitRetried?: boolean
+}
+
+function retryDelaySeconds(retryAfter: unknown): number {
+  if (typeof retryAfter !== 'string') return 1
+  const seconds = Number(retryAfter)
+  if (Number.isFinite(seconds)) return Math.max(1, Math.ceil(seconds))
+  const dateDelay = Math.ceil((Date.parse(retryAfter) - Date.now()) / 1000)
+  return Number.isFinite(dateDelay) ? Math.max(1, dateDelay) : 1
+}
+
 api.interceptors.request.use((config) => {
   const session = useAuthStore.getState().session
   if (session?.accessToken && !config.headers.Authorization) {
@@ -32,7 +44,6 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Response interceptor: auto-refresh on 401
 let isRefreshing = false
 let failedQueue: Array<{
   resolve: (value?: unknown) => void
@@ -41,11 +52,8 @@ let failedQueue: Array<{
 
 const processQueue = (error: unknown, token: string | null = null) => {
   failedQueue.forEach((prom) => {
-    if (error) {
-      prom.reject(error)
-    } else {
-      prom.resolve(token)
-    }
+    if (error) prom.reject(error)
+    else prom.resolve(token)
   })
   failedQueue = []
 }
@@ -53,9 +61,36 @@ const processQueue = (error: unknown, token: string | null = null) => {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const originalRequest = error.config
+    const originalRequest = error.config as RetriableRequest | undefined
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (error.response?.status === 429 && originalRequest) {
+      const delaySeconds = retryDelaySeconds(error.response.headers?.['retry-after'])
+      const detail = error.response.data?.detail
+      const method = String(originalRequest.method || 'get').toLowerCase()
+      const retryAutomatically = method === 'get' || method === 'head'
+      const message = typeof detail === 'string'
+        ? detail
+        : `Too many requests. Please wait ${delaySeconds} seconds and try again.`
+      error.message = message
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('app:rate-limit', {
+          detail: {
+            message: retryAutomatically
+              ? `Request rate-limited. Retrying in ${delaySeconds} seconds.`
+              : message,
+            retryAfterSeconds: delaySeconds,
+          },
+        }))
+      }
+      if (!originalRequest._rateLimitRetried && retryAutomatically) {
+        originalRequest._rateLimitRetried = true
+        await new Promise((resolve) => window.setTimeout(resolve, delaySeconds * 1000))
+        return api(originalRequest)
+      }
+      return Promise.reject(error)
+    }
+
+    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
       const session = useAuthStore.getState().session
       if (!session?.refreshToken) {
         useAuthStore.getState().logout()
@@ -71,37 +106,52 @@ api.interceptors.response.use(
             originalRequest.headers.Authorization = `Bearer ${token}`
             return api(originalRequest)
           })
-          .catch((err) => Promise.reject(err))
       }
 
       originalRequest._retry = true
       isRefreshing = true
 
       try {
-        const res = await axios.post(
-          `${api.defaults.baseURL}/auth/refresh`,
-          { refresh_token: session.refreshToken }
-        )
-        const newTokens = res.data
-        const currentSession = useAuthStore.getState().session
-        if (!currentSession || currentSession.userId !== refreshUserId) {
-          const sessionChangedError = new Error('Session changed while refreshing the access token.')
-          processQueue(sessionChangedError, null)
-          return Promise.reject(sessionChangedError)
+        const refresh = async () => {
+          let persistentSession: Session = null
+          if (useAuthStore.getState().persistence === 'local') {
+            try {
+              persistentSession = JSON.parse(localStorage.getItem('session') || 'null') as Session
+            } catch {
+              persistentSession = null
+            }
+          }
+          const currentSession = persistentSession ?? useAuthStore.getState().session
+          if (!currentSession || currentSession.userId !== refreshUserId) {
+            throw new Error('Session changed while refreshing the access token.')
+          }
+          if (currentSession.accessToken !== session.accessToken) return currentSession
+
+          const response = await axios.post(
+            `${api.defaults.baseURL}/auth/refresh`,
+            { refresh_token: currentSession.refreshToken },
+          )
+          const tokens = response.data
+          const updatedSession = {
+            ...currentSession,
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            role: tokens.role,
+            accessTokenExpiresAt: tokens.access_token_expires_at ?? null,
+            refreshTokenExpiresAt: tokens.refresh_token_expires_at ?? null,
+            accessTokenExpiresIn: tokens.access_token_expires_in ?? null,
+            refreshTokenExpiresIn: tokens.refresh_token_expires_in ?? null,
+          }
+          useAuthStore.getState().setSession(updatedSession)
+          return updatedSession
         }
-        useAuthStore.getState().setSession({
-          ...currentSession,
-          accessToken: newTokens.access_token,
-          refreshToken: newTokens.refresh_token,
-          role: newTokens.role,
-          userId: currentSession.userId,
-          accessTokenExpiresAt: newTokens.access_token_expires_at ?? null,
-          refreshTokenExpiresAt: newTokens.refresh_token_expires_at ?? null,
-          accessTokenExpiresIn: newTokens.access_token_expires_in ?? null,
-          refreshTokenExpiresIn: newTokens.refresh_token_expires_in ?? null,
-        })
-        processQueue(null, newTokens.access_token)
-        originalRequest.headers.Authorization = `Bearer ${newTokens.access_token}`
+
+        const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined
+        const updatedSession = useAuthStore.getState().persistence === 'local' && lockManager
+          ? await lockManager.request('internship-auth-refresh', refresh)
+          : await refresh()
+        processQueue(null, updatedSession.accessToken)
+        originalRequest.headers.Authorization = `Bearer ${updatedSession.accessToken}`
         return api(originalRequest)
       } catch (refreshError) {
         processQueue(refreshError, null)
@@ -115,7 +165,7 @@ api.interceptors.response.use(
     }
 
     return Promise.reject(error)
-  }
+  },
 )
 
 /**

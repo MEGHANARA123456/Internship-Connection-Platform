@@ -20,6 +20,7 @@ from app.models import (
     CompanyDocument,
     CompanyProfile,
     Internship,
+    Report,
     User,
     UserRole,
 )
@@ -273,6 +274,51 @@ async def test_get_audit_logs_filter_by_action(db_setup) -> None:
     body = res.json()
     assert body["total"] == 1
     assert body["items"][0]["action"] == "company_verified"
+
+
+@pytest.mark.anyio
+async def test_get_audit_logs_resolves_target_labels_and_deleted_users(db_setup) -> None:
+    _, sessions = db_setup
+    admin = _make_admin()
+    company = _make_company_user()
+    student = _make_student()
+    profile = CompanyProfile(
+        user_id=company.id,
+        company_name="Target Company",
+        industry="Tech",
+        verification_status="VERIFIED",
+    )
+    from datetime import date
+    internship = Internship(
+        id=901, company_id=company.id, title="Target Internship", description="d",
+        location="Remote", industry="Tech", duration_months=3, work_mode="REMOTE",
+        skills="Python", deadline=date(2027, 1, 1), status="PUBLISHED",
+    )
+    report = Report(reporter_id=student.id, reason="Audit report", status="OPEN")
+    async with sessions() as session:
+        session.add_all([admin, company, student, profile, internship, report])
+        await session.flush()
+        session.add_all([
+            AuditLog(actor_id=admin.id, actor_email=admin.email, action="company_verified", target_type="user", target_id=company.id),
+            AuditLog(actor_id=admin.id, actor_email=admin.email, action="posting_approved", target_type="posting", target_id=internship.id),
+            AuditLog(actor_id=admin.id, actor_email=admin.email, action="company_verified", target_type="company", target_id=company.id),
+            AuditLog(actor_id=admin.id, actor_email=admin.email, action="report_resolved", target_type="report", target_id=report.id),
+            AuditLog(actor_id=admin.id, actor_email=admin.email, action="user_suspended", target_type="user", target_id=99999),
+        ])
+        await session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: admin
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/admin/audit-logs?page_size=20")
+    assert response.status_code == 200
+    items = {item["action"] + ":" + str(item["target_type"]): item for item in response.json()["items"]}
+    assert items["company_verified:user"]["target_label"] == company.email
+    assert items["company_verified:user"]["actor_role"] == "ADMIN"
+    assert items["posting_approved:posting"]["target_label"] == "Target Internship · Target Company"
+    assert items["posting_approved:posting"]["target_url"] == f"/admin/companies/{company.id}/postings"
+    assert items["company_verified:company"]["target_label"] == "Target Company"
+    assert items["report_resolved:report"]["target_label"] == f"Report #{report.id}"
+    assert items["user_suspended:user"]["target_label"] == "Deleted user"
 
 
 # ---------------------------------------------------------------------------

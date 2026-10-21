@@ -89,9 +89,12 @@ class AuditLogResponse(BaseModel):
     id: int
     actor_id: int | None
     actor_email: str | None
+    actor_role: str | None = None
     action: str
     target_type: str | None
     target_id: int | None
+    target_label: str | None = None
+    target_url: str | None = None
     metadata: dict[str, Any] | None = Field(None, alias="metadata_", serialization_alias="metadata")
     ip_address: str | None
     created_at: datetime

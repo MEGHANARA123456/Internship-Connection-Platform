@@ -2,16 +2,16 @@
 # Admin-only endpoints for managing users, reports, and system-wide operations.
 # -----------------------------------------------------------------------------
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, exists, func, or_, select
 
 from app.api.v1.dependencies import DbSession, require_roles
 from app.core.config import get_settings
-from app.core.security import hash_password
+from app.core.security import hash_password_async
 from app.models import Application, AuditLog, CompanyDocument, CompanyProfile, Internship, Report, User, UserRole
 from app.models.user import StudentProfile
 from app.schemas.admin import (
@@ -36,6 +36,7 @@ from app.services.email_validation import validate_email_format
 from app.services.mail import send_dev_email
 from app.services.notify import notify
 from app.services.company_documents import company_document_path
+from app.services.internship_closing import close_internship as close_internship_service, send_closure_emails
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_roles(UserRole.ADMIN))]) # type: ignore
 admin_user = Annotated[User, Depends(require_roles(UserRole.ADMIN))] # type: ignore
@@ -82,12 +83,17 @@ async def search_users(
     search: str | None = None,
     role: UserRole | None = None,
     include_suspended: bool = True,
+    created: str | None = Query(None, pattern="^this_month$"),
 ) -> list[User]:
     query = select(User).order_by(User.id.desc())
     if search:
         query = query.where(User.email.ilike(f"%{search}%"))
     if role:
         query = query.where(User.role == role)
+    if created == "this_month":
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        query = query.where(User.created_at >= month_start)
     if not include_suspended:
         query = query.where(User.suspended_at.is_(None))
     return list(await db.scalars(query))
@@ -111,7 +117,7 @@ async def create_admin(
 
     new_admin = User(
         email=email,
-        password_hash=hash_password(data.password),
+        password_hash=await hash_password_async(data.password),
         role=UserRole.ADMIN,
         is_active=True,
         is_verified=True,
@@ -529,6 +535,7 @@ async def moderate_company_posting(
     db: DbSession,
     user: admin_user,
     request: Request,
+    background_tasks: BackgroundTasks,
 ) -> dict:
     """Moderate a specific posting belonging to a company."""
     item = await db.get(Internship, internship_id)
@@ -536,6 +543,18 @@ async def moderate_company_posting(
         raise HTTPException(404, "Internship not found for this company")
     if data.status not in {"PUBLISHED", "REJECTED", "CLOSED"}:
         raise HTTPException(400, "Invalid moderation status")
+    if data.status == "CLOSED":
+        try:
+            result = await close_internship_service(db, item, user)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if result.emails:
+            background_tasks.add_task(send_closure_emails, result.emails, db)
+        return {
+            "id": result.internship.id,
+            "status": result.internship.status,
+            "closed_at": result.internship.closed_at,
+        }
     action_map = {"PUBLISHED": "posting_approved", "REJECTED": "posting_rejected", "CLOSED": "posting_removed"}
     item.status = data.status
     await write_audit(
@@ -591,13 +610,30 @@ async def moderation_queue(db: DbSession, user: admin_user, status: str | None =
 @router.post("/internships/{internship_id}/moderate", response_model=dict)
 @router.post("/internships/{internship_id}/moderation", response_model=dict)
 async def moderate_internship(
-    internship_id: int, data: ModerationStatus, db: DbSession, user: admin_user, request: Request
+    internship_id: int,
+    data: ModerationStatus,
+    db: DbSession,
+    user: admin_user,
+    request: Request,
+    background_tasks: BackgroundTasks,
 ) -> dict:
     item = await db.get(Internship, internship_id)
     if item is None:
         raise HTTPException(404, "Internship not found")
     if data.status not in {"PUBLISHED", "REJECTED", "CLOSED"}:
         raise HTTPException(400, "Invalid moderation status")
+    if data.status == "CLOSED":
+        try:
+            result = await close_internship_service(db, item, user)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if result.emails:
+            background_tasks.add_task(send_closure_emails, result.emails, db)
+        return {
+            "id": result.internship.id,
+            "status": result.internship.status,
+            "closed_at": result.internship.closed_at,
+        }
     action_map = {"PUBLISHED": "posting_approved", "REJECTED": "posting_rejected", "CLOSED": "posting_removed"}
     item.status = data.status
     await write_audit(
@@ -663,26 +699,58 @@ async def get_audit_logs(
     action: str | None = Query(None, description="Filter by exact action string"),
     target_type: str | None = Query(None, description="Filter by target_type"),
     target_id: int | None = Query(None, description="Filter by target_id"),
+    search_target: str | None = Query(None, description="Search resolved target labels"),
     date_from: datetime | None = Query(None, description="ISO datetime lower bound"),
     date_to: datetime | None = Query(None, description="ISO datetime upper bound"),
+    range_value: str | None = Query(None, alias="range", pattern="^14d$"),
 ) -> dict[str, Any]:
     """Paginated, filterable audit log listing. Admin-only."""
     base = select(AuditLog)
     count_base = select(func.count()).select_from(AuditLog)
 
     filters = []
+    if range_value == "14d":
+        filters.append(AuditLog.created_at >= datetime.now(timezone.utc) - timedelta(days=14))
     if actor:
         filters.append(AuditLog.actor_email.ilike(f"%{actor}%"))
     if action:
         filters.append(AuditLog.action == action)
     if target_type:
-        filters.append(AuditLog.target_type == target_type)
+        if target_type.lower() == "internship":
+            filters.append(AuditLog.target_type.ilike("internship") | AuditLog.target_type.ilike("posting"))
+        else:
+            filters.append(AuditLog.target_type.ilike(target_type))
     if target_id is not None:
         filters.append(AuditLog.target_id == target_id)
     if date_from:
         filters.append(AuditLog.created_at >= date_from)
     if date_to:
         filters.append(AuditLog.created_at <= date_to)
+    if search_target and search_target.strip():
+        target_pattern = f"%{search_target.strip()}%"
+        filters.append(or_(
+            exists(select(User.id).where(
+                User.id == AuditLog.target_id,
+                AuditLog.target_type.ilike("user"),
+                User.email.ilike(target_pattern),
+            )),
+            exists(select(Internship.id).outerjoin(
+                CompanyProfile, CompanyProfile.user_id == Internship.company_id
+            ).where(
+                Internship.id == AuditLog.target_id,
+                AuditLog.target_type.ilike("internship") | AuditLog.target_type.ilike("posting"),
+                or_(Internship.title.ilike(target_pattern), CompanyProfile.company_name.ilike(target_pattern)),
+            )),
+            exists(select(CompanyProfile.id).where(
+                or_(CompanyProfile.user_id == AuditLog.target_id, CompanyProfile.id == AuditLog.target_id),
+                AuditLog.target_type.ilike("company"),
+                CompanyProfile.company_name.ilike(target_pattern),
+            )),
+            (
+                (AuditLog.target_type.ilike("report"))
+                & (cast(AuditLog.target_id, String).ilike(target_pattern))
+            ),
+        ))
 
     if filters:
         base = base.where(*filters)
@@ -695,20 +763,86 @@ async def get_audit_logs(
         .limit(page_size)
     ))
 
-    items = [
-        AuditLogResponse(
+    target_user_ids = {a.target_id for a in rows if a.target_id is not None and (a.target_type or "").lower() == "user"}
+    target_internship_ids = {a.target_id for a in rows if a.target_id is not None and (a.target_type or "").lower() in {"internship", "posting"}}
+    target_company_ids = {a.target_id for a in rows if a.target_id is not None and (a.target_type or "").lower() == "company"}
+    actor_ids = {a.actor_id for a in rows if a.actor_id is not None}
+
+    target_users = {}
+    if target_user_ids:
+        target_users = {
+            target.id: target
+            for target in await db.scalars(select(User).where(User.id.in_(target_user_ids)))
+        }
+    target_internships = {}
+    if target_internship_ids:
+        target_internships = {
+            target_id: (title, company_name, company_id)
+            for target_id, title, company_name, company_id in (await db.execute(
+                select(Internship.id, Internship.title, CompanyProfile.company_name, Internship.company_id)
+                .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
+                .where(Internship.id.in_(target_internship_ids))
+            )).all()
+        }
+    target_companies = {}
+    if target_company_ids:
+        company_rows = await db.scalars(select(CompanyProfile).where(
+            or_(CompanyProfile.user_id.in_(target_company_ids), CompanyProfile.id.in_(target_company_ids))
+        ))
+        for company in company_rows:
+            target_companies[company.user_id] = company.company_name
+            target_companies[company.id] = company.company_name
+    actor_roles = {}
+    if actor_ids:
+        actor_roles = {
+            actor_id: actor_role.value
+            for actor_id, actor_role in (await db.execute(
+                select(User.id, User.role).where(User.id.in_(actor_ids))
+            )).all()
+        }
+
+    items = []
+    for a in rows:
+        target_type_normalized = (a.target_type or "").lower()
+        target_label = None
+        target_url = None
+        if a.target_id is not None:
+            if target_type_normalized == "user":
+                target_user = target_users.get(a.target_id)
+                target_label = (
+                    "Deleted user"
+                    if target_user is None or (target_user.email or "").endswith("@deleted.local")
+                    else target_user.email
+                )
+                target_url = "/admin/users"
+            elif target_type_normalized in {"internship", "posting"}:
+                resolved = target_internships.get(a.target_id)
+                if resolved:
+                    title, company_name, company_id = resolved
+                    target_label = f"{title} · {company_name or 'Company'}"
+                    target_url = f"/admin/companies/{company_id}/postings"
+                else:
+                    target_label = "Deleted internship"
+            elif target_type_normalized == "company":
+                target_label = target_companies.get(a.target_id, "Deleted company")
+                target_url = f"/admin/companies/{a.target_id}/postings"
+            elif target_type_normalized == "report":
+                target_label = f"Report #{a.target_id}"
+                target_url = "/admin/reports"
+        items.append(AuditLogResponse(
             id=a.id,
             actor_id=a.actor_id,
             actor_email=a.actor_email,
+            actor_role=actor_roles.get(a.actor_id),
             action=a.action,
             target_type=a.target_type,
             target_id=a.target_id,
+            target_label=target_label,
+            target_url=target_url,
             metadata=a.metadata_, # type: ignore
             ip_address=a.ip_address,
             created_at=a.created_at,
-        )
-        for a in rows
-    ]
+        ))
 
     return {
         "items": items,

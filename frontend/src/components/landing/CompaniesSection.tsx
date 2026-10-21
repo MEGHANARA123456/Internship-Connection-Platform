@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { routes } from '../../lib/routes'
 import { Button } from '../ui/Button'
 
 export function CompaniesSection() {
@@ -17,7 +18,7 @@ export function CompaniesSection() {
               Post verified internship opportunities, access a structured candidate pipeline, and schedule interviews with one click.
             </p>
             <div className="flex flex-wrap items-center gap-4 pt-2">
-              <Link to="/register-company">
+              <Link to={routes.companyRegister}>
                 <Button variant="primary" size="md" className="rounded-3xl px-6 bg-indigo-600 hover:bg-indigo-700 text-white border-0 shadow-lg shadow-indigo-900/20">
                   Post an internship &rarr;
                 </Button>

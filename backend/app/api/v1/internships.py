@@ -6,21 +6,23 @@ from datetime import date, datetime, timezone
 from typing import Annotated
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
-from app.api.v1.dependencies import DbSession, get_current_user_optional, require_roles
-from app.models import Application, CompanyProfile, Internship, SavedInternship, StudentProfile, User, UserRole
-from app.schemas.internship import InternshipInput, InternshipPage, InternshipResponse
+from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
+from app.models import Application, CompanyProfile, Interview, Internship, SavedInternship, StudentProfile, User, UserRole
+from app.schemas.internship import InternshipCloseRequest, InternshipInput, InternshipPage, InternshipResponse
 from app.services.ai import compute_match_score_fast, get_student_resume_text
 from app.services.mail import send_dev_email
 from app.services.notify import notify
+from app.services.internship_closing import close_internship as close_internship_service, send_closure_emails
 
 router = APIRouter(prefix="/internships", tags=["internships"])
 logger = logging.getLogger(__name__)
-company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]
-student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]
-admin_only = Annotated[User, Depends(require_roles(UserRole.ADMIN))]
+company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]  # type: ignore
+student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))] # type: ignore
+admin_only = Annotated[User, Depends(require_roles(UserRole.ADMIN))]  # type: ignore
 optional_user = Annotated[User | None, Depends(get_current_user_optional)]
 
 
@@ -31,7 +33,7 @@ def output(
     match_score: int | None = None,
     matched_skills: list[str] | None = None,
 ) -> dict:
-    data = {key: getattr(item, key) for key in ("id", "company_id", "title", "description", "location", "industry", "duration_months", "stipend", "work_mode", "deadline", "status", "created_at")}
+    data = {key: getattr(item, key) for key in ("id", "company_id", "title", "description", "location", "industry", "duration_months", "stipend", "work_mode", "deadline", "status", "created_at", "closed_at")}
     data["skills"] = [skill for skill in (item.skills or "").split(",") if skill]
     data["company_name"] = company_name or "Enterprise Partner"
     data["is_saved"] = is_saved
@@ -49,8 +51,32 @@ def transition_allowed(current: str, target: str) -> bool:
     return target in {"PENDING_APPROVAL"} if current == "DRAFT" else target == "PUBLISHED" if current == "PENDING_APPROVAL" else target == "CLOSED" if current == "PUBLISHED" else False
 
 
+async def _ensure_unique_active_posting(
+    db: DbSession,
+    company_id: int,
+    title: str,
+    location: str,
+    *,
+    exclude_id: int | None = None,
+) -> None:
+    query = select(Internship.id).where(
+        Internship.company_id == company_id,
+        Internship.status.in_({"DRAFT", "PENDING_APPROVAL", "PUBLISHED"}),
+        func.lower(func.trim(Internship.title)) == title.strip().lower(),
+        func.lower(func.trim(Internship.location)) == location.strip().lower(),
+    )
+    if exclude_id is not None:
+        query = query.where(Internship.id != exclude_id)
+    if await db.scalar(query.limit(1)) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="You already have an active internship with this title and location",
+        )
+
+
 @router.post("", response_model=InternshipResponse, status_code=201)
 async def create_internship(data: InternshipInput, user: company_only, db: DbSession) -> dict:
+    await _ensure_unique_active_posting(db, user.id, data.title, data.location)
     item = Internship(company_id=user.id, status="DRAFT", skills=",".join(data.skills), **data.model_dump(exclude={"skills"}))
     db.add(item); await db.commit(); await db.refresh(item)
     cname = await get_company_name(user.id, db)
@@ -59,9 +85,17 @@ async def create_internship(data: InternshipInput, user: company_only, db: DbSes
 
 @router.get("/mine", response_model=list[InternshipResponse])
 async def list_company_internships(user: company_only, db: DbSession) -> list[dict]:
-    result = list(await db.scalars(select(Internship).where(Internship.company_id == user.id).order_by(Internship.created_at.desc())))
+    result = (
+        await db.execute(
+            select(Internship, func.count(Application.id))
+            .outerjoin(Application, Application.internship_id == Internship.id)
+            .where(Internship.company_id == user.id)
+            .group_by(Internship.id)
+            .order_by(Internship.created_at.desc())
+        )
+    ).all()
     cname = await get_company_name(user.id, db)
-    return [output(item, cname) for item in result]
+    return [{**output(item, cname), "applicant_count": int(applicant_count)} for item, applicant_count in result]
 
 
 @router.get("/saved", response_model=list[InternshipResponse])
@@ -115,7 +149,19 @@ async def save_internship(internship_id: int, user: student_only, db: DbSession)
     if existing is None:
         saved = SavedInternship(student_id=user.id, internship_id=internship_id)
         db.add(saved)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            existing = await db.scalar(
+                select(SavedInternship.id).where(
+                    SavedInternship.student_id == user.id,
+                    SavedInternship.internship_id == internship_id,
+                )
+            )
+            if existing is None:
+                raise
+            return {"is_saved": True, "internship_id": internship_id, "message": "Internship already saved"}
     return {"is_saved": True, "internship_id": internship_id, "message": "Internship saved"}
 
 
@@ -218,7 +264,9 @@ async def get_internship(internship_id: int, db: DbSession, user: optional_user)
     item = await db.scalar(select(Internship).where(Internship.id == internship_id))
     if item is None:
         raise HTTPException(404, "Internship not found")
-    if item.status != "PUBLISHED":
+    if item.status == "CLOSED":
+        pass
+    elif item.status != "PUBLISHED":
         if user and user.role == UserRole.COMPANY and item.company_id == user.id:
             pass
         elif user and user.role == UserRole.ADMIN:
@@ -255,6 +303,13 @@ async def get_internship(internship_id: int, db: DbSession, user: optional_user)
 async def edit_internship(internship_id: int, data: InternshipInput, user: company_only, db: DbSession) -> dict:
     item = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id))
     if item is None: raise HTTPException(404, "Internship not found")
+    await _ensure_unique_active_posting(
+        db,
+        user.id,
+        data.title,
+        data.location,
+        exclude_id=item.id,
+    )
     for key, value in data.model_dump(exclude={"skills"}).items(): setattr(item, key, value)
     item.skills = ",".join(data.skills); item.status = "DRAFT"
     await db.commit(); await db.refresh(item)
@@ -262,11 +317,48 @@ async def edit_internship(internship_id: int, data: InternshipInput, user: compa
     return output(item, cname)
 
 
+@router.post("/{internship_id}/duplicate", response_model=InternshipResponse, status_code=201)
+async def duplicate_internship(internship_id: int, user: company_only, db: DbSession) -> dict:
+    source = await db.scalar(
+        select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id)
+    )
+    if source is None:
+        raise HTTPException(404, "Internship not found")
+    copy = Internship(
+        company_id=user.id,
+        title=f"{source.title} (copy)",
+        description=source.description,
+        location=source.location,
+        industry=source.industry,
+        duration_months=source.duration_months,
+        stipend=source.stipend,
+        work_mode=source.work_mode,
+        skills=source.skills,
+        deadline=source.deadline,
+        status="DRAFT",
+    )
+    db.add(copy)
+    await db.commit()
+    await db.refresh(copy)
+    return output(copy, await get_company_name(user.id, db))
+
+
 @router.post("/{internship_id}/status", response_model=InternshipResponse)
 async def change_status(internship_id: int, target: str, user: company_only, db: DbSession) -> dict:
+    if target == "CLOSED":
+        item = await db.scalar(select(Internship).where(Internship.id == internship_id))
+        if item is None:
+            raise HTTPException(404, "Internship not found")
+        try:
+            result = await close_internship_service(db, item, user)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return output(result.internship, await get_company_name(item.company_id, db))
     item = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id))
     if item is None: raise HTTPException(404, "Internship not found")
-    if target not in {"PENDING_APPROVAL", "CLOSED"} or not transition_allowed(item.status, target): raise HTTPException(409, f"Cannot move {item.status} to {target}")
+    if target != "PENDING_APPROVAL" or not transition_allowed(item.status, target): raise HTTPException(409, f"Cannot move {item.status} to {target}")
     if target == "PENDING_APPROVAL":
         profile = await db.scalar(
             select(CompanyProfile).where(CompanyProfile.user_id == user.id)
@@ -279,68 +371,26 @@ async def change_status(internship_id: int, target: str, user: company_only, db:
                     "for approval. Upload your verification documents and wait for an admin decision."
                 ),
             )
+        await _ensure_unique_active_posting(
+            db,
+            user.id,
+            item.title,
+            item.location,
+            exclude_id=item.id,
+        )
     cname = await get_company_name(item.company_id, db)
-    notifications = []
-    if target == "CLOSED":
-        applications = list(await db.scalars(
-            select(Application).where(
-                Application.internship_id == item.id,
-                Application.status.not_in(["WITHDRAWN", "REJECTED"]),
-            )
-        ))
-        for application in applications:
-            if application.status in {"APPLIED", "UNDER_REVIEW"}:
-                body = f"{cname} has closed {item.title}. No further review decisions will be made on this posting."
-            elif application.status in {"SHORTLISTED", "INTERVIEW_SCHEDULED"}:
-                body = f"{cname} has closed {item.title}. Your application is in progress; please contact the company for next steps."
-            else:
-                body = f"{cname} has closed {item.title} to new applicants. Your offer is unaffected."
-            await notify(
-                db,
-                application.student_id,
-                "INTERNSHIP_CLOSED",
-                "Internship closed",
-                body,
-            )
-            notifications.append((application, body))
-    elif target == "PENDING_APPROVAL":
-        admins = await db.scalars(select(User).where(User.role == UserRole.ADMIN))
-        for admin in admins:
-            await notify(
-                db,
-                admin.id,
-                "INTERNSHIP_PENDING_APPROVAL",
-                f"Internship pending approval: {item.title}",
-                f"A company submitted {item.title} for approval.",
-            )
+    admins = await db.scalars(select(User).where(User.role == UserRole.ADMIN))
+    for admin in admins:
+        await notify(
+            db,
+            admin.id,
+            "INTERNSHIP_PENDING_APPROVAL",
+            f"Internship pending approval: {item.title}",
+            f"A company submitted {item.title} for approval.",
+        )
     item.status = target
     await db.commit()
     await db.refresh(item)
-    for application, body in notifications:
-        student = await db.scalar(select(User).where(User.id == application.student_id))
-        if student:
-            await send_dev_email(
-                student.email,
-                "Internship closed",
-                body,
-                message_type="INTERNSHIP_CLOSED",
-                db=db,
-            )
-        try:
-            from app.api.v1.ws import manager
-            await manager.send_personal_message(
-                application.student_id,
-                {
-                    "type": "internship_closed",
-                    "application_id": application.id,
-                    "internship_id": item.id,
-                    "status": application.status,
-                    "title": "Internship closed",
-                    "body": body,
-                },
-            )
-        except Exception as exc:
-            logger.warning("Could not send internship closure notification for application %s: %s", application.id, exc)
     return output(item, cname)
 
 
@@ -349,9 +399,64 @@ async def submit_internship(internship_id: int, user: company_only, db: DbSessio
     return await change_status(internship_id, "PENDING_APPROVAL", user, db)
 
 
+@router.get("/{internship_id}/close-preview")
+async def close_preview(
+    internship_id: int,
+    user: Annotated[User, Depends(get_current_user)],
+    db: DbSession,
+) -> dict:
+    item = await db.get(Internship, internship_id)
+    if item is None:
+        raise HTTPException(404, "Internship not found")
+    if user.role != UserRole.ADMIN and (user.role != UserRole.COMPANY or item.company_id != user.id):
+        raise HTTPException(403, "Only the owning company or an admin may close this internship.")
+    rows = await db.execute(
+        select(Application.status, func.count(Application.id))
+        .where(Application.internship_id == item.id)
+        .group_by(Application.status)
+    )
+    counts = {status: int(count) for status, count in rows.all()}
+    upcoming_interviews = int(
+        await db.scalar(
+            select(func.count(Interview.id))
+            .join(Application, Application.id == Interview.application_id)
+            .where(
+                Application.internship_id == item.id,
+                Interview.status == "SCHEDULED",
+                Interview.scheduled_at > datetime.now(timezone.utc),
+            )
+        )
+        or 0
+    )
+    return {"counts": counts, "upcoming_interviews": upcoming_interviews}
+
+
 @router.post("/{internship_id}/close", response_model=InternshipResponse)
-async def close_internship(internship_id: int, user: company_only, db: DbSession) -> dict:
-    return await change_status(internship_id, "CLOSED", user, db)
+async def close_internship_endpoint(
+    internship_id: int,
+    background_tasks: BackgroundTasks,
+    user: company_only,
+    db: DbSession,
+    data: InternshipCloseRequest = Body(default=InternshipCloseRequest()),
+) -> dict:
+    item = await db.get(Internship, internship_id)
+    if item is None or item.company_id != user.id:
+        raise HTTPException(404, "Internship not found")
+    try:
+        result = await close_internship_service(
+            db,
+            item,
+            user,
+            reject_pending=data.reject_pending,
+            note=data.note,
+        )
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if result.emails:
+        background_tasks.add_task(send_closure_emails, result.emails, db)
+    return output(result.internship, await get_company_name(item.company_id, db))
 
 
 @router.post("/{internship_id}/review", response_model=InternshipResponse)
@@ -373,4 +478,6 @@ async def review_internship(internship_id: int, target: str, user: admin_only, d
 async def delete_internship(internship_id: int, user: company_only, db: DbSession) -> None:
     item = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id))
     if item is None: raise HTTPException(404, "Internship not found")
+    if item.status != "DRAFT":
+        raise HTTPException(409, "Only draft internships can be deleted.")
     await db.delete(item); await db.commit()

@@ -6,18 +6,21 @@ from typing import Annotated, Any
 import hashlib
 import logging
 import secrets
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 from urllib.parse import quote_plus
 
 import httpx
 import pyotp
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.dependencies import DbSession, get_current_user
 from app.core.config import get_settings
-from app.core.security import create_token, decode_token, hash_password, verify_password
+from app.core.security import create_token, decode_token, hash_password_async, verify_password_async
 from app.models import CompanyProfile, EmailVerificationToken, RefreshToken, StudentProfile, User, UserRole
 from app.schemas.auth import (
     ChangePasswordRequest,
@@ -45,8 +48,35 @@ from app.schemas.auth import (
 from app.services.mail import send_dev_email
 from app.services.notify import notify
 from app.services.email_validation import validate_email_format, validate_organization_email, validate_student_email
+from app.middleware.security import _client_ip
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+_verification_resend_attempts: dict[str, list[float]] = {}
+_verification_resend_lock = threading.Lock()
+RESEND_VERIFICATION_MESSAGE = "If an account exists and still needs verification, a new email has been sent"
+
+
+def _check_verification_resend_limit(email: str, ip: str) -> int:
+    now = time.monotonic()
+    keys = (f"email:{hashlib.sha256(email.encode()).hexdigest()}", f"ip:{ip}")
+    retry_after = 0
+    with _verification_resend_lock:
+        for key in keys:
+            timestamps = [
+                stamp
+                for stamp in _verification_resend_attempts.get(key, [])
+                if now - stamp < 3600
+            ]
+            if timestamps and now - timestamps[-1] < 60:
+                retry_after = max(retry_after, int(timestamps[-1] + 60 - now + 0.999))
+            if len(timestamps) >= 5:
+                retry_after = max(retry_after, int(timestamps[0] + 3600 - now + 0.999))
+            _verification_resend_attempts[key] = timestamps
+        if retry_after:
+            return retry_after
+        for key in keys:
+            _verification_resend_attempts[key].append(now)
+    return 0
 logger = logging.getLogger(__name__)
 
 
@@ -104,7 +134,7 @@ async def verify_google_credential(
 
 
 async def issue_tokens(
-    user: User, db: DbSession, *, record_first_login: bool = False
+    user: User, db: DbSession, *, record_first_login: bool = False, commit: bool = True
 ) -> TokenResponse:
     settings = get_settings()
     is_first_login = record_first_login and user.first_login_at is None
@@ -117,7 +147,9 @@ async def issue_tokens(
     refresh = create_token(str(user.id), user.role.value, "refresh", timedelta(days=settings.refresh_token_expire_days))
     payload = decode_token(refresh)
     db.add(RefreshToken(jti=payload["jti"], user_id=user.id, expires_at=datetime.fromtimestamp(payload["exp"], timezone.utc)))
-    await db.commit()
+    await db.flush()
+    if commit:
+        await db.commit()
 
     # Resolve display name and avatar for dashboard greetings
     user_name: str | None = None
@@ -153,8 +185,6 @@ async def issue_tokens(
         refresh_token_expires_at=refresh_expires_at,
     )
 
-
-
 async def create_user(
     email: str,
     password: str,
@@ -169,14 +199,18 @@ async def create_user(
         raise HTTPException(status_code=409, detail="Email is already registered")
     user = User(
         email=clean_email,
-        password_hash=hash_password(password),
+        password_hash=await hash_password_async(password),
         role=role,
     )
     if not require_verification:
         user.is_verified = True
         user.email_verified_at = datetime.now(timezone.utc)
         db.add(user)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError as exc:
+            await db.rollback()
+            raise HTTPException(status_code=409, detail="Email is already registered") from exc
         return user
 
     raw_token = token_urlsafe(32)
@@ -184,7 +218,11 @@ async def create_user(
     user.verification_token = raw_token
     user.verification_token_expires_at = expires_at
     db.add(user)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Email is already registered") from exc
     db.add(EmailVerificationToken(user_id=user.id, token_digest=hashlib.sha256(raw_token.encode()).hexdigest(), expires_at=expires_at))
 
     settings = get_settings()
@@ -235,7 +273,7 @@ async def check_email(data: CheckEmailRequest, db: DbSession) -> dict[str, Any]:
         "classification": result.classification,
     }
 
-
+#registraion_student
 @router.post("/register/student", response_model=UserResponse, status_code=201)
 async def register_student(data: StudentRegister, background_tasks: BackgroundTasks, db: DbSession) -> User:
     try:
@@ -253,7 +291,7 @@ async def register_student(data: StudentRegister, background_tasks: BackgroundTa
     await db.refresh(user)
     return user
 
-
+#register_company
 @router.post("/register/company", response_model=UserResponse, status_code=201)
 async def register_company(data: CompanyRegister, background_tasks: BackgroundTasks, db: DbSession) -> User:
     try:
@@ -263,7 +301,7 @@ async def register_company(data: CompanyRegister, background_tasks: BackgroundTa
     user = await create_user(
         clean_email,
         data.password,
-        UserRole.COMPANY,
+        UserRole.COMPANY, # type: ignore
         db,
         background_tasks,
         require_verification=get_settings().require_company_email_verification,
@@ -282,7 +320,7 @@ async def register_company(data: CompanyRegister, background_tasks: BackgroundTa
     await db.refresh(user)
     return user
 
-
+#mfa_setup
 @router.post("/mfa/setup-totp", response_model=MFATotpSetupResponse)
 async def setup_totp(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict[str, str]:
     secret = pyotp.random_base32()
@@ -313,7 +351,6 @@ async def verify_totp(data: MFATotpVerifyRequest, user: Annotated[User, Depends(
     await db.commit()
 
     return {"mfa_enabled": True, "mfa_type": "TOTP", "message": "Authenticator app enabled successfully."}
-
 
 @router.post("/login", response_model=TokenResponse | MFALoginChallengeResponse)
 async def login(data: LoginRequest, db: DbSession) -> Any:
@@ -354,7 +391,7 @@ async def login(data: LoginRequest, db: DbSession) -> Any:
             detail=f"Email verification required. Please click the activation link sent to '{user.email}' before logging in.",
         )
 
-    if not verify_password(data.password, user.password_hash):
+    if not await verify_password_async(data.password, user.password_hash):
         raise HTTPException(
             status_code=401,
             detail="Incorrect password. Please verify your credentials or use 'Forgot password' to reset.",
@@ -570,7 +607,7 @@ async def disable_mfa(data: MFADisableRequest, user: Annotated[User, Depends(get
     """
     Requires password verification and deactivates 2FA for the account.
     """
-    if not verify_password(data.password, user.password_hash):
+    if not await verify_password_async(data.password, user.password_hash):
         raise HTTPException(status_code=400, detail="Incorrect password. Password verification is required to disable 2FA.")
 
     user.mfa_enabled = False
@@ -630,7 +667,7 @@ async def google_auth(data: GoogleAuthRequest, db: DbSession) -> TokenResponse:
 
         user = User(
             email=email,
-            password_hash=hash_password(token_urlsafe(32)),
+            password_hash=await hash_password_async(token_urlsafe(32)),
             role=role,
             is_verified=True,
             email_verified_at=datetime.now(timezone.utc),
@@ -643,7 +680,7 @@ async def google_auth(data: GoogleAuthRequest, db: DbSession) -> TokenResponse:
             student_profile = StudentProfile(
                 user_id=user.id,
                 full_name=name,
-                university="University Campus",
+                university="",
                 major="Computer Science",
                 graduation_year=2026,
             )
@@ -686,23 +723,43 @@ async def google_auth(data: GoogleAuthRequest, db: DbSession) -> TokenResponse:
 
     return await issue_tokens(user, db)
 
-
-
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(data: RefreshRequest, db: DbSession) -> TokenResponse:
     try:
         payload = decode_token(data.refresh_token)
         if payload.get("type") != "refresh":
             raise ValueError
-        token = await db.scalar(select(RefreshToken).where(RefreshToken.jti == payload.get("jti")))
-        user = await db.scalar(select(User).where(User.id == int(payload["sub"])))
-        if token is None or token.revoked_at is not None or token.expires_at < datetime.now(timezone.utc) or user is None:
+        token = await db.scalar(
+            select(RefreshToken)
+            .where(RefreshToken.jti == payload.get("jti"))
+            .with_for_update()
+        )
+        user_id = int(payload["sub"])
+        user = await db.scalar(select(User).where(User.id == user_id))
+        if token is None or token.user_id != user_id or _is_expired(token.expires_at) or user is None:
             raise ValueError
-        token.revoked_at = datetime.now(timezone.utc)
-        return await issue_tokens(user, db)
+        now = datetime.now(timezone.utc)
+        if token.revoked_at is not None:
+            if (
+                token.reuse_until is not None
+                and not _is_expired(token.reuse_until)
+                and token.replacement_tokens
+            ):
+                return TokenResponse.model_validate_json(token.replacement_tokens)
+            if token.replacement_tokens is not None:
+                token.replacement_tokens = None
+                await db.commit()
+            raise ValueError
+
+        rotated = await issue_tokens(user, db, commit=False)
+        token.revoked_at = now
+        token.rotated_at = now
+        token.reuse_until = now + timedelta(seconds=30)
+        token.replacement_tokens = rotated.model_dump_json()
+        await db.commit()
+        return rotated
     except (ValueError, TypeError, KeyError):
         raise HTTPException(status_code=401, detail="Invalid refresh token")
-
 
 @router.post("/logout", status_code=204)
 async def logout(data: LogoutRequest, db: DbSession) -> None:
@@ -715,7 +772,6 @@ async def logout(data: LogoutRequest, db: DbSession) -> None:
     except ValueError:
         pass
 
-
 @router.get("/verify/{token}")
 async def verify_email(token: str, db: DbSession) -> dict[str, str]:
     now = datetime.now(timezone.utc)
@@ -723,20 +779,31 @@ async def verify_email(token: str, db: DbSession) -> dict[str, str]:
     token_row = await db.scalar(
         select(EmailVerificationToken).where(
             EmailVerificationToken.token_digest == digest,
-            EmailVerificationToken.used_at.is_(None),
-            EmailVerificationToken.expires_at > now,
         )
     )
     if token_row is None:
         legacy_user = await db.scalar(select(User).where(User.verification_token == token))
-        if legacy_user is None or _is_expired(legacy_user.verification_token_expires_at):
-            raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+        if legacy_user is None:
+            raise HTTPException(status_code=400, detail="token_invalid")
+        if legacy_user.is_verified:
+            raise HTTPException(status_code=409, detail="already_verified")
+        if _is_expired(legacy_user.verification_token_expires_at):
+            raise HTTPException(status_code=400, detail="token_expired")
         legacy_user.is_verified = True
         legacy_user.email_verified_at = now
         legacy_user.verification_token = None
         legacy_user.verification_token_expires_at = None
         await db.commit()
         return {"message": "Email verified"}
+    user = await db.get(User, token_row.user_id)
+    if user is None:
+        raise HTTPException(status_code=400, detail="token_invalid")
+    if user.is_verified:
+        raise HTTPException(status_code=409, detail="already_verified")
+    if token_row.used_at is not None:
+        raise HTTPException(status_code=400, detail="token_invalid")
+    if _is_expired(token_row.expires_at):
+        raise HTTPException(status_code=400, detail="token_expired")
     claimed = await db.execute(
         update(EmailVerificationToken)
         .execution_options(synchronize_session=False)
@@ -748,17 +815,13 @@ async def verify_email(token: str, db: DbSession) -> dict[str, str]:
         .values(used_at=now)
     )
     if claimed.rowcount != 1:
-        raise HTTPException(status_code=400, detail="Invalid verification token")
-    user = await db.get(User, token_row.user_id)
-    if user is None:
-        raise HTTPException(status_code=400, detail="Invalid verification token")
+        raise HTTPException(status_code=400, detail="token_invalid")
     user.is_verified = True
     user.email_verified_at = now
     user.verification_token = None
     user.verification_token_expires_at = None
     await db.commit()
     return {"message": "Email verified"}
-
 
 @router.post("/forgot-password")
 async def forgot_password(data: ForgotPasswordRequest, background_tasks: BackgroundTasks, db: DbSession) -> dict[str, str]:
@@ -829,7 +892,6 @@ async def forgot_password(data: ForgotPasswordRequest, background_tasks: Backgro
     )
     return {"message": f"Verification code and reset link have been dispatched to {user.email}."}
 
-
 @router.post("/verify-otp")
 async def verify_otp(data: VerifyOtpRequest, db: DbSession) -> dict[str, str]:
     user = await db.scalar(select(User).where(User.email == str(data.email).strip().lower()))
@@ -841,7 +903,6 @@ async def verify_otp(data: VerifyOtpRequest, db: DbSession) -> dict[str, str]:
     ):
         raise HTTPException(status_code=400, detail="Invalid or expired verification code")
     return {"message": "OTP verified successfully"}
-
 
 @router.post("/reset-password")
 async def reset_password(data: ResetPasswordRequest, background_tasks: BackgroundTasks, db: DbSession) -> dict[str, str]:
@@ -864,7 +925,7 @@ async def reset_password(data: ResetPasswordRequest, background_tasks: Backgroun
         raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new one.")
 
     user.is_verified = True
-    user.password_hash = hash_password(data.new_password)
+    user.password_hash = await hash_password_async(data.new_password)
     user.reset_token = None
     user.reset_token_expires_at = None
     await db.commit()
@@ -879,7 +940,6 @@ async def reset_password(data: ResetPasswordRequest, background_tasks: Backgroun
 
     return {"message": "Password reset successfully"}
 
-
 @router.post("/change-password")
 async def change_password(
     data: ChangePasswordRequest,
@@ -887,13 +947,13 @@ async def change_password(
     background_tasks: BackgroundTasks,
     db: DbSession,
 ) -> dict[str, str]:
-    if not verify_password(data.current_password, current_user.password_hash):
+    if not await verify_password_async(data.current_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
     
     if data.current_password == data.new_password:
         raise HTTPException(status_code=400, detail="New password must be different from current password.")
 
-    current_user.password_hash = hash_password(data.new_password)
+    current_user.password_hash = await hash_password_async(data.new_password)
     await db.commit()
 
     conf_body = (
@@ -904,64 +964,70 @@ async def change_password(
     background_tasks.add_task(send_dev_email, current_user.email, "Security Alert: Password Changed", conf_body, db=db)
     return {"message": "Password updated successfully"}
 
-
 @router.post("/resend-verification")
-async def resend_verification(data: ResendVerificationRequest, background_tasks: BackgroundTasks, db: DbSession) -> dict[str, str]:
+async def resend_verification(
+    data: ResendVerificationRequest,
+    background_tasks: BackgroundTasks,
+    db: DbSession,
+    request: Request,
+) -> dict[str, str]:
     clean_email = str(data.email).strip().lower()
-    user = await db.scalar(select(User).where(User.email == clean_email))
-    if user is None:
+    ip = _client_ip(request, get_settings().trusted_proxies)
+    retry_after = _check_verification_resend_limit(clean_email, ip)
+    if retry_after:
         raise HTTPException(
-            status_code=404,
-            detail=f"No account found with email '{clean_email}'. Please sign up first.",
+            status_code=429,
+            detail="Please wait before requesting another verification email.",
+            headers={"Retry-After": str(retry_after)},
         )
-    if user.is_verified:
-        return {"message": "Your email is already verified. You can log in directly."}
+    user = await db.scalar(select(User).where(User.email == clean_email))
+    if user is not None and not user.is_verified:
+        raw_token = token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+        now = datetime.now(timezone.utc)
+        await db.execute(
+            update(EmailVerificationToken)
+            .where(
+                EmailVerificationToken.user_id == user.id,
+                EmailVerificationToken.used_at.is_(None),
+            )
+            .values(used_at=now)
+        )
+        user.verification_token = raw_token
+        user.verification_token_expires_at = expires_at
+        db.add(
+            EmailVerificationToken(
+                user_id=user.id,
+                token_digest=hashlib.sha256(raw_token.encode()).hexdigest(),
+                expires_at=expires_at,
+            )
+        )
+        await db.commit()
 
-    raw_token = token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
-    await db.execute(
-        update(EmailVerificationToken)
-        .where(EmailVerificationToken.user_id == user.id, EmailVerificationToken.used_at.is_(None))
-        .values(used_at=datetime.now(timezone.utc))
-    )
-    user.verification_token = raw_token
-    user.verification_token_expires_at = expires_at
-    db.add(EmailVerificationToken(user_id=user.id, token_digest=hashlib.sha256(raw_token.encode()).hexdigest(), expires_at=expires_at))
-    await db.commit()
-
-    settings = get_settings()
-    frontend_url = (settings.frontend_url or "http://localhost:5174").rstrip("/")
-    verify_url = f"{frontend_url}/verify/{raw_token}"
-
-    plain_body = (
-        f"Welcome to InternSphere!\n\n"
-        f"Please verify your account to get started:\n"
-        f"{verify_url}\n\n"
-        "This link expires in 24 hours and can only be used once.\n"
-    )
-    html_body = f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
-        <div style="margin-bottom: 20px;">
-            <span style="font-weight: 800; font-size: 22px; color: #4338ca; letter-spacing: -0.5px;">InternSphere</span>
+        frontend_url = (get_settings().frontend_url or "http://localhost:5174").rstrip("/")
+        verify_url = f"{frontend_url}/verify/{raw_token}"
+        plain_body = (
+            "Please verify your account using this new link:\n"
+            f"{verify_url}\n\n"
+            "This link is valid for 24 hours. Earlier verification links no longer work.\n"
+        )
+        html_body = f"""
+        <div style="font-family: sans-serif; max-width: 520px; margin: 0 auto; padding: 28px 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
+            <h2 style="color: #0f172a;">Verify Your Account</h2>
+            <p style="color: #475569;">Use this new link to verify your email. It is valid for 24 hours.</p>
+            <p><a href="{verify_url}" style="color: #4f46e5;">Verify your account</a></p>
+            <p style="color: #64748b;">Earlier verification links no longer work.</p>
         </div>
-        <h2 style="font-size: 18px; font-weight: 600; color: #0f172a; margin: 0 0 12px 0;">Verify Your Account</h2>
-        <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px 0;">
-            Click the button below to verify your email and activate your account:
-        </p>
-        <div style="text-align: center; margin: 24px 0;">
-            <a href="{verify_url}" target="_blank" style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; padding: 14px 28px; font-size: 15px; font-weight: 600; border-radius: 8px;">
-                Verify Account Now →
-            </a>
-        </div>
-        <p style="font-size: 12px; color: #64748b; line-height: 1.5; margin: 16px 0 0 0;">
-            Or copy and paste this link in your browser:<br />
-            <a href="{verify_url}" style="color: #4f46e5; word-break: break-all;">{verify_url}</a>
-        </p>
-    </div>
-    """
-    background_tasks.add_task(send_dev_email, clean_email, "Verify your account", plain_body, html_body, db=db)
-    return {"message": f"Verification link has been sent to {clean_email}."}
-
+        """
+        background_tasks.add_task(
+            send_dev_email,
+            clean_email,
+            "Verify your account",
+            plain_body,
+            html_body,
+            db=db,
+        )
+    return {"message": RESEND_VERIFICATION_MESSAGE}
 
 @router.get("/me")
 async def get_me(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict[str, Any]:

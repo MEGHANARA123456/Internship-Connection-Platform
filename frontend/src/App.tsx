@@ -1,9 +1,12 @@
-import { useEffect, useRef } from 'react'
-import { Route, Routes, Navigate } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { Route, Routes, Navigate, Outlet, useParams } from 'react-router-dom'
 import { Navbar } from './components/layout/Navbar'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { api } from './api/client'
 import { useAuthStore } from './store/auth'
+import { PageLoader } from './components/ui/LoadingSkeleton'
+import { routes } from './lib/routes'
+import { NotFoundPage } from './pages/RouteFallbacks'
 
 export function SessionIdentityVerifier() {
   const session = useAuthStore((state) => state.session)
@@ -48,69 +51,125 @@ export function SessionIdentityVerifier() {
   return null
 }
 
+function SessionChangedBanner() {
+  const changed = useAuthStore((state) => state.sessionChangedInAnotherTab)
+  const clearNotice = useAuthStore((state) => state.clearSessionChangedNotice)
+
+  useEffect(() => {
+    if (!changed) return
+    const timeout = window.setTimeout(clearNotice, 5000)
+    return () => window.clearTimeout(timeout)
+  }, [changed, clearNotice])
+
+  if (!changed) return null
+  return (
+    <div role="alert" className="fixed top-3 left-1/2 z-[100] -translate-x-1/2 rounded-lg bg-amber-100 px-4 py-3 text-sm font-medium text-amber-950 shadow-lg">
+      Your session changed in another tab. This tab has been reloaded.
+    </div>
+  )
+}
+
+function RateLimitNotice() {
+  const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    let timeout: number | undefined
+    const handleRateLimit = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string; retryAfterSeconds?: number }>).detail
+      setMessage(detail?.message || 'Too many requests. Please wait before trying again.')
+      if (timeout !== undefined) window.clearTimeout(timeout)
+      timeout = window.setTimeout(
+        () => setMessage(''),
+        Math.max(5, detail?.retryAfterSeconds ?? 5) * 1000,
+      )
+    }
+    window.addEventListener('app:rate-limit', handleRateLimit)
+    return () => {
+      window.removeEventListener('app:rate-limit', handleRateLimit)
+      if (timeout !== undefined) window.clearTimeout(timeout)
+    }
+  }, [])
+
+  if (!message) return null
+  return (
+    <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-[100] max-w-sm rounded-lg bg-amber-100 px-4 py-3 text-sm font-medium text-amber-950 shadow-lg">
+      {message}
+    </div>
+  )
+}
+
 function DashboardRedirect() {
   const { session } = useAuthStore()
-  if (!session) return <Navigate to="/login" replace />
-  if (session.role === 'ADMIN') return <Navigate to="/admin" replace />
-  if (session.role === 'COMPANY') return <Navigate to="/company/jobs" replace />
-  return <Navigate to="/opportunities" replace />
+  if (!session) return <Navigate to={routes.login({ next: routes.dashboard })} replace />
+  if (session.role === 'ADMIN') return <Navigate to={routes.admin} replace />
+  if (session.role === 'COMPANY') return <Navigate to={routes.companyJobs()} replace />
+  return <Navigate to={routes.opportunities} replace />
+}
+
+function LegacyInternshipRedirect() {
+  const { id } = useParams()
+  return <Navigate to={id ? routes.opportunity(id) : routes.opportunities} replace />
 }
 
 // Pages
 import { LandingPage } from './pages/LandingPage'
-import {
-  LoginPage,
-  StudentRegisterPage,
-  CompanyRegisterPage,
-  ForgotPasswordPage,
-  ResetPasswordPage,
-  VerifyEmailPage,
-} from './pages/AuthPages'
+const authPages = () => import('./pages/AuthPages')
+const LoginPage = lazy(async () => ({ default: (await authPages()).LoginPage }))
+const StudentRegisterPage = lazy(async () => ({ default: (await authPages()).StudentRegisterPage }))
+const CompanyRegisterPage = lazy(async () => ({ default: (await authPages()).CompanyRegisterPage }))
+const ForgotPasswordPage = lazy(async () => ({ default: (await authPages()).ForgotPasswordPage }))
+const ResetPasswordPage = lazy(async () => ({ default: (await authPages()).ResetPasswordPage }))
+const VerifyEmailPage = lazy(async () => ({ default: (await authPages()).VerifyEmailPage }))
 
-import {
-  OpportunitiesPage,
-  ApplicationsPage,
-  StudentProfilePage,
-  StudentAnalyticsPage,
-} from './pages/StudentPages'
+const studentPages = () => import('./pages/StudentPages')
+const OpportunitiesPage = lazy(async () => ({ default: (await studentPages()).OpportunitiesPage }))
+const ApplicationsPage = lazy(async () => ({ default: (await studentPages()).ApplicationsPage }))
+const ApplicationTimelinePage = lazy(async () => ({ default: (await studentPages()).ApplicationTimelinePage }))
+const StudentProfilePage = lazy(async () => ({ default: (await studentPages()).StudentProfilePage }))
+const StudentAnalyticsPage = lazy(async () => ({ default: (await studentPages()).StudentAnalyticsPage }))
 
-import {
-  CompanyJobsPage,
-  JobFormPage,
-  JobApplicantsPage,
-  CompanyProfilePage,
-} from './pages/CompanyPages'
+const companyPages = () => import('./pages/CompanyPages')
+const CompanyPortalShell = lazy(async () => ({ default: (await companyPages()).CompanyPortalShell }))
+const CompanyOverviewPage = lazy(async () => ({ default: (await companyPages()).CompanyOverviewPage }))
+const CompanyJobsPage = lazy(async () => ({ default: (await companyPages()).CompanyJobsPage }))
+const CompanyAnalyticsPage = lazy(async () => ({ default: (await companyPages()).CompanyAnalyticsPage }))
+const CompanyApplicantsPage = lazy(async () => ({ default: (await companyPages()).CompanyApplicantsPage }))
+const CompanySettingsPage = lazy(async () => ({ default: (await companyPages()).CompanySettingsPage }))
+const JobFormPage = lazy(async () => ({ default: (await companyPages()).JobFormPage }))
+const JobApplicantsPage = lazy(async () => ({ default: (await companyPages()).JobApplicantsPage }))
+const CompanyProfilePage = lazy(async () => ({ default: (await companyPages()).CompanyProfilePage }))
 
-import {
-  InterviewsPage,
-  MessagesPage,
-  NotificationsPage,
-} from './pages/CommunicationPages'
+const communicationPages = () => import('./pages/CommunicationPages')
+const InterviewsPage = lazy(async () => ({ default: (await communicationPages()).InterviewsPage }))
+const MessagesPage = lazy(async () => ({ default: (await communicationPages()).MessagesPage }))
+const NotificationsPage = lazy(async () => ({ default: (await communicationPages()).NotificationsPage }))
 
-import {
-  AdminDashboardPage,
-  AdminUsersPage,
-  AdminVerificationsPage,
-  AdminModerationPage,
-  AdminReportsPage,
-  AdminCompaniesPage,
-  AdminCompanyPostingsPage,
-  AdminAuditLogsPage,
-} from './pages/AdminPages'
-
-import { CollegePlacementPortal } from './pages/CollegePlacementPortal'
+const adminPages = () => import('./pages/AdminPages')
+const AdminDashboardPage = lazy(async () => ({ default: (await adminPages()).AdminDashboardPage }))
+const AdminUsersPage = lazy(async () => ({ default: (await adminPages()).AdminUsersPage }))
+const AdminVerificationsPage = lazy(async () => ({ default: (await adminPages()).AdminVerificationsPage }))
+const AdminModerationPage = lazy(async () => ({ default: (await adminPages()).AdminModerationPage }))
+const AdminReportsPage = lazy(async () => ({ default: (await adminPages()).AdminReportsPage }))
+const AdminCompaniesPage = lazy(async () => ({ default: (await adminPages()).AdminCompaniesPage }))
+const AdminCompanyPostingsPage = lazy(async () => ({ default: (await adminPages()).AdminCompanyPostingsPage }))
+const AdminAuditLogsPage = lazy(async () => ({ default: (await adminPages()).AdminAuditLogsPage }))
 import { MobileViewSimulator } from './components/ui/MobileViewSimulator'
-import { PrivacyPolicyPage } from './pages/PrivacyPolicyPage'
-import { PrivacySecurityPage } from './pages/PrivacySecurityPage'
+const PrivacyPolicyPage = lazy(async () => ({ default: (await import('./pages/PrivacyPolicyPage')).PrivacyPolicyPage }))
+const PrivacySecurityPage = lazy(async () => ({ default: (await import('./pages/PrivacySecurityPage')).PrivacySecurityPage }))
 import { CookieConsentBanner } from './components/ui/CookieConsentBanner'
 import { Footer } from './components/landing/Footer'
 
 function ProfileRedirect() {
   const { session } = useAuthStore()
-  if (!session) return <Navigate to="/login" replace />
-  if (session.role === 'COMPANY') return <Navigate to="/profile/company" replace />
-  if (session.role === 'ADMIN') return <Navigate to="/admin" replace />
-  return <Navigate to="/profile/student" replace />
+  if (!session) return <Navigate to={routes.login({ next: routes.profile })} replace />
+  if (session.role === 'COMPANY') return <Navigate to={routes.companyProfile} replace />
+  if (session.role === 'ADMIN') return <Navigate to={routes.admin} replace />
+  return <Navigate to={routes.studentProfile} replace />
+}
+
+function CommunicationLayout() {
+  const role = useAuthStore((state) => state.session?.role)
+  return role === 'COMPANY' ? <CompanyPortalShell /> : <Outlet />
 }
 
 export default function App() {
@@ -118,78 +177,95 @@ export default function App() {
     <MobileViewSimulator>
       <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans antialiased transition-colors">
         <SessionIdentityVerifier />
+        <SessionChangedBanner />
+        <RateLimitNotice />
         <Navbar />
 
         <main className="flex-1 flex flex-col">
+          <Suspense fallback={<PageLoader />}>
           <Routes>
             {/* Public & Discovery */}
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/opportunities" element={<OpportunitiesPage />} />
-            <Route path="/opportunities/:id" element={<OpportunitiesPage />} />
-            <Route path="/internships/:id" element={<OpportunitiesPage />} />
-            <Route path="/college/dashboard" element={<CollegePlacementPortal />} />
-            <Route path="/dashboard" element={<DashboardRedirect />} />
+            <Route path={routes.home} element={<LandingPage />} />
+            <Route path={routes.opportunities} element={<OpportunitiesPage />} />
+            <Route path={routes.opportunityDetail} element={<OpportunitiesPage />} />
+            <Route path={routes.legacyInternship} element={<LegacyInternshipRedirect />} />
+            <Route path={routes.dashboard} element={<DashboardRedirect />} />
 
             {/* Authentication */}
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register-student" element={<StudentRegisterPage />} />
-            <Route path="/register-company" element={<CompanyRegisterPage />} />
-            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route path="/verify" element={<VerifyEmailPage />} />
-            <Route path="/verify/:token" element={<VerifyEmailPage />} />
+            <Route path={routes.login()} element={<LoginPage />} />
+            <Route path={routes.studentRegister} element={<StudentRegisterPage />} />
+            <Route path={routes.companyRegister} element={<CompanyRegisterPage />} />
+            <Route path={routes.forgotPassword} element={<ForgotPasswordPage />} />
+            <Route path={routes.resetPassword} element={<ResetPasswordPage />} />
+            <Route path={routes.verify()} element={<VerifyEmailPage />} />
+            <Route path={routes.verifyTokenRoute} element={<VerifyEmailPage />} />
 
             {/* Unified Profile Route */}
-            <Route path="/profile" element={<ProfileRedirect />} />
+            <Route path={routes.profile} element={<ProfileRedirect />} />
 
             {/* Student Dedicated Routes */}
             <Route element={<ProtectedRoute allowedRoles={['STUDENT']} />}>
-              <Route path="/saved" element={<OpportunitiesPage initialTab="saved" />} />
-              <Route path="/student/analytics" element={<StudentAnalyticsPage />} />
-              <Route path="/applications" element={<ApplicationsPage />} />
-              <Route path="/profile/student" element={<StudentProfilePage />} />
+              <Route path={routes.saved} element={<OpportunitiesPage initialTab="saved" />} />
+              <Route path={routes.studentAnalytics} element={<StudentAnalyticsPage />} />
+              <Route path={routes.applications()} element={<ApplicationsPage />} />
+              <Route path={routes.applicationDetail} element={<ApplicationTimelinePage />} />
+              <Route path={routes.studentProfile} element={<StudentProfilePage />} />
             </Route>
 
             {/* Company Dedicated Routes */}
-            <Route path="/company" element={<Navigate to="/company/jobs" replace />} />
-            <Route path="/company/dashboard" element={<Navigate to="/company/jobs" replace />} />
             <Route element={<ProtectedRoute allowedRoles={['COMPANY']} />}>
-              <Route path="/company/jobs" element={<CompanyJobsPage />} />
-              <Route path="/company/internships/new" element={<JobFormPage />} />
-              <Route path="/company/internships/:id/edit" element={<JobFormPage />} />
-              <Route path="/company/jobs/:id/applicants" element={<JobApplicantsPage />} />
-              <Route path="/profile/company" element={<CompanyProfilePage />} />
+              <Route element={<CompanyPortalShell />}>
+                <Route path={routes.company} element={<CompanyOverviewPage />} />
+                <Route path={routes.companyDashboard} element={<Navigate to={routes.company} replace />} />
+                <Route path={routes.companyJobs()} element={<CompanyJobsPage />} />
+                <Route path={routes.companyAnalytics} element={<CompanyAnalyticsPage />} />
+                <Route path={routes.companyApplicants()} element={<CompanyApplicantsPage />} />
+                <Route path={routes.companyPipeline} element={<CompanyApplicantsPage pipeline />} />
+                <Route path={routes.companyShortlisted} element={<CompanyApplicantsPage initialStatus="SHORTLISTED" />} />
+                <Route path={routes.companySettings} element={<CompanySettingsPage />} />
+                <Route path={routes.newCompanyInternship} element={<JobFormPage />} />
+                <Route path={routes.companyJobEdit} element={<JobFormPage />} />
+                <Route path={routes.companyJobApplicantsRoute} element={<JobApplicantsPage />} />
+                <Route path={routes.companyProfile} element={<CompanyProfilePage />} />
+              </Route>
             </Route>
 
             {/* Shared Authenticated Communication Routes */}
-            <Route element={<ProtectedRoute allowedRoles={['STUDENT', 'COMPANY', 'ADMIN']} />}>
-              <Route path="/interviews" element={<InterviewsPage />} />
-              <Route path="/messages" element={<MessagesPage />} />
-              <Route path="/notifications" element={<NotificationsPage />} />
+            <Route element={<ProtectedRoute allowedRoles={['STUDENT', 'COMPANY']} />}>
+              <Route element={<CommunicationLayout />}>
+                <Route path={routes.interviews()} element={<InterviewsPage />} />
+                <Route path={routes.messages()} element={<MessagesPage />} />
+                <Route path={routes.notifications} element={<NotificationsPage />} />
+              </Route>
+            </Route>
+            <Route element={<ProtectedRoute allowedRoles={['COMPANY']} />}>
+              <Route path={routes.legacyCompanyInterviews} element={<Navigate to={routes.interviews({ tab: 'upcoming' })} replace />} />
             </Route>
 
             {/* Admin Oversight Dashboard */}
-            <Route path="/admin/dashboard" element={<Navigate to="/admin" replace />} />
+            <Route path={routes.adminDashboard} element={<Navigate to={routes.admin} replace />} />
             <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
-              <Route path="/admin" element={<AdminDashboardPage />} />
-              <Route path="/admin/users" element={<AdminUsersPage />} />
-              <Route path="/admin/verifications" element={<AdminVerificationsPage />} />
-              <Route path="/admin/moderation" element={<AdminModerationPage />} />
-              <Route path="/admin/reports" element={<AdminReportsPage />} />
-              <Route path="/admin/companies" element={<AdminCompaniesPage />} />
-              <Route path="/admin/companies/:companyId/postings" element={<AdminCompanyPostingsPage />} />
-              <Route path="/admin/audit-logs" element={<AdminAuditLogsPage />} />
+              <Route path={routes.admin} element={<AdminDashboardPage />} />
+              <Route path={routes.adminUsers()} element={<AdminUsersPage />} />
+              <Route path={routes.adminVerifications} element={<AdminVerificationsPage />} />
+              <Route path={routes.adminModeration} element={<AdminModerationPage />} />
+              <Route path={routes.adminReports()} element={<AdminReportsPage />} />
+              <Route path={routes.adminCompanies} element={<AdminCompaniesPage />} />
+              <Route path={routes.adminCompanyPostingsRoute} element={<AdminCompanyPostingsPage />} />
+              <Route path={routes.adminAuditLogsRoute} element={<AdminAuditLogsPage />} />
             </Route>
 
             {/* Privacy & Regulatory Compliance (GDPR / CCPA) */}
-            <Route path="/privacy" element={<PrivacyPolicyPage />} />
-            <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
-            <Route path="/privacy-center" element={<PrivacySecurityPage />} />
-            <Route path="/settings/privacy" element={<PrivacySecurityPage />} />
+            <Route path={routes.privacyPolicy} element={<PrivacyPolicyPage />} />
+            <Route path={routes.legacyPrivacyPolicy} element={<Navigate to={routes.privacyPolicy} replace />} />
+            <Route path={routes.privacyCenter} element={<Navigate to={routes.privacySecurity} replace />} />
+            <Route path={routes.privacySecurity} element={<PrivacySecurityPage />} />
+            <Route path={routes.legacyPrivacySettings} element={<Navigate to={routes.privacySecurity} replace />} />
 
             {/* Fallback */}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
+          </Suspense>
         </main>
 
         <Footer />

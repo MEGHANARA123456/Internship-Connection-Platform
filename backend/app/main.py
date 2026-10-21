@@ -3,8 +3,11 @@
 import asyncio
 from contextlib import asynccontextmanager
 import logging
+from pathlib import Path
 import socket
 
+from alembic import command
+from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
@@ -15,6 +18,53 @@ from app.middleware.security import SecurityMiddleware
 
 logger = logging.getLogger(__name__)
 
+def _run_migrations() -> None:
+    backend_dir = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_dir / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_dir / "alembic"))
+    command.upgrade(config, "head")
+
+async def run_database_migrations() -> None:
+    try:
+        await asyncio.to_thread(_run_migrations)
+    except Exception:
+        logger.exception(
+            "Database is not migrated: run alembic upgrade head"
+        )
+        raise
+    logger.info("Database schema is upgraded to the latest Alembic revision.")
+
+
+async def _interview_reminder_worker() -> None:
+    from app.core.database import async_session_factory
+    from app.services.interview_reminders import send_interview_reminders
+
+    while True:
+        try:
+            async with async_session_factory() as db:
+                await send_interview_reminders(db)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Interview reminder delivery failed.")
+        await asyncio.sleep(60)
+
+
+async def _interview_expiry_worker() -> None:
+    from app.core.database import async_session_factory
+    from app.services.interview_expiry import expire_overdue_interviews
+
+    while True:
+        try:
+            async with async_session_factory() as db:
+                await expire_overdue_interviews(db)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Overdue interview expiry failed.")
+        await asyncio.sleep(300)
+
+
 # Check whether Mailpit is already running before starting a local one.
 def is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -23,7 +73,10 @@ def is_port_in_use(port: int) -> bool:
 # Application startup and shutdown lifecycle.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await run_database_migrations()
     mailpit_task = None
+    reminder_task = asyncio.create_task(_interview_reminder_worker())
+    expiry_task = asyncio.create_task(_interview_expiry_worker())
     if not is_port_in_use(8025):
         try:
             import uvicorn
@@ -35,6 +88,16 @@ async def lifespan(app: FastAPI):
             logger.warning("Could not start embedded Mailpit server: %s", exc)
             pass
     yield
+    reminder_task.cancel()
+    try:
+        await reminder_task
+    except asyncio.CancelledError:
+        pass
+    expiry_task.cancel()
+    try:
+        await expiry_task
+    except asyncio.CancelledError:
+        pass
     if mailpit_task:
         mailpit_task.cancel()
 
@@ -58,6 +121,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Retry-After"],
 )
 app.add_middleware(SecurityMiddleware)
 app.add_exception_handler(Exception, unhandled_exception_handler)

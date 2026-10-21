@@ -14,7 +14,7 @@ afterEach(() => {
 
 async function signIn(role: string, isFirstLogin: boolean) {
   vi.stubEnv('VITE_DEMO_MODE', 'true')
-  vi.stubEnv('VITE_MAILPIT_URL', 'http://localhost:8025')
+  vi.stubEnv('VITE_MAILPIT_URL', 'https://mail.example.test')
   vi.spyOn(api, 'post').mockResolvedValue({
     data: {
       access_token: 'access-token',
@@ -36,7 +36,7 @@ describe('demo mail first-login prompt', () => {
     await signIn('COMPANY', true)
     expect(await screen.findByText('Your emails are delivered to the demo mail inbox')).toBeInTheDocument()
     expect(screen.getByText('After this, find all your emails under Notifications & Mailbox.')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open mail inbox' })).toHaveAttribute('href', 'http://localhost:8025')
+    expect(screen.getByRole('link', { name: 'Open mail inbox' })).toHaveAttribute('href', 'https://mail.example.test')
   })
 
   it('does not show for other roles or a returning company', async () => {

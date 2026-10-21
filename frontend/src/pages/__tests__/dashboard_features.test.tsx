@@ -1,4 +1,5 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import '@testing-library/jest-dom/vitest'
 import { BrowserRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { DesktopAnalysisVisuals } from '../../components/analytics/DesktopAnalysisVisuals'
@@ -82,13 +83,13 @@ describe('Dashboard Features & Buttons', () => {
       <BrowserRouter>
         <DesktopAnalysisVisuals
           variant="admin"
-          title="Platform Ecosystem & Placement Analytics"
+          title="Platform Analytics"
         />
       </BrowserRouter>
     )
 
     await waitFor(() => {
-      expect(screen.getByText('Platform Ecosystem & Placement Analytics')).toBeDefined()
+      expect(screen.getByText('Platform Analytics')).toBeDefined()
     })
 
     // Dedicated refresh button on the top header of the analysis component
@@ -154,6 +155,110 @@ describe('Dashboard Features & Buttons', () => {
     // Interview Scheduling button in header and on the job card
     const interviewButtons = screen.getAllByRole('button', { name: /Interview Scheduling/i })
     expect(interviewButtons.length).toBeGreaterThanOrEqual(2)
+    const applicantButton = screen.getByRole('button', { name: 'View Applicants' })
+    expect(applicantButton).toBeEnabled()
+    expect(applicantButton.className).toContain('h-10')
+    const closeButton = screen.getByRole('button', { name: 'Close Role' })
+    expect(closeButton).toBeEnabled()
+    expect(closeButton.className).toContain('h-10')
+  })
+
+  it('keeps job card actions aligned and disabled until a role is published', async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => {
+      if (url === '/internships/mine') {
+        return { data: ['DRAFT', 'PENDING_APPROVAL'].map((status, index) => ({
+          id: 101 + index,
+          title: `Role ${status}`,
+          status,
+          work_mode: 'REMOTE',
+          industry: 'Software',
+          location: 'Remote',
+          stipend: 1000,
+          duration_months: 3,
+        })) }
+      }
+      return { data: [] }
+    })
+    useAuthStore.setState({
+      session: { accessToken: 'mock-token', refreshToken: 'mock-refresh', role: 'COMPANY', userId: 2 },
+    })
+
+    render(<BrowserRouter><CompanyJobsPage /></BrowserRouter>)
+
+    const applicantButtons = await screen.findAllByRole('button', { name: 'View Applicants' })
+    const schedulingButtons = screen.getAllByRole('button', { name: 'Interview Scheduling' })
+    const closeButtons = screen.getAllByRole('button', { name: 'Close Role' })
+    expect(applicantButtons).toHaveLength(2)
+    expect(schedulingButtons).toHaveLength(3)
+    expect(closeButtons).toHaveLength(2)
+    for (const button of [...applicantButtons, ...schedulingButtons.slice(1), ...closeButtons]) {
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title')
+      expect(button.className).toContain('h-10')
+    }
+  })
+
+  it('shows the close preview choices and submits the selected applicant policy', async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => {
+      if (url === '/internships/mine') {
+        return { data: [{ id: 121, title: 'Platform Intern', status: 'PUBLISHED', work_mode: 'REMOTE', industry: 'Software', location: 'Remote', stipend: 1000, duration_months: 3 }] }
+      }
+      if (url === '/internships/121/close-preview') {
+        return { data: { counts: { APPLIED: 3, UNDER_REVIEW: 1, SHORTLISTED: 2, INTERVIEW_SCHEDULED: 1, SELECTED: 1 }, upcoming_interviews: 1 } }
+      }
+      if (url === '/analytics/overview') {
+        return { data: { company_summary: { active: 1, closed: 0, total_applications: 8 } } }
+      }
+      return { data: [] }
+    })
+    const post = vi.mocked(api.post).mockResolvedValue({ data: { status: 'CLOSED' } } as never)
+    useAuthStore.setState({
+      session: { accessToken: 'mock-token', refreshToken: 'mock-refresh', role: 'COMPANY', userId: 2 },
+    })
+
+    render(<BrowserRouter><CompanyJobsPage /></BrowserRouter>)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Close Role' }))
+    expect(await screen.findByText('Current applicants by status')).toBeTruthy()
+    expect(screen.getByText('3')).toBeTruthy()
+    expect(screen.getByText(/1 upcoming interview scheduled/)).toBeTruthy()
+    expect(screen.getByLabelText(/Keep reviewing existing applicants/)).toBeChecked()
+    expect(screen.getByLabelText(/Reject applicants who are Applied or Under Review/)).not.toBeChecked()
+
+    fireEvent.click(screen.getByLabelText(/Reject applicants who are Applied or Under Review/))
+    fireEvent.change(screen.getByLabelText(/Optional note to rejected applicants/), {
+      target: { value: 'Hiring is paused.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Close role' }))
+
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledWith('/internships/121/close', {
+        reject_pending: true,
+        note: 'Hiring is paused.',
+      })
+    })
+  })
+
+  it('shows a closed badge and disables the already-closed role action only', async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => {
+      if (url === '/internships/mine') {
+        return { data: [{ id: 131, title: 'Closed Platform Intern', status: 'CLOSED', work_mode: 'REMOTE', industry: 'Software', location: 'Remote', stipend: 1000, duration_months: 3, applicant_count: 4 }] }
+      }
+      return { data: { company_summary: { active: 0, closed: 1, total_applications: 4 } } }
+    })
+    useAuthStore.setState({
+      session: { accessToken: 'mock-token', refreshToken: 'mock-refresh', role: 'COMPANY', userId: 2 },
+    })
+
+    render(<BrowserRouter><CompanyJobsPage /></BrowserRouter>)
+
+    expect(await screen.findByText('Closed')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Close Role' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Close Role' })).toHaveAttribute('title', 'Already closed')
+    expect(screen.getByRole('button', { name: 'View Applicants' })).toBeEnabled()
+    const schedulingButtons = screen.getAllByRole('button', { name: /Interview Scheduling/i })
+    expect(schedulingButtons[schedulingButtons.length - 1]).toBeEnabled()
+    expect(screen.getByText(/4 applicants/)).toBeTruthy()
   })
 
   it('renders AdminDashboardPage with the Refresh button on top', async () => {

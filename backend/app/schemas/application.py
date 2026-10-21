@@ -2,7 +2,7 @@
 # Pydantic models for application request and response structures.
 # -----------------------------------------------------------------------------
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -48,6 +48,8 @@ class ApplicationResponse(BaseModel):
     internship_id: int
     student_id: int
     status: ApplicationStatus
+    allowed_next: list[str] = Field(default_factory=list)
+    allowed_actions: list[str] = Field(default_factory=list)
     cover_note: str | None
     offer_signed_name: str | None = None
     offer_signature_mode: str | None = None
@@ -59,8 +61,17 @@ class ApplicationResponse(BaseModel):
     student_skills: list[str] = []
     resume_id: int | None = None
     internship_title: str | None = None
+    internship_location: str | None = None
+    internship_posted_at: datetime | None = None
+    internship_deadline: date | None = None
+    internship_stipend: int | None = None
+    internship_status: str | None = None
+    internship_closed_at: datetime | None = None
     company_name: str | None = None
     company_id: int | None = None
+    has_company_response: bool = False
+    response_time_hours: float | None = None
+    match_score: float | None = None
 
 
 class ApplicationDashboard(BaseModel):

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 
 from app.api.v1.dependencies import DbSession, get_current_user
-from app.core.security import verify_password
+from app.core.security import verify_password_async
 from app.models import (
     Application,
     AuditLog,
@@ -43,7 +43,6 @@ class AccountDeletionRequest(BaseModel):
     password: str = Field(..., min_length=1)
     confirmation_phrase: str = Field(..., description="Must match 'DELETE MY ACCOUNT'")
     reason: str | None = None
-
 
 @router.get("/compliance-info")
 async def get_compliance_info() -> dict[str, Any]:
@@ -76,7 +75,6 @@ async def get_compliance_info() -> dict[str, Any]:
             "Role-Based Access Control (RBAC) and immutable audit logging",
         ],
     }
-
 
 @router.get("/preferences")
 async def get_privacy_preferences(
@@ -111,7 +109,6 @@ async def get_privacy_preferences(
 
     return defaults
 
-
 @router.put("/preferences")
 async def update_privacy_preferences(
     payload: PrivacyPreferencesUpdate,
@@ -139,7 +136,6 @@ async def update_privacy_preferences(
         "message": "Privacy and consent preferences updated successfully.",
         "preferences": pref_data,
     }
-
 
 @router.post("/ccpa-opt-out")
 async def ccpa_opt_out(
@@ -360,7 +356,6 @@ async def export_user_data(
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return JSONResponse(content=export_payload, headers=headers)
 
-
 @router.post("/delete-account")
 async def delete_user_account(
     payload: AccountDeletionRequest,
@@ -377,7 +372,7 @@ async def delete_user_account(
             detail="Confirmation phrase mismatch. Please enter 'DELETE MY ACCOUNT' to verify intent.",
         )
 
-    if not verify_password(payload.password, user.password_hash):
+    if not await verify_password_async(payload.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect password. Authentication verification failed.",

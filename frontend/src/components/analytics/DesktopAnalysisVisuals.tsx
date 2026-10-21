@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { lazy, Suspense, useState, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import {
   TrendingUp,
@@ -23,17 +23,41 @@ import {
   Users,
   Briefcase,
   ShieldCheck,
-  FileText,
   AlertCircle,
 } from 'lucide-react'
 import { api } from '../../api/client'
+import { routes } from '../../lib/routes'
+import { Button } from '../ui/Button'
+import { Card } from '../ui/Card'
+import { ChartSkeleton, KpiSkeleton, Spinner } from '../ui/LoadingSkeleton'
+import { useAuthStore } from '../../store/auth'
+import { ChartLegend } from '../charts/ChartLegend'
+import { chartColorFor } from '../charts/chartColors'
+
+const ResponsiveOverviewChart = lazy(async () => {
+  const module = await import('./ResponsiveOverviewChart')
+  return { default: module.ResponsiveOverviewChart }
+})
+const RoleAnalyticsCharts = lazy(async () => {
+  const module = await import('./AnalyticsInsights')
+  return { default: module.RoleAnalyticsCharts }
+})
+const CompanyPerformanceCharts = lazy(async () => {
+  const module = await import('./AnalyticsInsights')
+  return { default: module.CompanyPerformanceCharts }
+})
+const UnifiedAnalyticsCard = lazy(async () => {
+  const module = await import('./UnifiedAnalyticsCard')
+  return { default: module.UnifiedAnalyticsCard }
+})
 
 export interface DesktopAnalysisVisualsProps {
   title?: string
   subtitle?: string
-  variant?: 'student' | 'company' | 'admin' | 'public' | 'institution'
+  variant?: 'student' | 'company' | 'admin' | 'public'
   refreshKey?: number
   onRefreshed?: () => void
+  fullAnalyticsMenu?: boolean
 }
 
 interface AnalyticsData {
@@ -42,6 +66,7 @@ interface AnalyticsData {
   funnel: {
     applied: number
     screened: number
+    shortlisted?: number
     interviews: number
     offers: number
   }
@@ -65,23 +90,37 @@ interface AnalyticsData {
 type TimeRangeOption = 'ALL' | '30D' | '90D' | 'QUARTER'
 
 export function DesktopAnalysisVisuals({
-  title = 'Recruitment & Placement Analytics',
-  subtitle = 'Real-time pipeline progression, placement velocity, and ecosystem trends',
+  title = 'Recruitment Analytics',
+  subtitle = 'Real-time pipeline progression, hiring velocity, and ecosystem trends',
   variant = 'public',
   refreshKey,
   onRefreshed,
+  fullAnalyticsMenu = false,
 }: DesktopAnalysisVisualsProps) {
-  const [activeTab, setActiveTab] = useState<'funnel' | 'trends' | 'domains' | 'market'>('funnel')
+  const userId = useAuthStore((state) => state.session?.userId)
+  const userScopedStorageKey = `analytics-selected-chart:${variant}:${userId ?? 'guest'}`
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    if (!fullAnalyticsMenu || typeof window === 'undefined') return 'funnel'
+    return window.sessionStorage.getItem(userScopedStorageKey) || 'funnel'
+  })
   const [hoveredMonth, setHoveredMonth] = useState<number | null>(null)
   const [hoveredDomain, setHoveredDomain] = useState<number | null>(null)
+  const [hiddenTrendSeries, setHiddenTrendSeries] = useState<string[]>([])
+  const [hiddenDomains, setHiddenDomains] = useState<string[]>([])
+  const [hiddenFunnelStages, setHiddenFunnelStages] = useState<string[]>([])
+  const [highlightedDashboardSeries, setHighlightedDashboardSeries] = useState<string | null>(null)
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [roleRefreshKey, setRoleRefreshKey] = useState(0)
 
   // Interactive Visuals Action Menu state
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isViewMenuOpen, setIsViewMenuOpen] = useState(false)
   const [timeRange, setTimeRange] = useState<TimeRangeOption>('ALL')
+  const [performanceRange, setPerformanceRange] = useState<'30' | '90' | 'all'>('30')
+  const [isPerformanceRangeMenuOpen, setIsPerformanceRangeMenuOpen] = useState(false)
   const [showPercentages, setShowPercentages] = useState(true)
   const [showMetricBadges, setShowMetricBadges] = useState(true)
   const [showStageDropoffs, setShowStageDropoffs] = useState(true)
@@ -91,12 +130,71 @@ export function DesktopAnalysisVisuals({
   const viewMenuRef = useRef<HTMLDivElement>(null)
   const viewTriggerRef = useRef<HTMLButtonElement>(null)
   const viewItemRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const viewOptions = [
+  const legacyViewOptions = [
     { key: 'funnel', label: 'Pipeline Funnel', icon: Filter },
     { key: 'trends', label: 'Activity Trends', icon: TrendingUp },
     { key: 'domains', label: 'Role Domains', icon: PieChart },
     { key: 'market', label: 'Work Modes', icon: Layers },
-  ] as const
+  ]
+  const fullViewGroups = variant === 'company' ? [
+    { label: 'Funnel & conversion', items: [
+      { key: 'funnel', label: 'Pipeline funnel', icon: Filter },
+      { key: 'conversion_role', label: 'Conversion per role', icon: BarChart3 },
+    ] },
+    { label: 'Activity & velocity', items: [
+      { key: 'trends', label: 'Activity trends', icon: TrendingUp },
+      { key: 'response_time', label: 'Time to first response', icon: Clock },
+      { key: 'time_to_hire', label: 'Time to hire', icon: Clock },
+    ] },
+    { label: 'Status & quality', items: [
+      { key: 'status_mix', label: 'Status mix donut', icon: PieChart },
+      { key: 'match_distribution', label: 'Match-score distribution', icon: BarChart3 },
+      { key: 'skills_required', label: 'Top skills vs required', icon: Award },
+    ] },
+    { label: 'Outcomes', items: [
+      { key: 'interview_outcomes', label: 'Interview outcomes', icon: Users },
+      { key: 'offer_acceptance', label: 'Offer acceptance', icon: Check },
+      { key: 'top_universities', label: 'Top universities', icon: Briefcase },
+      { key: 'applications_by_role', label: 'Applications by role', icon: BarChart3 },
+    ] },
+  ] : variant === 'student' ? [
+    { label: 'Funnel & conversion', items: [{ key: 'funnel', label: 'Pipeline funnel', icon: Filter }] },
+    { label: 'Activity & velocity', items: [
+      { key: 'trends', label: 'Activity trends', icon: TrendingUp },
+      { key: 'applications_week', label: 'Applications per week', icon: BarChart3 },
+      { key: 'response_time', label: 'Time to first response', icon: Clock },
+    ] },
+    { label: 'Status & quality', items: [
+      { key: 'status_mix', label: 'Status mix donut', icon: PieChart },
+      { key: 'match_score', label: 'Average match score', icon: Award },
+      { key: 'skills_gap', label: 'Skills to learn', icon: Briefcase },
+    ] },
+    { label: 'Outcomes', items: [{ key: 'response_rate', label: 'Response rate', icon: Activity }] },
+  ] : [
+    { label: 'Funnel & conversion', items: [{ key: 'funnel', label: 'Pipeline funnel', icon: Filter }] },
+    { label: 'Activity & velocity', items: [
+      { key: 'trends', label: 'Activity trends', icon: TrendingUp },
+      { key: 'user_growth', label: 'User growth', icon: Users },
+      { key: 'admin_actions', label: 'Admin action volume by action', icon: Activity },
+    ] },
+  ]
+  const viewOptions = fullAnalyticsMenu ? fullViewGroups.flatMap((group) => group.items) : legacyViewOptions
+  const selectedStorageKey = useRef(userScopedStorageKey)
+
+  useEffect(() => {
+    if (!fullAnalyticsMenu) return
+    if (selectedStorageKey.current !== userScopedStorageKey) {
+      selectedStorageKey.current = userScopedStorageKey
+      const stored = window.sessionStorage.getItem(userScopedStorageKey)
+      setActiveTab(viewOptions.some((view) => view.key === stored) ? stored! : 'funnel')
+      return
+    }
+    if (!viewOptions.some((view) => view.key === activeTab)) setActiveTab('funnel')
+  }, [activeTab, fullAnalyticsMenu, userScopedStorageKey, viewOptions])
+
+  useEffect(() => {
+    if (fullAnalyticsMenu) window.sessionStorage.setItem(userScopedStorageKey, activeTab)
+  }, [activeTab, fullAnalyticsMenu, userScopedStorageKey])
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
@@ -180,7 +278,7 @@ export function DesktopAnalysisVisuals({
     }
   }
 
-  const selectView = (view: (typeof viewOptions)[number]['key']) => {
+  const selectView = (view: string) => {
     setActiveTab(view)
     setIsViewMenuOpen(false)
     viewTriggerRef.current?.focus()
@@ -188,26 +286,13 @@ export function DesktopAnalysisVisuals({
 
   const fetchAnalytics = async () => {
     setIsRefreshing(true)
+    setLoadError(false)
     try {
       const res = await api.get('/analytics/overview')
       setAnalytics(res.data)
       onRefreshed?.()
     } catch {
-      setAnalytics({
-        role: variant.toUpperCase(),
-        has_activity: false,
-        funnel: { applied: 0, screened: 0, interviews: 0, offers: 0 },
-        domains: [],
-        monthly_trends: [
-          { month: 'Jun', apps: 0, interviews: 0, offers: 0 },
-          { month: 'Jul', apps: 0, interviews: 0, offers: 0 },
-          { month: 'Aug', apps: 0, interviews: 0, offers: 0 },
-          { month: 'Sep', apps: 0, interviews: 0, offers: 0 },
-        ],
-        total_active_internships: 0,
-        total_verified_students: 0,
-        total_companies: 0,
-      })
+      setLoadError(true)
     } finally {
       setIsRefreshing(false)
       setLoading(false)
@@ -215,13 +300,14 @@ export function DesktopAnalysisVisuals({
   }
 
   useEffect(() => {
-    fetchAnalytics()
-  }, [variant, refreshKey])
+    if (!fullAnalyticsMenu) void fetchAnalytics()
+  }, [variant, refreshKey, fullAnalyticsMenu])
 
   // Raw API counts with fallback safety
   const rawApplied = analytics?.funnel?.applied || 0
   const rawScreened = analytics?.funnel?.screened || 0
   const rawInterviews = analytics?.funnel?.interviews || 0
+  const rawShortlisted = analytics?.funnel?.shortlisted ?? rawInterviews
   const rawOffers = analytics?.funnel?.offers || 0
 
   const rawMonthlyTrends =
@@ -238,6 +324,7 @@ export function DesktopAnalysisVisuals({
   let filteredMonthlyTrends = [...rawMonthlyTrends]
   let appliedCount = rawApplied
   let screenedCount = rawScreened
+  let shortlistedCount = rawShortlisted
   let interviewsCount = rawInterviews
   let offersCount = rawOffers
 
@@ -249,6 +336,7 @@ export function DesktopAnalysisVisuals({
     interviewsCount = latestMonth.interviews
     offersCount = latestMonth.offers
     screenedCount = Math.min(appliedCount, Math.round(appliedCount * (rawScreened / Math.max(rawApplied, 1))))
+    shortlistedCount = Math.min(appliedCount, Math.round(appliedCount * (rawShortlisted / Math.max(rawApplied, 1))))
   } else if (timeRange === '90D' || timeRange === 'QUARTER') {
     // 90 Days / Current Quarter: Last 3 months in trend series
     filteredMonthlyTrends = rawMonthlyTrends.slice(-3)
@@ -256,6 +344,7 @@ export function DesktopAnalysisVisuals({
     interviewsCount = filteredMonthlyTrends.reduce((acc, curr) => acc + (curr.interviews || 0), 0)
     offersCount = filteredMonthlyTrends.reduce((acc, curr) => acc + (curr.offers || 0), 0)
     screenedCount = Math.min(appliedCount, Math.round(appliedCount * (rawScreened / Math.max(rawApplied, 1))))
+    shortlistedCount = Math.min(appliedCount, Math.round(appliedCount * (rawShortlisted / Math.max(rawApplied, 1))))
   }
 
   // Domain Breakdown with recomputed proportional percentages
@@ -291,18 +380,18 @@ export function DesktopAnalysisVisuals({
       bg: 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800',
     },
     {
-      name: 'Interview Shortlist',
-      count: interviewsCount,
-      pct: appliedCount > 0 ? Math.round((interviewsCount / appliedCount) * 100) : 0,
+      name: 'Shortlisted',
+      count: shortlistedCount,
+      pct: appliedCount > 0 ? Math.round((shortlistedCount / appliedCount) * 100) : 0,
       dropoff:
         appliedCount > 0
           ? `-${Math.max(
               0,
               Math.round((screenedCount / appliedCount) * 100) -
-                Math.round((interviewsCount / appliedCount) * 100)
+                Math.round((shortlistedCount / appliedCount) * 100)
             )}%`
           : '0%',
-      velocity: 'Live Discussions',
+      velocity: 'Shortlisted applications',
       color: 'from-violet-600 to-violet-500',
       bg: 'bg-violet-50 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 border-violet-200 dark:border-violet-800',
     },
@@ -314,7 +403,7 @@ export function DesktopAnalysisVisuals({
         appliedCount > 0
           ? `-${Math.max(
               0,
-              Math.round((interviewsCount / appliedCount) * 100) -
+              Math.round((shortlistedCount / appliedCount) * 100) -
                 Math.round((offersCount / appliedCount) * 100)
             )}%`
           : '0%',
@@ -327,7 +416,13 @@ export function DesktopAnalysisVisuals({
   // SVG dimensions for trend chart
   const svgWidth = 600
   const svgHeight = 220
-  const maxApps = Math.max(...filteredMonthlyTrends.map((d) => d.apps), 5)
+  const maxApps = Math.max(
+    ...filteredMonthlyTrends.flatMap((item) => [
+      ...(hiddenTrendSeries.includes('Applications') ? [] : [item.apps]),
+      ...(hiddenTrendSeries.includes('Offers') ? [] : [item.offers]),
+    ]),
+    1,
+  )
 
   const points = filteredMonthlyTrends.map((d, i) => {
     const x = 50 + (i * (svgWidth - 90)) / (filteredMonthlyTrends.length - 1 || 1)
@@ -433,15 +528,32 @@ export function DesktopAnalysisVisuals({
     window.print()
   }
 
-  if (loading) {
+  if (fullAnalyticsMenu) {
     return (
-      <div className="w-full bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-xs animate-pulse space-y-4">
-        <div className="h-6 w-48 bg-slate-200 dark:bg-slate-800 rounded-md" />
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-28 bg-slate-100 dark:bg-slate-800/60 rounded-xl" />
-          ))}
+      <Suspense fallback={<div className="space-y-4"><div className="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-6">{[0, 1, 2, 3, 4, 5].map((item) => <KpiSkeleton key={item} />)}</div><ChartSkeleton /></div>}>
+        <UnifiedAnalyticsCard
+          variant={variant === 'public' ? 'student' : variant}
+          title={title}
+          subtitle={subtitle}
+          refreshKey={(refreshKey ?? 0) + roleRefreshKey}
+          onRefreshed={onRefreshed}
+        />
+      </Suspense>
+    )
+  }
+
+  if ((loadError || !analytics) && !fullAnalyticsMenu) {
+    return (
+      <div className="space-y-4">
+        <div role="alert" className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+          <p>Couldn't load pipeline analytics.</p>
+          <Button size="sm" variant="outline" isLoading={isRefreshing} onClick={() => void fetchAnalytics()}>Retry</Button>
         </div>
+        {variant === 'company' && !fullAnalyticsMenu && (
+          <Suspense fallback={<ChartSkeleton />}>
+            <CompanyPerformanceCharts range={performanceRange} refreshKey={refreshKey} />
+          </Suspense>
+        )}
       </div>
     )
   }
@@ -472,33 +584,35 @@ export function DesktopAnalysisVisuals({
         </div>
 
         {/* View Switcher Tabs & Actions Menu on analysis top */}
-        <div className="flex shrink-0 items-center gap-2 self-start lg:self-auto">
-          <div className="relative" ref={viewMenuRef}>
+        <div className={fullAnalyticsMenu ? 'flex w-full min-w-0 flex-wrap items-center gap-2 self-stretch sm:w-auto sm:flex-nowrap sm:self-start lg:self-auto' : 'flex shrink-0 items-center gap-2 self-start lg:self-auto'}>
+          <div className={fullAnalyticsMenu ? 'relative w-full md:w-auto' : 'relative'} ref={viewMenuRef}>
             {(() => {
               const selectedView = viewOptions.find((view) => view.key === activeTab) ?? viewOptions[0]
               const SelectedIcon = selectedView.icon
               return (
                 <>
-                  <button
-                    ref={viewTriggerRef}
-                    type="button"
-                    onClick={() => setIsViewMenuOpen((open) => !open)}
-                    onKeyDown={(event) => {
-                      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-                        event.preventDefault()
-                        setIsViewMenuOpen(true)
-                      }
-                    }}
-                    className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs transition-all hover:bg-white hover:text-indigo-600 dark:border-slate-700/60 dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-indigo-400"
-                    aria-label={`Analytics view: ${selectedView.label}`}
-                    aria-haspopup="menu"
-                    aria-expanded={isViewMenuOpen}
-                    aria-controls="analytics-view-menu"
-                  >
-                    <SelectedIcon className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
-                    <span>{selectedView.label}</span>
-                    <ChevronDown className={`h-3 w-3 transition-transform ${isViewMenuOpen ? 'rotate-180' : ''}`} />
-                  </button>
+                  <div>
+                    <button
+                      ref={viewTriggerRef}
+                      type="button"
+                      onClick={() => setIsViewMenuOpen((open) => !open)}
+                      onKeyDown={(event) => {
+                        if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+                          event.preventDefault()
+                          setIsViewMenuOpen(true)
+                        }
+                      }}
+                      className={`flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs transition-all hover:bg-white hover:text-indigo-600 dark:border-slate-700/60 dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-indigo-400 ${fullAnalyticsMenu ? 'w-full justify-between' : ''}`}
+                      aria-label={`Analytics view: ${selectedView.label}`}
+                      aria-haspopup="menu"
+                      aria-expanded={isViewMenuOpen}
+                      aria-controls="analytics-view-menu"
+                    >
+                      <SelectedIcon className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>{selectedView.label}</span>
+                      <ChevronDown className={`h-3 w-3 transition-transform ${isViewMenuOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
                   {isViewMenuOpen && (
                     <div
                       id="analytics-view-menu"
@@ -506,31 +620,45 @@ export function DesktopAnalysisVisuals({
                       aria-label="Analytics views"
                       className="absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl dark:border-slate-800 dark:bg-slate-900"
                     >
-                      {viewOptions.map((view, index) => {
+                      {fullAnalyticsMenu ? fullViewGroups.map((group) => (
+                        <div key={group.label} role="group" aria-label={group.label} className="py-1">
+                          <p className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">{group.label}</p>
+                          {group.items.map((view) => {
+                            const index = viewOptions.findIndex((item) => item.key === view.key)
+                            const Icon = view.icon
+                            const isActive = activeTab === view.key
+                            return <button
+                              key={view.key}
+                              ref={(element) => { viewItemRefs.current[index] = element }}
+                              type="button"
+                              role="menuitem"
+                              aria-current={isActive ? 'true' : undefined}
+                              tabIndex={-1}
+                              onClick={() => selectView(view.key)}
+                              onKeyDown={(event) => handleViewMenuKeyDown(event, index)}
+                              className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs font-medium transition-colors ${isActive ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300' : 'text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'}`}
+                            >
+                              <span className="flex items-center gap-2"><Icon className="h-3.5 w-3.5" />{view.label}</span>
+                              {isActive && <Check className="h-3.5 w-3.5" aria-label="Selected" />}
+                            </button>
+                          })}
+                        </div>
+                      )) : viewOptions.map((view, index) => {
                         const Icon = view.icon
                         const isActive = activeTab === view.key
-                        return (
-                          <button
-                            key={view.key}
-                            ref={(element) => { viewItemRefs.current[index] = element }}
-                            type="button"
-                            role="menuitem"
-                            tabIndex={-1}
-                            onClick={() => selectView(view.key)}
-                            onKeyDown={(event) => handleViewMenuKeyDown(event, index)}
-                            className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs font-medium transition-colors ${
-                              isActive
-                                ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
-                                : 'text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
-                            }`}
-                          >
-                            <span className="flex items-center gap-2">
-                              <Icon className="h-3.5 w-3.5" />
-                              {view.label}
-                            </span>
-                            {isActive && <Check className="h-3.5 w-3.5" aria-label="Selected" />}
-                          </button>
-                        )
+                        return <button
+                          key={view.key}
+                          ref={(element) => { viewItemRefs.current[index] = element }}
+                          type="button"
+                          role="menuitem"
+                          tabIndex={-1}
+                          onClick={() => selectView(view.key)}
+                          onKeyDown={(event) => handleViewMenuKeyDown(event, index)}
+                          className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs font-medium transition-colors ${isActive ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300' : 'text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'}`}
+                        >
+                          <span className="flex items-center gap-2"><Icon className="h-3.5 w-3.5" />{view.label}</span>
+                          {isActive && <Check className="h-3.5 w-3.5" aria-label="Selected" />}
+                        </button>
                       })}
                     </div>
                   )}
@@ -539,15 +667,42 @@ export function DesktopAnalysisVisuals({
             })()}
           </div>
 
+          {variant === 'company' && (
+            <div className="relative">
+              <button
+                type="button"
+                aria-label="Company analytics range"
+                aria-haspopup="menu"
+                aria-expanded={isPerformanceRangeMenuOpen}
+                onClick={() => setIsPerformanceRangeMenuOpen((open) => !open)}
+                className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:border-slate-700/60 dark:bg-slate-800/80 dark:text-slate-300"
+              >
+                {performanceRange === 'all' ? 'All' : `${performanceRange} days`}<ChevronDown className="h-3 w-3" />
+              </button>
+              {isPerformanceRangeMenuOpen && (
+                <div role="menu" aria-label="Company analytics time range" className="absolute right-0 top-full z-30 mt-1 w-32 rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                  {(['30', '90', 'all'] as const).map((range) => (
+                    <button key={range} type="button" role="menuitemradio" aria-checked={performanceRange === range} onClick={() => { setPerformanceRange(range); setIsPerformanceRangeMenuOpen(false) }} className="block w-full rounded-md px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">
+                      {range === 'all' ? 'All' : `${range} days`}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Refresh Action */}
           <button
             type="button"
-            onClick={fetchAnalytics}
+            onClick={() => {
+              setRoleRefreshKey((key) => key + 1)
+              void fetchAnalytics()
+            }}
             disabled={isRefreshing}
             title="Refresh analysis data"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700/60 hover:bg-white dark:hover:bg-slate-900 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all cursor-pointer shadow-2xs disabled:opacity-50"
           >
-            <RefreshCw className={`w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? <Spinner className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" /> : <RefreshCw className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
             <span className="hidden sm:inline">{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
           </button>
 
@@ -727,7 +882,7 @@ export function DesktopAnalysisVisuals({
                     {variant === 'student' && (
                       <>
                         <Link
-                          to="/student/applications"
+                          to={routes.applications()}
                           onClick={() => setIsMenuOpen(false)}
                           className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
@@ -738,7 +893,7 @@ export function DesktopAnalysisVisuals({
                           <ExternalLink className="w-3 h-3 text-slate-400" />
                         </Link>
                         <Link
-                          to="/student/saved"
+                          to={routes.saved}
                           onClick={() => setIsMenuOpen(false)}
                           className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
@@ -749,7 +904,7 @@ export function DesktopAnalysisVisuals({
                           <ExternalLink className="w-3 h-3 text-slate-400" />
                         </Link>
                         <Link
-                          to="/student/profile"
+                          to={routes.studentProfile}
                           onClick={() => setIsMenuOpen(false)}
                           className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
@@ -765,7 +920,7 @@ export function DesktopAnalysisVisuals({
                     {variant === 'company' && (
                       <>
                         <Link
-                          to="/company/applications"
+                          to={routes.companyApplicants()}
                           onClick={() => setIsMenuOpen(false)}
                           className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
@@ -776,7 +931,7 @@ export function DesktopAnalysisVisuals({
                           <ExternalLink className="w-3 h-3 text-slate-400" />
                         </Link>
                         <Link
-                          to="/company/jobs"
+                          to={routes.companyJobs()}
                           onClick={() => setIsMenuOpen(false)}
                           className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
@@ -787,7 +942,7 @@ export function DesktopAnalysisVisuals({
                           <ExternalLink className="w-3 h-3 text-slate-400" />
                         </Link>
                         <Link
-                          to="/interviews"
+                          to={routes.interviews({ tab: 'upcoming' })}
                           onClick={() => setIsMenuOpen(false)}
                           className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
@@ -803,7 +958,7 @@ export function DesktopAnalysisVisuals({
                     {variant === 'admin' && (
                       <>
                         <Link
-                          to="/admin/verifications"
+                          to={routes.adminVerifications}
                           onClick={() => setIsMenuOpen(false)}
                           className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
@@ -814,7 +969,7 @@ export function DesktopAnalysisVisuals({
                           <ExternalLink className="w-3 h-3 text-slate-400" />
                         </Link>
                         <Link
-                          to="/admin/internships"
+                          to={routes.adminModeration}
                           onClick={() => setIsMenuOpen(false)}
                           className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
@@ -825,7 +980,7 @@ export function DesktopAnalysisVisuals({
                           <ExternalLink className="w-3 h-3 text-slate-400" />
                         </Link>
                         <Link
-                          to="/admin/reports"
+                          to={routes.adminReports()}
                           onClick={() => setIsMenuOpen(false)}
                           className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
@@ -838,21 +993,10 @@ export function DesktopAnalysisVisuals({
                       </>
                     )}
 
-                    {(variant === 'public' || variant === 'institution') && (
+                    {variant === 'public' && (
                       <>
                         <Link
-                          to="/institution/portal"
-                          onClick={() => setIsMenuOpen(false)}
-                          className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
-                        >
-                          <span className="flex items-center gap-1.5">
-                            <FileText className="w-3.5 h-3.5 text-indigo-500" />
-                            College TPO Portal
-                          </span>
-                          <ExternalLink className="w-3 h-3 text-slate-400" />
-                        </Link>
-                        <Link
-                          to="/opportunities"
+                          to={routes.opportunities}
                           onClick={() => setIsMenuOpen(false)}
                           className="flex items-center justify-between p-1.5 px-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-indigo-600 dark:hover:text-indigo-400"
                         >
@@ -872,8 +1016,61 @@ export function DesktopAnalysisVisuals({
         </div>
       </div>
 
-      {/* Primary Visual Display Area */}
-      {activeTab === 'funnel' && (
+      {fullAnalyticsMenu && variant !== 'public' && (
+        <Suspense fallback={<div className="space-y-4"><div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">{[0, 1, 2, 3, 4, 5].map((item) => <KpiSkeleton key={item} />)}</div><ChartSkeleton /></div>}>
+          <RoleAnalyticsCharts
+            variant={variant}
+            chart={activeTab}
+            range={performanceRange}
+            refreshKey={(refreshKey ?? 0) + roleRefreshKey}
+          />
+        </Suspense>
+      )}
+
+      {variant === 'company' && !fullAnalyticsMenu && (
+        <Suspense fallback={<ChartSkeleton />}>
+          <CompanyPerformanceCharts range={performanceRange} refreshKey={refreshKey} />
+        </Suspense>
+      )}
+
+      {fullAnalyticsMenu && (activeTab === 'funnel' || activeTab === 'trends') && (loading || loadError || !analytics) ? (
+        loading ? <ChartSkeleton /> : (
+          <div role="alert" className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white p-5 text-center text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+            <p>Couldn't load this chart.</p>
+            <Button size="sm" variant="outline" isLoading={isRefreshing} onClick={() => void fetchAnalytics()}>Retry</Button>
+          </div>
+        )
+      ) : null}
+
+      {activeTab === 'funnel' && fullAnalyticsMenu && analytics && !loading && !loadError && (
+        <Card data-chart-panel className="min-w-0 space-y-3 bg-white p-4 dark:bg-slate-900 sm:p-5">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="text-sm font-bold text-slate-900 dark:text-white">Pipeline funnel</h4>
+            <span className="sr-only">Sample size: {appliedCount} applications · {timeRange === 'ALL' ? 'All time' : timeRange === '30D' ? 'Last 30 days' : 'Last 90 days'}</span>
+          </div>
+          {appliedCount === 0 ? (
+            <p className="flex min-h-36 items-center justify-center rounded-xl border border-dashed border-slate-200 px-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">No data to display yet. Your funnel will appear as applications progress.</p>
+          ) : (
+            <Suspense fallback={<ChartSkeleton className="border-0 bg-transparent p-0 dark:bg-transparent" />}>
+              <ResponsiveOverviewChart
+                type="funnel"
+                label="Recruitment pipeline funnel"
+                items={funnelStages.map((stage) => ({
+                  label: stage.name,
+                  value: stage.count,
+                  detail: [
+                    showPercentages ? `${stage.pct}%` : '',
+                    showStageDropoffs && stage.dropoff !== '0%' ? `drop-off ${stage.dropoff}` : '',
+                    showMetricBadges ? stage.velocity : '',
+                  ].filter(Boolean).join(' · '),
+                }))}
+              />
+            </Suspense>
+          )}
+        </Card>
+      )}
+
+      {activeTab === 'funnel' && !fullAnalyticsMenu && (
         <div className="space-y-4 animate-in fade-in duration-200">
           {appliedCount === 0 && (
             <div className="p-3.5 bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 rounded-xl flex items-center justify-between gap-3 text-xs text-indigo-800 dark:text-indigo-300">
@@ -939,15 +1136,15 @@ export function DesktopAnalysisVisuals({
               </span>
             </div>
             <div className="space-y-2">
-              {funnelStages.map((stage) => (
+              {funnelStages.filter((stage) => !hiddenFunnelStages.includes(stage.name)).map((stage) => (
                 <div key={stage.name} className="flex items-center gap-3">
                   <span className="w-44 text-xs text-slate-600 dark:text-slate-400 font-medium truncate">
                     {stage.name}
                   </span>
                   <div className="flex-1 h-3.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden relative">
                     <div
-                      className={`h-full bg-gradient-to-r ${stage.color} rounded-full transition-all duration-700`}
-                      style={{ width: `${Math.max(stage.pct, stage.count > 0 ? 4 : 0)}%` }}
+                      className="h-full rounded-full transition-all duration-700"
+                      style={{ width: `${Math.max(stage.pct, stage.count > 0 ? 4 : 0)}%`, backgroundColor: chartColorFor(stage.name), opacity: highlightedDashboardSeries === null || highlightedDashboardSeries === stage.name ? 1 : 0.25 }}
                     />
                   </div>
                   <span className="w-14 text-right text-xs font-mono font-bold text-slate-800 dark:text-slate-200">
@@ -956,23 +1153,53 @@ export function DesktopAnalysisVisuals({
                 </div>
               ))}
             </div>
+            <ChartLegend
+              items={funnelStages.map((stage) => ({ id: stage.name, label: stage.name, color: chartColorFor(stage.name), value: stage.count }))}
+              hiddenItems={hiddenFunnelStages}
+              onToggle={(id) => setHiddenFunnelStages((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
+              onHighlight={setHighlightedDashboardSeries}
+              className="mt-3"
+            />
           </div>
         </div>
       )}
 
-      {activeTab === 'trends' && (
+      {activeTab === 'trends' && fullAnalyticsMenu && analytics && !loading && !loadError && (
+        <Card className="min-w-0 space-y-3 bg-white p-4 dark:bg-slate-900 sm:p-5">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="text-sm font-bold text-slate-900 dark:text-white">Activity trends</h4>
+            <span className="sr-only">Sample size: {appliedCount} applications · {timeRange === 'ALL' ? 'All time' : timeRange === '30D' ? 'Last 30 days' : 'Last 90 days'}</span>
+          </div>
+          {filteredMonthlyTrends.length === 0 ? (
+            <p className="flex min-h-36 items-center justify-center rounded-xl border border-dashed border-slate-200 px-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">No data to display yet. Activity trends will appear as applications arrive.</p>
+          ) : (
+            <Suspense fallback={<ChartSkeleton className="border-0 bg-transparent p-0 dark:bg-transparent" />}>
+              <ResponsiveOverviewChart
+                type="activity"
+                label="Monthly applications and offers"
+                series={[
+                  { label: 'Applications filed', color: '#4f46e5', values: filteredMonthlyTrends.map((item) => ({ label: item.month, value: item.apps })) },
+                  { label: 'Interviews', color: '#8b5cf6', values: filteredMonthlyTrends.map((item) => ({ label: item.month, value: item.interviews })) },
+                  { label: 'Offers', color: '#10b981', values: filteredMonthlyTrends.map((item) => ({ label: item.month, value: item.offers })) },
+                ]}
+              />
+            </Suspense>
+          )}
+        </Card>
+      )}
+
+      {activeTab === 'trends' && !fullAnalyticsMenu && (
         <div className="space-y-4 animate-in fade-in duration-200">
           <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full bg-indigo-600" />
-                <span className="text-slate-700 dark:text-slate-300 font-medium">Applications Filed</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full bg-emerald-500" />
-                <span className="text-slate-700 dark:text-slate-300 font-medium">Final Offers Accepted</span>
-              </div>
-            </div>
+            <ChartLegend
+              items={[
+                { id: 'Applications', label: 'Applications Filed', color: chartColorFor('Applications'), shape: 'line' },
+                { id: 'Offers', label: 'Final Offers Accepted', color: chartColorFor('Offers'), shape: 'line' },
+              ]}
+              hiddenItems={hiddenTrendSeries}
+              onToggle={(id) => setHiddenTrendSeries((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
+              onHighlight={setHighlightedDashboardSeries}
+            />
             <span className="text-slate-500 dark:text-slate-400 text-xs">
               Showing {timeRange} trends • Hover over points to inspect live monthly metrics
             </span>
@@ -989,12 +1216,12 @@ export function DesktopAnalysisVisuals({
               <title>Monthly applications and offers</title>
               <defs>
                 <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.35" />
-                  <stop offset="100%" stopColor="#4f46e5" stopOpacity="0.0" />
+                  <stop offset="0%" stopColor={chartColorFor('Applications')} stopOpacity="0.35" />
+                  <stop offset="100%" stopColor={chartColorFor('Applications')} stopOpacity="0.0" />
                 </linearGradient>
                 <linearGradient id="emeraldGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
-                  <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+                  <stop offset="0%" stopColor={chartColorFor('Offers')} stopOpacity="0.3" />
+                  <stop offset="100%" stopColor={chartColorFor('Offers')} stopOpacity="0.0" />
                 </linearGradient>
               </defs>
 
@@ -1024,14 +1251,15 @@ export function DesktopAnalysisVisuals({
               })}
 
               {/* Area gradient under apps curve */}
-              {areaPath && <path d={areaPath} fill="url(#chartGradient)" />}
+              {!hiddenTrendSeries.includes('Applications') && areaPath && <path d={areaPath} fill="url(#chartGradient)" opacity={highlightedDashboardSeries === null || highlightedDashboardSeries === 'Applications' ? 1 : 0.2} />}
 
               {/* Applications line */}
-              {linePath && (
+              {!hiddenTrendSeries.includes('Applications') && linePath && (
                 <path
                   d={linePath}
                   fill="none"
-                  stroke="#4f46e5"
+                  stroke={chartColorFor('Applications')}
+                  opacity={highlightedDashboardSeries === null || highlightedDashboardSeries === 'Applications' ? 1 : 0.2}
                   strokeWidth="3"
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -1039,11 +1267,12 @@ export function DesktopAnalysisVisuals({
               )}
 
               {/* Offers line */}
-              {offerLinePath && (
+              {!hiddenTrendSeries.includes('Offers') && offerLinePath && (
                 <path
                   d={offerLinePath}
                   fill="none"
-                  stroke="#10b981"
+                  stroke={chartColorFor('Offers')}
+                  opacity={highlightedDashboardSeries === null || highlightedDashboardSeries === 'Offers' ? 1 : 0.2}
                   strokeWidth="2.5"
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -1053,23 +1282,25 @@ export function DesktopAnalysisVisuals({
               {/* Data points */}
               {points.map((p, idx) => (
                 <g key={idx}>
-                  <circle
+                  {!hiddenTrendSeries.includes('Applications') && <circle
                     cx={p.x}
                     cy={p.y}
                     r={hoveredMonth === idx ? 7 : 5}
-                    fill="#4f46e5"
+                    fill={chartColorFor('Applications')}
+                    opacity={highlightedDashboardSeries === null || highlightedDashboardSeries === 'Applications' ? 1 : 0.2}
                     stroke="#ffffff"
                     strokeWidth="2"
                     className="cursor-pointer transition-all duration-150"
                     onMouseEnter={() => setHoveredMonth(idx)}
                     onMouseLeave={() => setHoveredMonth(null)}
-                  />
-                  {offerPoints[idx] && (
+                  />}
+                  {!hiddenTrendSeries.includes('Offers') && offerPoints[idx] && (
                     <circle
                       cx={offerPoints[idx].x}
                       cy={offerPoints[idx].y}
                       r={hoveredMonth === idx ? 6 : 4}
-                      fill="#10b981"
+                      fill={chartColorFor('Offers')}
+                      opacity={highlightedDashboardSeries === null || highlightedDashboardSeries === 'Offers' ? 1 : 0.2}
                       stroke="#ffffff"
                       strokeWidth="2"
                       className="cursor-pointer transition-all duration-150"
@@ -1122,7 +1353,7 @@ export function DesktopAnalysisVisuals({
         </div>
       )}
 
-      {activeTab === 'domains' && (
+      {activeTab === 'domains' && !fullAnalyticsMenu && (
         <div className="space-y-4 animate-in fade-in duration-200">
           <div className="flex items-center justify-between text-xs">
             <span className="text-slate-700 dark:text-slate-300 font-semibold">
@@ -1138,8 +1369,12 @@ export function DesktopAnalysisVisuals({
               No sector applications registered yet in the selected {timeRange} window.
             </div>
           ) : (
+            <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {domainData.map((domain, idx) => (
+              {domainData.filter((domain) => !hiddenDomains.includes(domain.name)).map((domain, idx, visibleDomains) => {
+                const totalVisible = visibleDomains.reduce((sum, entry) => sum + entry.count, 0)
+                const visiblePct = Math.round(domain.count / Math.max(1, totalVisible) * 100)
+                return (
                 <div
                   key={domain.name}
                   onMouseEnter={() => setHoveredDomain(idx)}
@@ -1149,13 +1384,14 @@ export function DesktopAnalysisVisuals({
                       ? 'border-indigo-400 dark:border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/30 shadow-xs'
                       : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40'
                   }`}
+                  style={{ opacity: highlightedDashboardSeries === null || highlightedDashboardSeries === domain.name ? 1 : 0.3 }}
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
                       {domain.name}
                     </span>
                     <span className="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                      {domain.pct}%
+                      {visiblePct}%
                     </span>
                   </div>
                   <div className="mt-2 text-xl font-extrabold text-slate-800 dark:text-slate-200">
@@ -1163,18 +1399,26 @@ export function DesktopAnalysisVisuals({
                   </div>
                   <div className="mt-3 w-full h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
                     <div
-                      className={`h-full ${domain.color || 'bg-indigo-600'} rounded-full transition-all duration-500`}
-                      style={{ width: `${Math.max(domain.pct, 5)}%` }}
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{ width: `${Math.max(visiblePct, 5)}%`, backgroundColor: chartColorFor(domain.name) }}
                     />
                   </div>
                 </div>
-              ))}
+              )})}
             </div>
+            <ChartLegend
+              items={domainData.map((domain) => ({ id: domain.name, label: domain.name, color: chartColorFor(domain.name), value: domain.count }))}
+              hiddenItems={hiddenDomains}
+              onToggle={(id) => setHiddenDomains((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
+              onHighlight={setHighlightedDashboardSeries}
+              className="mt-3"
+            />
+            </>
           )}
         </div>
       )}
 
-      {activeTab === 'market' && (
+      {activeTab === 'market' && !fullAnalyticsMenu && (
         <div className="space-y-4 animate-in fade-in duration-200">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="p-4 bg-slate-50 dark:bg-slate-950/60 rounded-xl border border-slate-200 dark:border-slate-800">

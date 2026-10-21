@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { useViewModeStore } from '../../store/viewMode'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Smartphone,
   Monitor,
@@ -15,19 +16,22 @@ interface DevicePreset {
   name: string
   width: number
   height: number
-  platform: 'ios' | 'android'
 }
 
 const DEVICE_PRESETS: DevicePreset[] = [
-  { id: 'iphone-16-pro', name: 'iPhone 16 Pro', width: 393, height: 852, platform: 'ios' },
-  { id: 'iphone-15', name: 'iPhone 15 / 14', width: 390, height: 844, platform: 'ios' },
-  { id: 'pixel-8', name: 'Pixel 8 Pro', width: 412, height: 915, platform: 'android' },
-  { id: 'se', name: 'iPhone SE (Compact)', width: 375, height: 667, platform: 'ios' },
+  { id: 'actual', name: 'Actual size', width: 0, height: 0 },
+  { id: 'laptop', name: 'Laptop', width: 1280, height: 900 },
+  { id: 'tablet', name: 'Tablet', width: 768, height: 1024 },
+  { id: 'mobile', name: 'Mobile', width: 390, height: 844 },
 ]
 
 export function MobileViewSimulator({ children }: { children: ReactNode }) {
   const { isMobileView, toggleMobileView } = useViewModeStore()
-  const [selectedDevice, setSelectedDevice] = useState<DevicePreset>(DEVICE_PRESETS[1]) // iPhone 15 default (390x844)
+  const [selectedDevice, setSelectedDevice] = useState<DevicePreset>(() => {
+    if (typeof window === 'undefined') return DEVICE_PRESETS[3]
+    const id = window.sessionStorage.getItem('screen-preview-size')
+    return DEVICE_PRESETS.find((preset) => preset.id === id) ?? DEVICE_PRESETS[3]
+  })
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait')
   const [frameMode, setFrameMode] = useState<'hardware' | 'clean'>('hardware')
   const [scale, setScale] = useState<number | 'auto'>('auto')
@@ -35,9 +39,45 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
   const [iframeKey, setIframeKey] = useState(0)
   const [currentTime, setCurrentTime] = useState('')
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const location = useLocation()
+  const navigate = useNavigate()
 
-  // Real same-origin iframe recursion guard
-  const isInsidePreviewFrame = typeof window !== 'undefined' && window.self !== window.top
+  const isInsidePreviewFrame = typeof window !== 'undefined'
+    && (window.self !== window.top || new URLSearchParams(window.location.search).has('preview'))
+
+  useEffect(() => {
+    if (!isInsidePreviewFrame) return
+    const route = new URLSearchParams(location.search)
+    route.delete('preview')
+    const query = route.toString()
+    window.parent.postMessage({
+      type: 'internsphere:preview-route',
+      path: `${location.pathname}${query ? `?${query}` : ''}`,
+    }, window.location.origin)
+  }, [isInsidePreviewFrame, location.pathname, location.search])
+
+  useEffect(() => {
+    if (!isMobileView || isInsidePreviewFrame) return
+    const syncFrameRoute = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source === window) return
+      if (event.data?.type !== 'internsphere:preview-route' || typeof event.data.path !== 'string') return
+      if (!event.data.path.startsWith('/') || event.data.path.startsWith('//')) return
+      const [path, search = ''] = event.data.path.split('?')
+      if (`${location.pathname}${location.search}` !== event.data.path) {
+        navigate(`${path}${search ? `?${search}` : ''}`)
+      }
+    }
+    window.addEventListener('message', syncFrameRoute)
+    return () => window.removeEventListener('message', syncFrameRoute)
+  }, [isInsidePreviewFrame, isMobileView, location.pathname, location.search, navigate])
+
+  useEffect(() => {
+    if (!isMobileView || isInsidePreviewFrame) return
+    window.dispatchEvent(new CustomEvent('internsphere:preview-state', { detail: { open: true } }))
+    return () => {
+      window.dispatchEvent(new CustomEvent('internsphere:preview-state', { detail: { open: false } }))
+    }
+  }, [isInsidePreviewFrame, isMobileView])
 
   // Live real-time clock for realistic status bar
   useEffect(() => {
@@ -81,12 +121,14 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
   }
 
   const previewUrl = typeof window !== 'undefined'
-    ? window.location.pathname + window.location.search
+    ? `${window.location.pathname}${window.location.search ? `${window.location.search}&` : '?'}preview=1`
     : '/'
 
   const isPortrait = orientation === 'portrait'
-  const activeWidth = isPortrait ? selectedDevice.width : selectedDevice.height
-  const activeHeight = isPortrait ? selectedDevice.height : selectedDevice.width
+  const previewWidth = selectedDevice.id === 'actual' ? window.innerWidth : selectedDevice.width
+  const previewHeight = selectedDevice.id === 'actual' ? window.innerHeight : selectedDevice.height
+  const activeWidth = isPortrait ? previewWidth : previewHeight
+  const activeHeight = isPortrait ? previewHeight : previewWidth
 
   // Auto-fit scale computation so the phone frame never clips vertically on standard displays
   const computedScale =
@@ -137,6 +179,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
                     key={d.id}
                     onClick={() => {
                       setSelectedDevice(d)
+                      window.sessionStorage.setItem('screen-preview-size', d.id)
                       setDeviceDropdownOpen(false)
                     }}
                     className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-left cursor-pointer transition-colors ${
@@ -148,7 +191,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
                     <div>
                       <p className="font-medium">{d.name}</p>
                       <p className="text-[10px] text-slate-400 font-mono">
-                        {d.width} × {d.height} pt
+                            {d.id === 'actual' ? 'Current viewport' : `${d.width} × ${d.height} px`}
                       </p>
                     </div>
                     {selectedDevice.id === d.id && <Check className="w-3.5 h-3.5 text-indigo-400" />}
@@ -175,7 +218,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
                   ? 'bg-indigo-600 text-white shadow-xs'
                   : 'text-slate-400 hover:text-white'
               }`}
-              title="Show authentic flagship device frame"
+              title="Show device frame"
             >
               Hardware Shell
             </button>
@@ -234,7 +277,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
             title="Exit Mobile View (Esc)"
           >
             <Monitor className="w-3.5 h-3.5 text-indigo-400 group-hover:text-rose-400" />
-            <span>Exit Desktop</span>
+            <span>Exit preview</span>
             <kbd className="hidden sm:inline-block ml-1 px-1.5 py-0.2 bg-slate-900/80 border border-slate-700 rounded text-[9px] text-slate-400 font-mono">
               ESC
             </kbd>
@@ -250,7 +293,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
           marginBottom: `calc(${1 - computedScale} * -${activeHeight}px)`,
         }}
       >
-        {frameMode === 'hardware' ? (
+        {frameMode === 'hardware' && selectedDevice.id === 'mobile' ? (
           /* Realistic Titanium Flagship Chassis */
           <div
             className="relative bg-slate-950 rounded-[52px] p-[10px] shadow-[0_25px_70px_rgba(0,0,0,0.85),0_0_0_1px_rgba(255,255,255,0.12),0_0_0_8px_#1e293b,0_0_0_10px_#090d16] flex flex-col shrink-0 transition-all duration-300"
@@ -275,7 +318,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
                 </span>
 
                 {/* Sleek Dynamic Island */}
-                {selectedDevice.platform === 'ios' && (
+                {selectedDevice.id === 'mobile' && (
                   <div className="w-28 h-7 bg-black rounded-full flex items-center justify-between px-3 shadow-md shadow-black/40 ring-1 ring-white/10">
                     <div className="w-3 h-3 rounded-full bg-slate-950 ring-1 ring-slate-800 flex items-center justify-center">
                       <div className="w-1.5 h-1.5 rounded-full bg-indigo-950/80 ring-1 ring-indigo-500/40" />

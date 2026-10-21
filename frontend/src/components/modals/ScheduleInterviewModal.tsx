@@ -5,9 +5,9 @@ import { z } from 'zod'
 import { api } from '../../api/client'
 import { Modal } from '../ui/Modal'
 import { Input } from '../ui/Input'
-import { Select } from '../ui/Select'
 import { Textarea } from '../ui/Textarea'
 import { Button } from '../ui/Button'
+import { DropdownSelect as OptionMenu } from '../ui/DropdownSelect'
 import { Calendar, CheckCircle2, Clock, Sparkles, User, Briefcase, AlertCircle } from 'lucide-react'
 
 const normalizeMeetingLink = (value: string) => {
@@ -23,13 +23,23 @@ const normalizeMeetingLink = (value: string) => {
 }
 
 const interviewSchema = z.object({
-  scheduled_at: z.string().min(1, 'Interview date & time is required'),
+  scheduled_at: z.string()
+    .min(1, 'Interview date & time is required')
+    .refine((value) => new Date(value).getTime() > Date.now(), 'Choose a future date and time'),
   interview_type: z.enum(['VIDEO', 'PHONE', 'IN_PERSON']),
   meeting_link: z.string().trim().refine((value) => normalizeMeetingLink(value) !== null, 'Enter a valid http(s) meeting URL or leave it blank for in-app video'),
   notes: z.string().optional().or(z.literal('')),
 })
 
 type InterviewFormData = z.infer<typeof interviewSchema>
+
+export interface RescheduleInterview {
+  id: number
+  scheduled_at: string
+  interview_type: 'VIDEO' | 'PHONE' | 'IN_PERSON'
+  meeting_link?: string | null
+  notes?: string | null
+}
 
 export interface ScheduleInterviewModalProps {
   isOpen: boolean
@@ -39,6 +49,7 @@ export interface ScheduleInterviewModalProps {
   jobId?: number
   jobTitle?: string
   onScheduled: () => void
+  rescheduleInterview?: RescheduleInterview
 }
 
 export function ScheduleInterviewModal({
@@ -49,10 +60,11 @@ export function ScheduleInterviewModal({
   jobId,
   jobTitle,
   onScheduled,
+  rescheduleInterview,
 }: ScheduleInterviewModalProps) {
   const [success, setSuccess] = useState(false)
   const [serverError, setServerError] = useState('')
-  const [selectedDuration, setSelectedDuration] = useState('45 min')
+  const [selectedDuration, setSelectedDuration] = useState('30 min')
 
   // Dynamic selection state when applicationId is not pre-provided
   const [jobs, setJobs] = useState<any[]>([])
@@ -60,6 +72,9 @@ export function ScheduleInterviewModal({
   const [candidates, setCandidates] = useState<any[]>([])
   const [selectedAppId, setSelectedAppId] = useState<number | undefined>(applicationId)
   const [loadingOptions, setLoadingOptions] = useState(false)
+  const localNow = new Date()
+  localNow.setMinutes(localNow.getMinutes() - localNow.getTimezoneOffset())
+  const minScheduledAt = localNow.toISOString().slice(0, 16)
 
   const activeAppId = applicationId || selectedAppId
 
@@ -67,6 +82,7 @@ export function ScheduleInterviewModal({
     register,
     handleSubmit,
     setValue,
+    watch,
     reset,
     formState: { errors, isSubmitting },
   } = useForm<InterviewFormData>({
@@ -87,6 +103,16 @@ export function ScheduleInterviewModal({
       setValue('meeting_link', '')
     }
   }, [jobId, applicationId, setValue])
+
+  useEffect(() => {
+    if (!rescheduleInterview) return
+    const localDate = new Date(rescheduleInterview.scheduled_at)
+    const pad = (value: number) => String(value).padStart(2, '0')
+    setValue('scheduled_at', `${localDate.getFullYear()}-${pad(localDate.getMonth() + 1)}-${pad(localDate.getDate())}T${pad(localDate.getHours())}:${pad(localDate.getMinutes())}`)
+    setValue('interview_type', rescheduleInterview.interview_type)
+    setValue('meeting_link', rescheduleInterview.meeting_link || '')
+    setValue('notes', rescheduleInterview.notes || '')
+  }, [rescheduleInterview, setValue])
 
   // Load jobs if neither applicationId nor jobId is passed
   useEffect(() => {
@@ -175,12 +201,23 @@ export function ScheduleInterviewModal({
     try {
       const isoDate = new Date(data.scheduled_at).toISOString()
 
-      await api.post(`/applications/${targetAppId}/interviews`, {
+      const interviewPayload = {
         scheduled_at: isoDate,
         interview_type: data.interview_type,
         meeting_link: normalizeMeetingLink(data.meeting_link) || null,
-        notes: data.notes ? `[Duration: ${selectedDuration}] ${data.notes.trim()}` : `Duration: ${selectedDuration}`,
-      })
+        notes: rescheduleInterview
+          ? data.notes?.trim() || null
+          : data.notes ? `[Duration: ${selectedDuration}] ${data.notes.trim()}` : `Duration: ${selectedDuration}`,
+      }
+      if (new Date(isoDate).getTime() <= Date.now()) {
+        setServerError('Choose a future date and time.')
+        return
+      }
+      if (rescheduleInterview) {
+        await api.patch(`/interviews/${rescheduleInterview.id}`, { status: 'RESCHEDULED', ...interviewPayload })
+      } else {
+        await api.post(`/applications/${targetAppId}/interviews`, interviewPayload)
+      }
 
       setSuccess(true)
       setTimeout(() => {
@@ -201,7 +238,7 @@ export function ScheduleInterviewModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Schedule Interview"
+      title={rescheduleInterview ? 'Reschedule Interview' : 'Schedule Interview'}
       description={`Invite ${currentCandidateName} to an interview.`}
       maxWidth="lg"
     >
@@ -236,16 +273,12 @@ export function ScheduleInterviewModal({
             <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
               {/* Job Selector (if not locked by jobId prop) */}
               {!jobId && (
-                <Select
+                <OptionMenu
                   label="Internship Role"
-                  value={selectedJobId || ''}
-                  onChange={(e) => setSelectedJobId(Number(e.target.value))}
+                  value={String(selectedJobId || '')}
+                  onChange={(value) => setSelectedJobId(Number(value))}
                   disabled={loadingOptions || jobs.length === 0}
-                  options={
-                    jobs.length > 0
-                      ? jobs.map((j) => ({ label: `${j.title} (${j.status})`, value: j.id }))
-                      : [{ label: 'No active internships found', value: '' }]
-                  }
+                  options={jobs.map((job) => ({ label: `${job.title} (${job.status})`, value: String(job.id) }))}
                 />
               )}
 
@@ -260,13 +293,13 @@ export function ScheduleInterviewModal({
               {loadingOptions ? (
                 <p className="text-xs text-slate-500">Loading candidates...</p>
               ) : candidates.length > 0 ? (
-                <Select
+                <OptionMenu
                   label="Select Candidate"
-                  value={selectedAppId || ''}
-                  onChange={(e) => setSelectedAppId(Number(e.target.value))}
-                  options={candidates.map((c) => ({
-                    label: `${c.student_name || `Applicant #${c.student_id}`} (${c.status}) • ${c.student_university || 'Student'}`,
-                    value: c.id,
+                  value={String(selectedAppId || '')}
+                  onChange={(value) => setSelectedAppId(Number(value))}
+                  options={candidates.map((candidate) => ({
+                    label: `${candidate.student_name || `Applicant #${candidate.student_id}`} (${candidate.status}) • ${candidate.student_university || 'Student'}`,
+                    value: String(candidate.id),
                   }))}
                 />
               ) : (
@@ -283,6 +316,8 @@ export function ScheduleInterviewModal({
             </div>
           )}
 
+          {!rescheduleInterview && (
+          <>
           {/* Quick Calendly-style Slot Suggestions */}
           <div>
             <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 mb-1.5">
@@ -303,10 +338,13 @@ export function ScheduleInterviewModal({
               ))}
             </div>
           </div>
+          </>
+          )}
 
           <Input
             label="Date & Time"
             type="datetime-local"
+            min={minScheduledAt}
             error={errors.scheduled_at?.message}
             {...register('scheduled_at')}
           />
@@ -334,15 +372,15 @@ export function ScheduleInterviewModal({
             </div>
           </div>
 
-          <Select
+          <OptionMenu
             label="Interview Format"
             options={[
               { label: 'Video Call (In-App Encrypted WebRTC Room)', value: 'VIDEO' },
               { label: 'Phone Call', value: 'PHONE' },
               { label: 'In Person', value: 'IN_PERSON' },
             ]}
-            error={errors.interview_type?.message}
-            {...register('interview_type')}
+            value={watch('interview_type')}
+            onChange={(value) => setValue('interview_type', value as InterviewFormData['interview_type'], { shouldValidate: true })}
           />
 
           <Input
@@ -375,7 +413,7 @@ export function ScheduleInterviewModal({
               disabled={!activeAppId}
               leftIcon={<Calendar className="w-3.5 h-3.5" />}
             >
-              Confirm & Schedule
+              {rescheduleInterview ? 'Confirm Reschedule' : 'Confirm & Schedule'}
             </Button>
           </div>
         </form>

@@ -4,6 +4,9 @@
 
 from app.models.user import (
     Application,
+    ApplicationEvent,
+    ApplicationNote,
+    ApplicationStatusEvent,
     AuditLog,
     CompanyDocument,
     CompanyProfile,
@@ -26,6 +29,9 @@ from app.models.user import (
 
 __all__ = [
     "Application",
+    "ApplicationEvent",
+    "ApplicationNote",
+    "ApplicationStatusEvent",
     "AuditLog",
     "CompanyDocument",
     "CompanyProfile",

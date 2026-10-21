@@ -32,10 +32,12 @@ async def test_rate_limit_returns_429(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
     from app.core.config import get_settings
     get_settings.cache_clear()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://rate-test") as client:
-        await client.get("/api/v1/health")
-        response = await client.get("/api/v1/health")
+    transport = ASGITransport(app=app, client=("198.51.100.250", 1234))
+    async with AsyncClient(transport=transport, base_url="http://rate-test") as client:
+        await client.get("/docs")
+        response = await client.get("/docs")
     assert response.status_code == 429
+    assert response.headers["retry-after"]
     get_settings.cache_clear()
 
 
@@ -46,6 +48,25 @@ async def test_unhandled_errors_are_sanitized() -> None:
     assert response.status_code == 500
     assert b"private database details" not in response.body
     assert b"traceback" not in response.body.lower()
+
+
+@pytest.mark.anyio
+async def test_unhandled_errors_keep_cors_for_allowed_frontend_origin() -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/auth/login",
+            "headers": [(b"origin", b"http://localhost:5174")],
+            "query_string": b"",
+        }
+    )
+    response = await unhandled_exception_handler(request, RuntimeError("private SQL details"))
+
+    assert response.status_code == 500
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5174"
+    assert response.headers["access-control-allow-credentials"] == "true"
+    assert b"private SQL details" not in response.body
 
 
 def test_structured_log_formatter_returns_json() -> None:

@@ -5,8 +5,6 @@
 import json
 import logging
 import sys
-
-
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         return json.dumps({
@@ -15,7 +13,6 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%SZ"),
         })
-
 
 def configure_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)

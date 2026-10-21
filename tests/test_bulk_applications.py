@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.v1.dependencies import get_db
 from app.main import app
-from app.models import Application, Internship, User
+from app.models import Application, CompanyProfile, Internship, StudentProfile, User
 from app.models.base import Base
 
 
@@ -34,6 +34,10 @@ async def test_bulk_status_update(monkeypatch: pytest.MonkeyPatch) -> None:
         async with sessions() as session:
             for u in (await session.scalars(select(User))).all():
                 u.is_verified = True
+            company_profile = await session.scalar(select(CompanyProfile))
+            company_profile.verification_status = "VERIFIED"
+            for student_profile in await session.scalars(select(StudentProfile)):
+                student_profile.skills = "Python"
             await session.commit()
 
         c_token = (await client.post("/api/v1/auth/login", json={"email": "bulk-co@example.com", "password": "password123"})).json()["access_token"]

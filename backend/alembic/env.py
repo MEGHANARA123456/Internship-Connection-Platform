@@ -24,16 +24,31 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def include_object(object_, name, type_, reflected, compare_to) -> bool:
+    if type_ == "table" and name == "application_status_events_legacy_archive":
+        return False
+    return True
+
+
 # Offline migration mode: generate SQL without connecting to the live database.
 def run_migrations_offline() -> None:
-    context.configure(url=config.get_main_option("sqlalchemy.url"), target_metadata=target_metadata, literal_binds=True)
+    context.configure(
+        url=config.get_main_option("sqlalchemy.url"),
+        target_metadata=target_metadata,
+        include_object=include_object,
+        literal_binds=True,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
 
 # Online migration mode: connect to the database and run migrations.
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 

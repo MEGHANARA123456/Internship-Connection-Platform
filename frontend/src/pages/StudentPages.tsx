@@ -8,6 +8,7 @@ import { useAuthStore } from '../store/auth'
 import { Input } from '../components/ui/Input'
 import { Textarea } from '../components/ui/Textarea'
 import { Button } from '../components/ui/Button'
+import { DropdownSelect } from '../components/ui/DropdownSelect'
 import { Badge } from '../components/ui/Badge'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
@@ -18,14 +19,16 @@ import { ApplyModal } from '../components/modals/ApplyModal'
 import { ReportModal } from '../components/modals/ReportModal'
 import { MockInterviewModal } from '../components/modals/MockInterviewModal'
 import { SkillQuizModal } from '../components/modals/SkillQuizModal'
-import { RecommendationModal } from '../components/modals/RecommendationModal'
 import { OfferLetterModal } from '../components/modals/OfferLetterModal'
 import { ReviewCompanyModal } from '../components/modals/ReviewCompanyModal'
-import { AccountSecurityCard } from '../components/auth/AccountSecurityCard'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 import { ResumeEditorModal } from '../components/resume/ResumeEditorModal'
 import { AvatarUploadCard } from '../components/ui/AvatarUploadCard'
 import { PaginationControls } from '../components/ui/PaginationControls'
+import { CardActionButton, CardActions } from '../components/ui/CardActions'
+import { StatusFilterMenu } from '../components/applications/StatusFilterMenu'
+import { GmailActionLink } from '../components/mail/GmailActionLink'
+import { routes } from '../lib/routes'
 import {
   Search,
   MapPin,
@@ -48,15 +51,14 @@ import {
   Award,
   Sparkles,
   ExternalLink,
-  GraduationCap,
   BarChart3,
   Building2,
   Bookmark,
   BookmarkCheck,
   Star,
+  XCircle,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
-
 
 // --- 1. Opportunities Page (Browse Internships) ---
 
@@ -64,7 +66,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
   const { session } = useAuthStore()
   const navigate = useNavigate()
   const { id } = useParams()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // Filters state with initial query params from URL
   const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || searchParams.get('search') || '')
@@ -75,7 +77,10 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
   const [skills, setSkills] = useState(searchParams.get('skills') || '')
   const [page, setPage] = useState(1)
   const [showVisuals, setShowVisuals] = useState(false)
-  const [activeTab, setActiveTab] = useState<'all' | 'saved' | 'applied'>(initialTab)
+  const [activeTab, setActiveTab] = useState<'all' | 'saved' | 'applied'>(() => {
+    const tab = searchParams.get('tab')
+    return tab === 'saved' || tab === 'applied' ? tab : tab === 'all' ? 'all' : initialTab
+  })
   const [sortBy, setSortBy] = useState<string>('newest')
 
   // Keep state in sync with URL search params changes
@@ -90,7 +95,10 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
     if (ind !== null) setIndustry(ind)
     if (wm !== null) setWorkMode(wm)
     if (sk !== null) setSkills(sk)
-  }, [searchParams])
+    const tab = searchParams.get('tab')
+    if (tab === 'saved' || tab === 'applied' || tab === 'all') setActiveTab(tab)
+    else setActiveTab(initialTab)
+  }, [initialTab, searchParams])
 
   // Data & loading states
   const [internships, setInternships] = useState<any[]>([])
@@ -177,10 +185,18 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
     fetchInternships()
   }, [page, location, industry, workMode, minStipend, skills, activeTab, sortBy])
 
+  const chooseOpportunityTab = (tab: 'all' | 'saved' | 'applied') => {
+    setActiveTab(tab)
+    setPage(1)
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.set('tab', tab)
+    setSearchParams(nextParams)
+  }
+
   const handleToggleSave = async (e: React.MouseEvent, job: any) => {
     e.stopPropagation()
     if (!session) {
-      navigate('/login')
+      navigate(routes.login())
       return
     }
     if (session.role !== 'STUDENT') {
@@ -242,7 +258,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
 
   const handleApplyClick = (job: any) => {
     if (!session) {
-      navigate('/login')
+      navigate(routes.login())
       return
     }
     if (session.role !== 'STUDENT') {
@@ -258,23 +274,49 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
       const wasVisible = internships.some((job) => job.id === appliedJob.id)
       setInternships((previous) => previous.filter((job) => job.id !== appliedJob.id))
       if (wasVisible) setTotal((previous) => Math.max(previous - 1, 0))
-    }
-    if (applicationsLoaded && applyModalJob) {
       setApplications((previous) => {
-        if (previous.some((application) => application.internship_id === applyModalJob.id)) return previous
+        const existingIndex = previous.findIndex((application) => application.internship_id === appliedJob.id)
+        if (existingIndex !== -1) {
+          return previous.map((application, index) => index === existingIndex
+            ? { ...application, status: 'APPLIED', created_at: new Date().toISOString() }
+            : application)
+        }
         return [
           {
-            id: `pending-${applyModalJob.id}`,
-            internship_id: applyModalJob.id,
-            internship_title: applyModalJob.title,
-            company_name: applyModalJob.company_name,
+            id: `pending-${appliedJob.id}`,
+            internship_id: appliedJob.id,
+            internship_title: appliedJob.title,
+            company_name: appliedJob.company_name,
             status: 'APPLIED',
             created_at: new Date().toISOString(),
           },
           ...previous,
         ]
       })
+      setApplicationsLoaded(true)
     }
+    void api.get('/applications/student')
+      .then((response) => {
+        const items = Array.isArray(response.data?.applications) ? response.data.applications : []
+        setApplications(items)
+        setApplicationsLoaded(true)
+      })
+      .catch((refreshError) => console.error('Failed to refresh applications:', refreshError))
+  }
+
+  const handleApplicationAlreadyExists = () => {
+    if (applyModalJob) {
+      const wasVisible = internships.some((job) => job.id === applyModalJob.id)
+      setInternships((previous) => previous.filter((job) => job.id !== applyModalJob.id))
+      if (wasVisible) setTotal((previous) => Math.max(previous - 1, 0))
+    }
+    void api.get('/applications/student')
+      .then((response) => {
+        const items = Array.isArray(response.data?.applications) ? response.data.applications : []
+        setApplications(items)
+        setApplicationsLoaded(true)
+      })
+      .catch((refreshError) => console.error('Failed to refresh applications:', refreshError))
   }
 
   return (
@@ -320,10 +362,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
         <div className="flex items-center gap-2 mb-4 border-b border-slate-200 dark:border-slate-800 pb-2">
           <button
             type="button"
-            onClick={() => {
-              setActiveTab('all')
-              setPage(1)
-            }}
+            onClick={() => chooseOpportunityTab('all')}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'all'
                 ? 'bg-indigo-600 text-white shadow-xs'
@@ -335,10 +374,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
           </button>
           <button
             type="button"
-            onClick={() => {
-              setActiveTab('saved')
-              setPage(1)
-            }}
+            onClick={() => chooseOpportunityTab('saved')}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'saved'
                 ? 'bg-indigo-600 text-white shadow-xs'
@@ -350,10 +386,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
           </button>
           <button
             type="button"
-            onClick={() => {
-              setActiveTab('applied')
-              setPage(1)
-            }}
+            onClick={() => chooseOpportunityTab('applied')}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'applied'
                 ? 'bg-indigo-600 text-white shadow-xs'
@@ -370,6 +403,14 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
               </span>
             )}
           </button>
+        </div>
+      )}
+
+      {session?.role === 'STUDENT' && activeTab === 'saved' && (
+        <div className="mb-4 flex items-center gap-2 text-xs">
+          <span className="text-slate-500 dark:text-slate-400">Filtered by:</span>
+          <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 font-medium text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300">Saved roles</span>
+          <button type="button" onClick={() => chooseOpportunityTab('all')} className="rounded px-2 py-1 font-semibold text-indigo-700 underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300">Clear</button>
         </div>
       )}
 
@@ -407,19 +448,12 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
             />
           </div>
 
-          <select
-            value={workMode}
-            onChange={(e) => {
-              setWorkMode(e.target.value)
-              setPage(1)
-            }}
-            className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-          >
-            <option value="">All Work Modes</option>
-            <option value="REMOTE">Remote</option>
-            <option value="HYBRID">Hybrid</option>
-            <option value="ONSITE">On-site</option>
-          </select>
+          <DropdownSelect aria-label="Filter by work mode" value={workMode} onChange={(value) => { setWorkMode(value); setPage(1) }} options={[
+            { label: 'All Work Modes', value: '' },
+            { label: 'Remote', value: 'REMOTE' },
+            { label: 'Hybrid', value: 'HYBRID' },
+            { label: 'On-site', value: 'ONSITE' },
+          ]} />
 
           <input
             type="text"
@@ -432,19 +466,10 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
             className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
 
-          <select
-            value={sortBy}
-            onChange={(e) => {
-              setSortBy(e.target.value)
-              setPage(1)
-            }}
-            className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-200"
-          >
-            <option value="newest">Sort: Newest</option>
-            {session?.role === 'STUDENT' && (
-              <option value="match">Sort: Best Match (% Score)</option>
-            )}
-          </select>
+          <DropdownSelect aria-label="Sort opportunities" value={sortBy} onChange={(value) => { setSortBy(value); setPage(1) }} options={[
+            { label: 'Sort: Newest', value: 'newest' },
+            ...(session?.role === 'STUDENT' ? [{ label: 'Sort: Best Match (% Score)', value: 'match' }] : []),
+          ]} />
         </div>
 
         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs text-slate-500">
@@ -497,7 +522,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
             {applications.map((application) => (
               <Card key={application.id} className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="space-y-1">
+                  <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-center gap-2.5 flex-wrap">
                       <h3 className="text-base font-bold text-slate-900 dark:text-white">
                         {application.internship_title || `Internship #${application.internship_id}`}
@@ -509,6 +534,9 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                             ? 'Offer Accepted'
                             : application.status}
                       </Badge>
+                      {application.internship_status === 'CLOSED' && (
+                        <Badge variant="slate">ROLE CLOSED</Badge>
+                      )}
                     </div>
                     {application.company_name && (
                       <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
@@ -524,14 +552,14 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => navigate(`/internships/${application.internship_id}`)}
+                      onClick={() => navigate(routes.opportunity(application.internship_id))}
                     >
                       View details
                     </Button>
                     <Button
                       size="sm"
                       variant="primary"
-                      onClick={() => navigate('/applications')}
+                      onClick={() => navigate(routes.applications())}
                     >
                       Track application
                     </Button>
@@ -563,7 +591,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
           {displayedJobs.map((job) => (
             <Card
               key={job.id}
-              className="p-5 hover:border-indigo-300 transition-all cursor-pointer bg-white"
+              className="p-5 hover:border-indigo-300 transition-all cursor-pointer bg-white dark:bg-slate-900"
               onClick={() => setSelectedJob(job)}
             >
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -572,6 +600,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                     <h3 className="text-base font-bold text-slate-900 hover:text-indigo-600 transition-colors">
                       {job.title}
                     </h3>
+                    {job.status === 'CLOSED' && <Badge variant="slate">Closed</Badge>}
                     <Badge status={job.work_mode}>{job.work_mode}</Badge>
                     <Badge variant="slate">{job.industry}</Badge>
                     {job.match_score !== null && job.match_score !== undefined && (
@@ -638,6 +667,8 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                     <Button
                       size="sm"
                       variant="primary"
+                      disabled={job.status === 'CLOSED'}
+                      title={job.status === 'CLOSED' ? 'This internship is closed and no longer accepts applications.' : 'Apply for this internship'}
                       onClick={(e) => {
                         e.stopPropagation()
                         handleApplyClick(job)
@@ -752,10 +783,18 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                   </p>
                 </div>
               </div>
-              <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300">
-                Verified Employer
-              </span>
+              <div className="flex items-center gap-2">
+                {selectedJob.status === 'CLOSED' && <Badge variant="slate">Closed</Badge>}
+                <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300">
+                  Verified Employer
+                </span>
+              </div>
             </div>
+            {selectedJob.status === 'CLOSED' && (
+              <div role="status" className="rounded-xl border border-slate-200 bg-slate-100 p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                This internship is closed to new applications. This listing is available for reference only.
+              </div>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 bg-slate-50 rounded-xl border border-slate-200">
               <div>
                 <span className="text-slate-400 block font-medium">Stipend</span>
@@ -838,6 +877,8 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                 <Button
                   variant="primary"
                   size="sm"
+                  disabled={selectedJob.status === 'CLOSED'}
+                  title={selectedJob.status === 'CLOSED' ? 'This internship is closed and no longer accepts applications.' : 'Apply for this internship'}
                   onClick={() => {
                     const j = selectedJob
                     setSelectedJob(null)
@@ -860,10 +901,14 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
           onClose={() => setApplyModalJob(null)}
           internshipId={applyModalJob.id}
           internshipTitle={applyModalJob.title}
-          matchScore={applyModalJob.match_score}
+          companyName={applyModalJob.company_name}
+          location={applyModalJob.location}
+          stipend={applyModalJob.stipend}
+          deadline={applyModalJob.deadline}
           onApplied={() => {
             handleApplicationSubmitted()
           }}
+          onAlreadyApplied={handleApplicationAlreadyExists}
         />
       )}
 
@@ -892,68 +937,6 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
 
 export function StudentAnalyticsPage() {
   const { session } = useAuthStore()
-  const navigate = useNavigate()
-  const [stats, setStats] = useState({
-    applied: 0,
-    underReview: 0,
-    shortlisted: 0,
-    interviewsScheduled: 0,
-    offers: 0,
-    savedRoles: 0,
-  })
-  const [hasApplications, setHasApplications] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const fetchStudentAnalytics = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [overviewResponse, savedResponse, interviewsResponse, applicationsResponse] = await Promise.all([
-        api.get('/analytics/overview'),
-        api.get('/internships/saved'),
-        api.get('/interviews/my'),
-        api.get('/applications/student'),
-      ])
-      const applications = Array.isArray(applicationsResponse.data)
-        ? applicationsResponse.data
-        : applicationsResponse.data?.applications || []
-      const interviews = Array.isArray(interviewsResponse.data) ? interviewsResponse.data : []
-      const savedRoles = Array.isArray(savedResponse.data) ? savedResponse.data : []
-      const overview = overviewResponse.data
-
-      setHasApplications(applications.length > 0)
-      setStats({
-        applied: overview?.funnel?.applied ?? applications.length,
-        underReview: applications.filter((application: any) => application.status === 'UNDER_REVIEW').length,
-        shortlisted: applications.filter((application: any) => application.status === 'SHORTLISTED').length,
-        interviewsScheduled: interviews.filter((interview: any) =>
-          ['SCHEDULED', 'RESCHEDULED'].includes(interview.status)
-        ).length,
-        offers: applications.filter((application: any) =>
-          ['SELECTED', 'ACCEPTED'].includes(application.status)
-        ).length,
-        savedRoles: savedRoles.length,
-      })
-    } catch {
-      setError('Unable to load your analytics. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchStudentAnalytics()
-  }, [fetchStudentAnalytics])
-
-  const summaryCards = [
-    { label: 'Applications submitted', value: stats.applied, icon: FileText },
-    { label: 'Under review', value: stats.underReview, icon: Clock },
-    { label: 'Shortlisted', value: stats.shortlisted, icon: CheckCircle2 },
-    { label: 'Interviews scheduled', value: stats.interviewsScheduled, icon: Calendar },
-    { label: 'Offers', value: stats.offers, icon: Award },
-    { label: 'Saved roles', value: stats.savedRoles, icon: Bookmark },
-  ]
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-6">
@@ -963,54 +946,86 @@ export function StudentAnalyticsPage() {
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">A personal view of your applications and progress.</p>
       </div>
 
-      {loading ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {summaryCards.map((card) => <CardSkeleton key={card.label} />)}
-        </div>
-      ) : error ? (
-        <ErrorState message={error} onRetry={() => void fetchStudentAnalytics()} />
-      ) : (
-        <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {summaryCards.map(({ label, value, icon: Icon }) => (
-              <Card key={label} className="bg-white dark:bg-slate-900 p-5">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">{label}</p>
-                  <Icon className="h-4 w-4 text-indigo-500" />
-                </div>
-                <p className="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{value}</p>
-              </Card>
-            ))}
-          </div>
-          {!hasApplications && (
-            <EmptyState
-              title="Your application journey starts here"
-              description="Apply to an internship to see your personal application funnel and progress."
-              actionLabel="Explore Internships"
-              onAction={() => navigate('/opportunities')}
-            />
-          )}
-          <DesktopAnalysisVisuals
-            variant="student"
-            title="My Application Funnel & Recruitment Velocity"
-            subtitle="Track your personal application progression and application industries"
-          />
-        </>
-      )}
+      <DesktopAnalysisVisuals
+        variant="student"
+        fullAnalyticsMenu
+        title="My Application Funnel & Recruitment Velocity"
+        subtitle="Track your personal application progression and application industries"
+      />
     </div>
   )
 }
 
 // --- 2. My Applications Page ---
 
+const applicationStages = ['APPLIED', 'UNDER_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED', 'SELECTED']
+
+function MiniApplicationTracker({ status, lastReachedStatus }: { status: string; lastReachedStatus?: string | null }) {
+  const terminalPreviousIndex = applicationStages.indexOf(lastReachedStatus || 'APPLIED')
+  const lastReached = status === 'APPLIED'
+    ? 0
+    : status === 'UNDER_REVIEW'
+      ? 1
+      : status === 'SHORTLISTED'
+        ? 2
+        : status === 'INTERVIEW_SCHEDULED'
+          ? 3
+          : ['SELECTED', 'ACCEPTED'].includes(status)
+            ? 4
+            : ['REJECTED', 'WITHDRAWN'].includes(status)
+              ? Math.max(0, terminalPreviousIndex)
+              : 0
+  const rejected = status === 'REJECTED'
+  const withdrawn = status === 'WITHDRAWN'
+  const labels = ['Applied', 'Under review', 'Shortlisted', 'Interview', 'Offer']
+  return (
+    <div className="mt-3 grid max-w-2xl grid-cols-5 gap-1.5" aria-label={`Application progress: ${status.replaceAll('_', ' ')}`}>
+      {applicationStages.map((stage, index) => (
+        <div key={stage} className="min-w-0">
+          <div className={`h-1.5 rounded-full ${
+            index < lastReached || ((rejected || withdrawn) && index <= lastReached)
+              ? 'bg-emerald-500'
+              : index === lastReached && !rejected && !withdrawn
+                ? 'bg-indigo-600'
+                : 'bg-slate-200 dark:bg-slate-700'
+          }`} />
+          <span className={`mt-1 block truncate text-[10px] font-medium ${
+            index <= lastReached ? 'text-slate-700 dark:text-slate-300' : 'text-slate-400 dark:text-slate-500'
+          }`}>{labels[index]}</span>
+        </div>
+      ))}
+      {(rejected || withdrawn) && (
+        <span className={`col-span-5 text-[10px] font-semibold ${rejected ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'}`}>{rejected ? 'Rejected' : 'Withdrawn'}</span>
+      )}
+    </div>
+  )
+}
+
 export function ApplicationsPage() {
+  const navigate = useNavigate()
   const [applications, setApplications] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [withdrawingId, setWithdrawingId] = useState<number | null>(null)
   const [selectedOfferApp, setSelectedOfferApp] = useState<any | null>(null)
   const [selectedReviewApp, setSelectedReviewApp] = useState<any | null>(null)
-  const [activeStatusTab, setActiveStatusTab] = useState('ALL')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedStatus = (searchParams.get('status') || 'all').trim().toUpperCase()
+  const requestedFilter = searchParams.get('filter') || ''
+  const requestedSort = searchParams.get('sort') || ''
+  const statusKeyByQuery: Record<string, string> = {
+    ALL: 'ALL',
+    APPLIED: 'APPLIED',
+    UNDER_REVIEW: 'UNDER_REVIEW',
+    SHORTLISTED: 'SHORTLISTED',
+    INTERVIEW: 'INTERVIEW',
+    INTERVIEW_SCHEDULED: 'INTERVIEW',
+    SELECTED: 'SELECTED',
+    ACCEPTED: 'SELECTED',
+    REJECTED: 'REJECTED',
+    WITHDRAWN: 'WITHDRAWN',
+  }
+  const activeStatusTab = statusKeyByQuery[requestedStatus] || 'ALL'
   const [page, setPage] = useState(1)
 
   const statusTabs = [
@@ -1029,7 +1044,11 @@ export function ApplicationsPage() {
     setError(null)
     try {
       const res = await api.get('/applications/student')
-      const items = Array.isArray(res.data) ? res.data : res.data?.applications || []
+      const rows = Array.isArray(res.data) ? res.data : res.data?.applications || []
+      const uniqueById = new Map(rows.map((application: any) => [application.id, application]))
+      const items = [...uniqueById.values()].sort(
+        (left: any, right: any) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+      )
       setApplications(items)
     } catch {
       setError('Unable to load your applications. Please try again.')
@@ -1042,9 +1061,38 @@ export function ApplicationsPage() {
     fetchApplications()
   }, [])
 
-  const filteredApplications = activeStatusTab === 'ALL'
+  useEffect(() => {
+    void api.get('/notifications').then(async (response) => {
+      const applicationNoticeIds = (response.data || [])
+        .filter((notice: any) => !notice.read_at && ['APPLICATION_STATUS', 'APPLICATION_SUBMITTED', 'APPLICATION_NEW'].includes(notice.notification_type))
+        .map((notice: any) => notice.id)
+      await Promise.all(applicationNoticeIds.map((notificationId: number) => api.patch(`/notifications/${notificationId}/read`)))
+    }).catch((notificationError) => {
+      console.error('Failed to mark application notifications as read:', notificationError)
+    })
+  }, [])
+
+  useEffect(() => {
+    setPage(1)
+  }, [activeStatusTab, requestedFilter, requestedSort])
+
+  const statusFilteredApplications = activeStatusTab === 'ALL'
     ? applications
     : applications.filter((app) => statusTabs.find((tab) => tab.key === activeStatusTab)?.statuses?.includes(app.status))
+  const responseFilteredApplications = requestedFilter === 'responded'
+    ? statusFilteredApplications.filter((app) => app.has_company_response)
+    : statusFilteredApplications
+  const filteredApplications = requestedSort === 'match'
+    ? [...responseFilteredApplications].sort((left, right) => (right.match_score ?? -1) - (left.match_score ?? -1))
+    : requestedSort === 'response_time'
+      ? [...responseFilteredApplications].sort((left, right) => {
+          const leftHours = left.response_time_hours
+          const rightHours = right.response_time_hours
+          if (leftHours == null) return rightHours == null ? 0 : 1
+          if (rightHours == null) return -1
+          return leftHours - rightHours
+        })
+      : responseFilteredApplications
   const totalPages = Math.max(1, Math.ceil(filteredApplications.length / 10))
   const pagedApplications = filteredApplications.slice((page - 1) * 10, page * 10)
   useEffect(() => {
@@ -1056,6 +1104,30 @@ export function ApplicationsPage() {
     { label: 'Interviews', value: applications.filter((app) => app.status === 'INTERVIEW_SCHEDULED').length },
     { label: 'Selected', value: applications.filter((app) => ['SELECTED', 'ACCEPTED'].includes(app.status)).length },
   ]
+  const statusCounts = Object.fromEntries(statusTabs.map((tab) => [
+    tab.key,
+    tab.statuses
+      ? applications.filter((app) => tab.statuses?.includes(app.status)).length
+      : applications.length,
+  ]))
+
+  const chooseStatus = (status: string) => {
+    const query = status === 'INTERVIEW' ? 'interview_scheduled' : status.toLowerCase()
+    const nextParams = new URLSearchParams(searchParams)
+    if (status === 'ALL') nextParams.delete('status')
+    else nextParams.set('status', query)
+    setSearchParams(nextParams)
+    setPage(1)
+  }
+  const clearApplicationFilters = () => {
+    setSearchParams({})
+    setPage(1)
+  }
+  const activeFilterLabels = [
+    activeStatusTab !== 'ALL' ? statusTabs.find((tab) => tab.key === activeStatusTab)?.label : null,
+    requestedFilter === 'responded' ? 'Recruiter responded' : null,
+    requestedSort === 'match' ? 'Highest match score' : requestedSort === 'response_time' ? 'Response time' : null,
+  ].filter(Boolean)
 
   const handleWithdraw = async (appId: number) => {
     if (!confirm('Are you sure you want to withdraw this application? This cannot be undone.')) return
@@ -1083,7 +1155,7 @@ export function ApplicationsPage() {
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">My Applications</h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Track the status of your internship submissions.</p>
         </div>
-        <Link to="/opportunities">
+        <Link to={routes.opportunities}>
           <Button size="sm" variant="primary">
             Browse More Roles
           </Button>
@@ -1101,40 +1173,20 @@ export function ApplicationsPage() {
         </div>
       )}
 
-      <div className="mb-5 -mx-1 overflow-x-auto pb-1">
-        <div role="tablist" aria-label="Application status" className="flex w-max min-w-full items-center gap-1 border-b border-slate-200 pb-2 dark:border-slate-800">
-          {statusTabs.map((tab) => {
-            const count = tab.statuses
-              ? applications.filter((app) => tab.statuses?.includes(app.status)).length
-              : applications.length
-            const selected = activeStatusTab === tab.key
-            return (
-              <button
-                key={tab.key}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                onClick={() => {
-                  setActiveStatusTab(tab.key)
-                  setPage(1)
-                }}
-                className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
-                  selected
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
-                }`}
-              >
-                {tab.label}
-                <span className={`rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
-                  selected ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700'
-                }`}>
-                  {count}
-                </span>
-              </button>
-            )
-          })}
-        </div>
+      <div className="mb-5">
+        <StatusFilterMenu activeStatus={activeStatusTab} counts={statusCounts} onChange={chooseStatus} />
       </div>
+      {activeFilterLabels.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-slate-500 dark:text-slate-400">Filtered by:</span>
+          {activeFilterLabels.map((label) => (
+            <span key={label} className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 font-medium text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300">{label}</span>
+          ))}
+          <button type="button" onClick={clearApplicationFilters} className="rounded px-2 py-1 font-semibold text-indigo-700 underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300">
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* Desktop Visual Analysis Suite */}
       <div className="hidden md:block mb-8">
@@ -1156,14 +1208,12 @@ export function ApplicationsPage() {
         <EmptyState
           title={applications.length === 0
             ? 'No applications submitted yet'
-            : activeStatusTab === 'ALL'
-              ? 'No applications submitted yet'
-              : `No ${statusTabs.find((tab) => tab.key === activeStatusTab)?.label.toLowerCase()} applications yet`}
+            : 'No applications match this filter'}
           description={applications.length === 0
             ? 'You have not submitted any internship applications. Explore available listings and apply today!'
-            : 'Applications with this status will appear here.'}
-          actionLabel={applications.length === 0 ? 'Find Internships' : undefined}
-          onAction={applications.length === 0 ? () => (window.location.href = '/opportunities') : undefined}
+            : 'Try clearing your filters to see your applications.'}
+          actionLabel={applications.length === 0 ? 'Find Internships' : 'Clear filter'}
+          onAction={applications.length === 0 ? () => (window.location.href = routes.opportunities) : clearApplicationFilters}
         />
       ) : (
         <div className="space-y-3">
@@ -1171,14 +1221,28 @@ export function ApplicationsPage() {
             const canWithdraw = ['APPLIED', 'UNDER_REVIEW', 'SHORTLISTED'].includes(app.status)
 
             return (
-              <Card key={app.id} className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="space-y-1">
+              <Card
+                key={app.id}
+                role="link"
+                tabIndex={0}
+                aria-label={`Track application for ${app.internship_title || `Internship ${app.internship_id}`}`}
+                onClick={() => navigate(routes.application(app.id))}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    navigate(routes.application(app.id))
+                  }
+                }}
+                className="cursor-pointer p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800"
+              >
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-center gap-2.5 flex-wrap">
                       <h3 className="text-base font-bold text-slate-900 dark:text-white">
                         {app.internship_title || `Internship #${app.internship_id}`}
                       </h3>
                       <Badge status={app.status}>{app.status === 'ACCEPTED' ? 'Offer Accepted' : app.status}</Badge>
+                      {app.internship_status === 'CLOSED' && <Badge variant="slate">ROLE CLOSED</Badge>}
                     </div>
                     {app.company_name && (
                       <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
@@ -1187,8 +1251,12 @@ export function ApplicationsPage() {
                       </p>
                     )}
                     <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {[app.internship_location, app.internship_posted_at ? `Posted ${new Date(app.internship_posted_at).toLocaleDateString()}` : null, `ID #${app.internship_id}`].filter(Boolean).join(' · ')}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
                       Applied on {new Date(app.created_at).toLocaleDateString()}
                     </p>
+                    <MiniApplicationTracker status={app.status} lastReachedStatus={app.latest_status_from} />
                     {app.cover_note && (
                       <p className="text-xs text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-md border border-slate-100 dark:border-slate-700/60 mt-2 italic">
                         "{app.cover_note}"
@@ -1196,49 +1264,49 @@ export function ApplicationsPage() {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  <div onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                  <CardActions>
+                    <Link to={routes.messages()} className="w-full">
+                      <CardActionButton
+                        aria-label="Message Recruiter"
+                        leftIcon={<MessageSquare className="h-4 w-4" />}
+                      >
+                        Message Recruiter
+                      </CardActionButton>
+                    </Link>
                     {['SELECTED', 'ACCEPTED'].includes(app.status) && (
                       <>
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                          leftIcon={<FileCheck className="w-3.5 h-3.5" />}
+                        <CardActionButton
+                          intent="primary"
+                          className="bg-emerald-600 hover:bg-emerald-700"
+                          leftIcon={<FileCheck className="h-4 w-4" />}
                           onClick={() => setSelectedOfferApp(app)}
                         >
                           {app.status === 'ACCEPTED' ? 'View Offer Letter' : 'Offer Letter & E-Sign'}
-                        </Button>
+                        </CardActionButton>
                         {app.company_id && app.status === 'SELECTED' && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-amber-600 dark:text-amber-400 border-amber-300 dark:border-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950/40"
-                            leftIcon={<Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />}
+                          <CardActionButton
+                            className="text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+                            leftIcon={<Star className="h-4 w-4 fill-amber-400 text-amber-400" />}
                             onClick={() => setSelectedReviewApp(app)}
                           >
                             Review Employer
-                          </Button>
+                          </CardActionButton>
                         )}
                       </>
                     )}
 
-                    <Link to="/messages">
-                      <Button size="sm" variant="outline" leftIcon={<MessageSquare className="w-3.5 h-3.5" />}>
-                        Message Recruiter
-                      </Button>
-                    </Link>
-
-                    {canWithdraw && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-rose-600 hover:bg-rose-50"
-                        isLoading={withdrawingId === app.id}
-                        onClick={() => handleWithdraw(app.id)}
-                      >
-                        Withdraw
-                      </Button>
-                    )}
+                    <CardActionButton
+                      intent="danger"
+                      aria-label={canWithdraw ? `Withdraw application for ${app.internship_title || `Internship ${app.internship_id}`}` : `Withdraw unavailable for ${app.status.toLowerCase().replaceAll('_', ' ')} application`}
+                      title={canWithdraw ? 'Withdraw this application' : `Withdrawal is unavailable for ${app.status.toLowerCase().replaceAll('_', ' ')} applications`}
+                      disabled={!canWithdraw}
+                      isLoading={withdrawingId === app.id}
+                      onClick={() => handleWithdraw(app.id)}
+                    >
+                      Withdraw
+                    </CardActionButton>
+                  </CardActions>
                   </div>
                 </div>
               </Card>
@@ -1275,6 +1343,166 @@ export function ApplicationsPage() {
           internshipId={selectedReviewApp.internship_id}
           companyName={selectedReviewApp.company_name || 'Enterprise Employer'}
           internshipTitle={selectedReviewApp.internship_title}
+        />
+      )}
+    </div>
+  )
+}
+
+export function ApplicationTimelinePage() {
+  const session = useAuthStore((state) => state.session)
+  const { id } = useParams()
+  const navigate = useNavigate()
+  const [timeline, setTimeline] = useState<any | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [withdrawing, setWithdrawing] = useState(false)
+  const [offerApp, setOfferApp] = useState<any | null>(null)
+
+  const fetchTimeline = useCallback(async () => {
+    if (!id) return
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await api.get(`/applications/${id}/timeline`)
+      setTimeline(response.data)
+    } catch {
+      setError('Unable to load this application timeline. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }, [id])
+
+  useEffect(() => {
+    void fetchTimeline()
+  }, [fetchTimeline])
+
+  const summary = timeline?.summary || timeline?.application || {}
+  const status = summary.status || ''
+  const canWithdraw = ['APPLIED', 'UNDER_REVIEW', 'SHORTLISTED'].includes(status)
+  const handleWithdraw = async () => {
+    if (!id || !canWithdraw || !confirm('Are you sure you want to withdraw this application? This cannot be undone.')) return
+    setWithdrawing(true)
+    try {
+      await api.patch(`/applications/${id}/withdraw`)
+      await fetchTimeline()
+    } catch {
+      alert('Failed to withdraw application.')
+    } finally {
+      setWithdrawing(false)
+    }
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
+      <Button variant="ghost" size="sm" onClick={() => navigate(routes.applications())} leftIcon={<ChevronLeft className="h-4 w-4" />}>
+        Back to applications
+      </Button>
+      {loading ? (
+        <div className="mt-5 space-y-3"><CardSkeleton /><CardSkeleton /></div>
+      ) : error ? (
+        <div className="mt-5"><ErrorState message={error} onRetry={() => void fetchTimeline()} /></div>
+      ) : timeline ? (
+        <div className="mt-5 space-y-5">
+          <Card className="p-5 sm:p-7">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h1 className="text-xl font-bold text-slate-900 dark:text-white">{summary.title || summary.internship_title || `Internship #${summary.internship_id}`}</h1>
+                <p className="mt-1 text-sm font-medium text-indigo-600 dark:text-indigo-400">{summary.company_name || 'Company'}</p>
+                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                  Applied {summary.applied_at || summary.created_at ? new Date(summary.applied_at || summary.created_at).toLocaleDateString() : 'date unavailable'}
+                </p>
+              </div>
+              <Badge status={status}>{status.replaceAll('_', ' ')}</Badge>
+            </div>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Link to={routes.messages()}><Button variant="outline" size="sm" leftIcon={<MessageSquare className="h-4 w-4" />}>Message Recruiter</Button></Link>
+              <Button variant="danger" size="sm" disabled={!canWithdraw || withdrawing} isLoading={withdrawing} onClick={() => void handleWithdraw()} title={!canWithdraw ? `Withdrawal is unavailable for ${status.toLowerCase().replaceAll('_', ' ')} applications` : 'Withdraw this application'}>
+                Withdraw
+              </Button>
+              {['SELECTED', 'ACCEPTED'].includes(status) && (
+                <Button size="sm" variant="success" onClick={() => setOfferApp(summary)}>
+                  {status === 'ACCEPTED' ? 'View Offer Letter' : 'Offer Letter & E-Sign'}
+                </Button>
+              )}
+            </div>
+          </Card>
+
+          {summary.internship_status === 'CLOSED' && !['REJECTED', 'WITHDRAWN', 'ACCEPTED'].includes(status) && (
+            <div role="status" className="rounded-xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+              This internship is closed to new applications. Your application is unaffected.
+            </div>
+          )}
+
+          <Card className="p-5 sm:p-7">
+            <h2 className="mb-6 text-lg font-bold text-slate-900 dark:text-white">Application timeline</h2>
+            <ol className="space-y-0">
+              {(timeline.steps || []).map((step: any, index: number) => {
+                const state = step.state
+                const dateValue = step.timestamp || step.date
+                const eventEmails = step.emails || (timeline.related_emails || []).filter((mail: any) => mail.event_key === step.key || mail.event_type === step.key)
+                return (
+                  <li key={`${step.key || step.label}-${index}`} className="relative flex gap-4 pb-7 last:pb-0">
+                    {index < timeline.steps.length - 1 && <span className={`absolute left-[11px] top-6 h-full w-0.5 ${state === 'done' ? 'bg-emerald-400' : 'bg-slate-200 dark:bg-slate-700'}`} />}
+                    <span className={`relative z-10 mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 ${
+                      state === 'done' ? 'border-emerald-500 bg-emerald-500 text-white'
+                        : state === 'current' ? 'border-indigo-600 bg-white ring-4 ring-indigo-100 dark:bg-slate-900 dark:ring-indigo-950'
+                          : state === 'failed' ? 'border-rose-500 bg-rose-500 text-white'
+                            : 'border-slate-300 bg-white dark:border-slate-600 dark:bg-slate-900'
+                    }`}>
+                      {state === 'done' && <CheckCircle2 className="h-4 w-4" />}
+                      {state === 'failed' && <XCircle className="h-4 w-4" />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                        <h3 className={`text-sm font-semibold ${state === 'current' ? 'text-indigo-700 dark:text-indigo-300' : state === 'failed' ? 'text-rose-700 dark:text-rose-300' : 'text-slate-900 dark:text-white'}`}>{step.label}</h3>
+                        {dateValue && <time className="text-xs text-slate-500 dark:text-slate-400">{new Date(dateValue).toLocaleString()}</time>}
+                      </div>
+                      {step.description && <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{step.description}</p>}
+                      {step.interview && (
+                        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
+                          <p className="text-sm font-semibold text-slate-900 dark:text-white">Interview details</p>
+                          <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                            {[step.interview.date, step.interview.time, step.interview.type].filter(Boolean).join(' · ')}
+                          </p>
+                          {step.interview.link && <a href={step.interview.link} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400">Meeting link</a>}
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Link to={routes.interviews({ tab: 'upcoming', highlight: step.interview.id })}><Button size="sm">Launch / View interview</Button></Link>
+                            <Link to={routes.interviews({ tab: 'upcoming', highlight: step.interview.id })}><Button size="sm" variant="outline">Sync .ics</Button></Link>
+                          </div>
+                        </div>
+                      )}
+                      {eventEmails.map((mail: any) => (
+                        <div key={mail.id || mail.message_id} className="mt-3 flex flex-wrap items-center gap-2">
+                          {mail.gmail_url ? (
+                            <GmailActionLink href={mail.gmail_url} className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400">View Email</GmailActionLink>
+                          ) : (
+                            <Link to={routes.notifications} className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400">View in app mailbox</Link>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </li>
+                )
+              })}
+            </ol>
+          </Card>
+        </div>
+      ) : (
+        <EmptyState title="Application not found" description="This application may have been removed or is not available to your account." />
+      )}
+      {offerApp && (
+        <OfferLetterModal
+          isOpen
+          onClose={() => setOfferApp(null)}
+          applicationId={offerApp.id}
+          onSigned={() => { void fetchTimeline() }}
+          candidateName={session?.name || ''}
+          companyName={offerApp.company_name || 'Company'}
+          roleTitle={offerApp.title || offerApp.internship_title || 'Internship'}
+          stipend={offerApp.stipend}
+          offerSignedName={offerApp.offer_signed_name}
+          offerAcceptedAt={offerApp.offer_accepted_at}
         />
       )}
     </div>
@@ -1399,17 +1627,7 @@ export function StudentProfilePage() {
     }
   })
 
-  const [recommendations, setRecommendations] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem('student_recommendations')
-      return saved ? JSON.parse(saved) : []
-    } catch {
-      return []
-    }
-  })
-
   const [isQuizModalOpen, setIsQuizModalOpen] = useState(false)
-  const [isRecModalOpen, setIsRecModalOpen] = useState(false)
   const [isResumeEditorOpen, setIsResumeEditorOpen] = useState(false)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(session?.avatar_url || null)
 
@@ -1491,7 +1709,6 @@ export function StudentProfilePage() {
       setTempGithub('')
       setTempLeetcode('')
       setVerifiedBadges([])
-      setRecommendations([])
       setAvatarUrl(null)
       setValue('full_name', '')
       setValue('university', '')
@@ -1586,14 +1803,6 @@ export function StudentProfilePage() {
     })
   }
 
-  const handleRecommendationAdded = (rec: any) => {
-    setRecommendations((prev) => {
-      const updated = [rec, ...prev]
-      localStorage.setItem('student_recommendations', JSON.stringify(updated))
-      return updated
-    })
-  }
-
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1611,14 +1820,6 @@ export function StudentProfilePage() {
             leftIcon={<Award className="w-3.5 h-3.5 text-indigo-500" />}
           >
             Skill Assessment
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setIsRecModalOpen(true)}
-            leftIcon={<GraduationCap className="w-3.5 h-3.5 text-indigo-500" />}
-          >
-            Request Endorsement
           </Button>
         </div>
       </div>
@@ -1875,57 +2076,9 @@ export function StudentProfilePage() {
             </CardContent>
           </Card>
 
-          {/* Faculty & Mentor Endorsements */}
-          <Card className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-            <CardHeader className="flex flex-row items-center justify-between pb-3">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <GraduationCap className="w-4 h-4 text-indigo-500" />
-                  Academic & Mentor Endorsements
-                </CardTitle>
-                <CardDescription>Recommendations from professors and previous internship supervisors.</CardDescription>
-              </div>
-              <Button size="sm" variant="outline" onClick={() => setIsRecModalOpen(true)}>
-                Add Endorsement
-              </Button>
-            </CardHeader>
-            <CardContent>
-              {recommendations.length === 0 ? (
-                <div className="text-center py-6 space-y-2">
-                  <GraduationCap className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto" />
-                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">No mentor endorsements yet</p>
-                  <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
-                    Request formal recommendations from professors, department heads, or past project leads to elevate your profile.
-                  </p>
-                  <Button size="sm" variant="outline" onClick={() => setIsRecModalOpen(true)}>
-                    Add First Endorsement
-                  </Button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {recommendations.map((rec, i) => (
-                    <div
-                      key={i}
-                      className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 space-y-2"
-                    >
-                      <p className="text-xs text-slate-700 dark:text-slate-300 italic">
-                        "{rec.quote}"
-                      </p>
-                      <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
-                        <span className="font-bold text-slate-900 dark:text-slate-100">
-                          {rec.mentorName} • <span className="font-normal text-slate-500 dark:text-slate-400">{rec.title}, {rec.institution}</span>
-                        </span>
-                        <span className="text-slate-400">{rec.date}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Account Security & Password */}
-          <AccountSecurityCard userEmail={session?.email} role="Student" />
+          <Link to={routes.privacySecurity} className="block rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-900/60 dark:bg-indigo-950/30 dark:text-indigo-300 dark:hover:bg-indigo-950/50">
+            Security settings moved to Privacy &amp; Security Center →
+          </Link>
         </div>
 
         {/* Right Col: Verified Badges & Resume */}
@@ -2106,13 +2259,6 @@ export function StudentProfilePage() {
         isOpen={isQuizModalOpen}
         onClose={() => setIsQuizModalOpen(false)}
         onBadgeAwarded={handleBadgeAwarded}
-      />
-
-      {/* Recommendation Modal */}
-      <RecommendationModal
-        isOpen={isRecModalOpen}
-        onClose={() => setIsRecModalOpen(false)}
-        onRecommendationAdded={handleRecommendationAdded}
       />
 
       {/* In-App Resume Builder & Editor Modal */}

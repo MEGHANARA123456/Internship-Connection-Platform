@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.core.database import async_session_factory
 from app.core.security import decode_token
-from app.models import Application, Interview, User
+from app.models import Application, Conversation, Interview, User
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +34,10 @@ class ConnectionManager:
         await self.broadcast_presence()
 
     def disconnect_user(self, user_id: int, websocket: WebSocket):
-        if websocket in self.active_user_connections[user_id]:
-            self.active_user_connections[user_id].remove(websocket)
-            if not self.active_user_connections[user_id]:
+        sockets = self.active_user_connections.get(user_id)
+        if sockets and websocket in sockets:
+            sockets.remove(websocket)
+            if not sockets:
                 del self.active_user_connections[user_id]
         logger.info("User %s disconnected from chat WebSocket.", user_id)
 
@@ -58,21 +59,22 @@ class ConnectionManager:
     async def broadcast_presence(self):
         online_users = self.get_online_user_ids()
         msg = {"type": "presence_update", "online_users": online_users}
-        for uid in list(self.active_user_connections.keys()):
+        for uid in self.get_online_user_ids():
             await self.send_personal_message(uid, msg)
 
     async def connect_video(self, interview_id: int, websocket: WebSocket):
         await websocket.accept()
         self.video_rooms[interview_id].add(websocket)
         # Notify room peers
-        for peer in self.video_rooms[interview_id]:
+        for peer in self.video_rooms[interview_id].copy():
             if peer != websocket:
                 await peer.send_json({"type": "peer_joined"})
 
     def disconnect_video(self, interview_id: int, websocket: WebSocket):
-        if websocket in self.video_rooms[interview_id]:
-            self.video_rooms[interview_id].remove(websocket)
-            if not self.video_rooms[interview_id]:
+        peers = self.video_rooms.get(interview_id)
+        if peers and websocket in peers:
+            peers.remove(websocket)
+            if not peers:
                 del self.video_rooms[interview_id]
 
 
@@ -131,31 +133,27 @@ async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
 
                 # Handle typing indicator
                 if msg_type == "typing":
-                    recipient_id = data.get("recipient_id")
-                    if recipient_id:
+                    try:
+                        conversation_id = int(data.get("conversation_id"))
+                    except (TypeError, ValueError):
+                        continue
+                    async with async_session_factory() as db:
+                        conversation = await db.scalar(
+                            select(Conversation).where(Conversation.id == conversation_id)
+                        )
+                    if conversation and user.id in {conversation.student_id, conversation.company_id}:
+                        recipient_id = (
+                            conversation.company_id
+                            if user.id == conversation.student_id
+                            else conversation.student_id
+                        )
                         await manager.send_personal_message(
                             recipient_id,
                             {
                                 "type": "typing",
                                 "sender_id": user.id,
-                                "conversation_id": data.get("conversation_id"),
+                                "conversation_id": conversation_id,
                                 "is_typing": data.get("is_typing", False),
-                            },
-                        )
-
-                # Handle new message notification relay
-                elif msg_type == "chat_message":
-                    recipient_id = data.get("recipient_id")
-                    if recipient_id:
-                        message = data.get("message")
-                        if isinstance(message, dict):
-                            message = {**message, "sender_id": user.id}
-                        await manager.send_personal_message(
-                            recipient_id,
-                            {
-                                "type": "new_message",
-                                "conversation_id": data.get("conversation_id"),
-                                "message": message,
                             },
                         )
 

@@ -1,18 +1,22 @@
 import { useState, useEffect, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuthStore } from '../store/auth'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
+import { Textarea } from '../components/ui/Textarea'
 import { Card } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
 import { EmptyState } from '../components/ui/EmptyState'
 import { CardSkeleton } from '../components/ui/LoadingSkeleton'
 import { ErrorState } from '../components/ui/ErrorState'
 import { PaginationControls } from '../components/ui/PaginationControls'
+import { CardActionButton, CardActions, CardActionsRow } from '../components/ui/CardActions'
+import { GmailActionLink } from '../components/mail/GmailActionLink'
 import { VideoInterviewModal } from '../components/modals/VideoInterviewModal'
 import { ScheduleInterviewModal } from '../components/modals/ScheduleInterviewModal'
 import { useWebSocketChat } from '../lib/useWebSocketChat'
+import { routes } from '../lib/routes'
 import { isSensitiveNotification, maskCodes, requestNotificationPermission } from '../lib/notifications'
 import {
   Calendar,
@@ -60,9 +64,27 @@ export function InterviewsPage() {
   const [error, setError] = useState<string | null>(null)
   const [updatingId, setUpdatingId] = useState<number | null>(null)
   const [videoModalInterview, setVideoModalInterview] = useState<any | null>(null)
+  const [feedbackInterview, setFeedbackInterview] = useState<any | null>(null)
+  const [feedbackResult, setFeedbackResult] = useState<'PASS' | 'FAIL' | 'ON_HOLD'>('PASS')
+  const [feedbackRating, setFeedbackRating] = useState('')
+  const [feedbackText, setFeedbackText] = useState('')
+  const [savingFeedback, setSavingFeedback] = useState(false)
+  const [feedbackError, setFeedbackError] = useState('')
+  const [changeInterview, setChangeInterview] = useState<any | null>(null)
+  const [changeKind, setChangeKind] = useState<'RESCHEDULED' | 'CANCELLED'>('RESCHEDULED')
+  const [changeReason, setChangeReason] = useState('')
+  const [rescheduledAt, setRescheduledAt] = useState('')
+  const [savingChange, setSavingChange] = useState(false)
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false)
-  const [activeStatusTab, setActiveStatusTab] = useState('ALL')
+  const [cancelledReschedule, setCancelledReschedule] = useState<any | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = (searchParams.get('tab') || 'all').toUpperCase()
+  const [activeStatusTab, setActiveStatusTab] = useState(requestedTab === 'UPCOMING' ? 'UPCOMING' : 'ALL')
+  const [highlightedId, setHighlightedId] = useState<string | null>(null)
   const [page, setPage] = useState(1)
+  const [calendarView, setCalendarView] = useState(false)
+  const [calendarMode, setCalendarMode] = useState<'month' | 'week'>('month')
+  const [calendarDate, setCalendarDate] = useState(() => new Date())
 
   const statusTabs = [
     { key: 'ALL', label: 'All', statuses: null },
@@ -120,7 +142,7 @@ export function InterviewsPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await api.get('/interviews/my')
+      const res = await api.get(session?.role === 'COMPANY' ? '/company/interviews' : '/interviews/my')
       setInterviews(res.data || [])
     } catch {
       setError('Failed to fetch your scheduled interviews.')
@@ -131,13 +153,101 @@ export function InterviewsPage() {
 
   useEffect(() => {
     fetchInterviews()
-  }, [])
+  }, [session?.role])
+
+  const saveInterviewFeedback = async () => {
+    if (!feedbackInterview) return
+    setSavingFeedback(true)
+    setFeedbackError('')
+    try {
+      const response = await api.patch(`/interviews/${feedbackInterview.id}/feedback`, {
+        result: feedbackResult,
+        rating: feedbackRating ? Number(feedbackRating) : null,
+        feedback: feedbackText.trim() || null,
+      })
+      setInterviews((current) => current.map((item) => item.id === feedbackInterview.id
+        ? { ...item, result: response.data.result, rating: response.data.rating, feedback: response.data.feedback, feedback_at: response.data.feedback_at }
+        : item))
+      setFeedbackInterview(null)
+    } catch {
+      setFeedbackError('Could not save the private interview outcome. Please retry.')
+    } finally {
+      setSavingFeedback(false)
+    }
+  }
+
+  const saveInterviewChange = async () => {
+    if (!changeInterview || !changeReason.trim()) return
+    if (changeKind === 'RESCHEDULED' && !rescheduledAt) return
+    setSavingChange(true)
+    try {
+      await api.patch(`/interviews/${changeInterview.id}`, {
+        status: changeKind,
+        change_reason: changeReason.trim(),
+        ...(changeKind === 'RESCHEDULED' ? { scheduled_at: new Date(rescheduledAt).toISOString() } : {}),
+      })
+      setChangeInterview(null)
+      setChangeReason('')
+      await fetchInterviews()
+    } catch {
+      setError(`Could not ${changeKind === 'RESCHEDULED' ? 'reschedule' : 'cancel'} this interview. Please retry.`)
+    } finally {
+      setSavingChange(false)
+    }
+  }
+
+  useEffect(() => {
+    if (session?.role !== 'STUDENT') return
+    void api.get('/notifications').then(async (response) => {
+      const inviteIds = (response.data || [])
+        .filter((notice: any) => !notice.read_at && notice.notification_type === 'INTERVIEW_INVITE')
+        .map((notice: any) => notice.id)
+      await Promise.all(inviteIds.map((notificationId: number) => api.patch(`/notifications/${notificationId}/read`)))
+    }).catch((notificationError) => {
+      console.error('Failed to mark interview invitations as read:', notificationError)
+    })
+  }, [session?.role])
 
   const filteredInterviews = activeStatusTab === 'ALL'
     ? interviews
-    : interviews.filter((item) => statusTabs.find((tab) => tab.key === activeStatusTab)?.statuses?.includes(item.status))
+    : interviews.filter((item) => {
+      const tab = statusTabs.find((entry) => entry.key === activeStatusTab)
+      if (!tab?.statuses?.includes(item.status)) return false
+      return activeStatusTab !== 'UPCOMING' || new Date(item.scheduled_at).getTime() > Date.now()
+    })
   const totalPages = Math.max(1, Math.ceil(filteredInterviews.length / 10))
   const pagedInterviews = filteredInterviews.slice((page - 1) * 10, page * 10)
+  const calendarStart = calendarMode === 'month'
+    ? new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1)
+    : new Date(calendarDate.getFullYear(), calendarDate.getMonth(), calendarDate.getDate())
+  const mondayOffset = (calendarStart.getDay() + 6) % 7
+  calendarStart.setDate(calendarStart.getDate() - mondayOffset)
+  const calendarDays = Array.from({ length: calendarMode === 'month' ? 42 : 7 }, (_, index) => {
+    const day = new Date(calendarStart)
+    day.setDate(calendarStart.getDate() + index)
+    return day
+  })
+  const calendarTitle = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(calendarDate)
+  useEffect(() => {
+    const selectedTab = (searchParams.get('tab') || 'all').toUpperCase()
+    setActiveStatusTab(['UPCOMING', 'COMPLETED', 'CANCELLED'].includes(selectedTab) ? selectedTab : 'ALL')
+    setPage(1)
+  }, [searchParams])
+  useEffect(() => {
+    const highlight = searchParams.get('highlight')
+    if (!highlight || !interviews.some((item) => String(item.id) === highlight)) return
+    const index = filteredInterviews.findIndex((item) => String(item.id) === highlight)
+    if (index >= 0) setPage(Math.floor(index / 10) + 1)
+    setHighlightedId(highlight)
+    const timeout = window.setTimeout(() => setHighlightedId(null), 3000)
+    return () => window.clearTimeout(timeout)
+  }, [searchParams, interviews, filteredInterviews])
+  useEffect(() => {
+    if (!highlightedId) return
+    window.requestAnimationFrame(() => {
+      document.getElementById(`interview-${highlightedId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [highlightedId, page])
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages))
   }, [totalPages])
@@ -180,7 +290,8 @@ export function InterviewsPage() {
         <div role="tablist" aria-label="Interview status" className="flex w-max min-w-full items-center gap-1 border-b border-slate-200 pb-2 dark:border-slate-800">
           {statusTabs.map((tab) => {
             const count = tab.statuses
-              ? interviews.filter((item) => tab.statuses?.includes(item.status)).length
+              ? interviews.filter((item) => tab.statuses?.includes(item.status)
+                && (tab.key !== 'UPCOMING' || new Date(item.scheduled_at).getTime() > Date.now())).length
               : interviews.length
             const selected = activeStatusTab === tab.key
             return (
@@ -191,6 +302,7 @@ export function InterviewsPage() {
                 aria-selected={selected}
                 onClick={() => {
                   setActiveStatusTab(tab.key)
+                    setSearchParams(tab.key === 'ALL' ? {} : { tab: tab.key.toLowerCase() })
                   setPage(1)
                 }}
                 className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
@@ -209,6 +321,42 @@ export function InterviewsPage() {
             )
           })}
         </div>
+      </div>
+      {activeStatusTab === 'UPCOMING' && (
+        <div className="mb-4 flex items-center gap-2 text-xs">
+          <span className="text-slate-500 dark:text-slate-400">Filtered by:</span>
+          <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 font-medium text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300">Upcoming</span>
+          <button type="button" onClick={() => { setSearchParams({}); setActiveStatusTab('ALL') }} className="rounded px-2 py-1 font-semibold text-indigo-700 underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300">Clear</button>
+        </div>
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="inline-flex rounded-lg border border-slate-200 p-1 dark:border-slate-700">
+          {(['list', 'calendar'] as const).map((view) => (
+            <button key={view} type="button" aria-pressed={(view === 'calendar') === calendarView} onClick={() => setCalendarView(view === 'calendar')} className={`min-h-10 rounded-md px-3 text-xs font-semibold ${((view === 'calendar') === calendarView) ? 'bg-indigo-600 text-white' : 'text-slate-600 dark:text-slate-300'}`}>
+              {view === 'list' ? 'List view' : 'Calendar view'}
+            </button>
+          ))}
+        </div>
+        {calendarView && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="min-w-36 text-center text-xs font-semibold text-slate-700 dark:text-slate-200">{calendarTitle}</span>
+            <button type="button" aria-label="Previous calendar period" onClick={() => setCalendarDate((current) => {
+              const next = new Date(current)
+              next.setDate(next.getDate() + (calendarMode === 'month' ? -30 : -7))
+              return next
+            })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-xs dark:border-slate-700">Previous</button>
+            <button type="button" aria-label="Next calendar period" onClick={() => setCalendarDate((current) => {
+              const next = new Date(current)
+              next.setDate(next.getDate() + (calendarMode === 'month' ? 30 : 7))
+              return next
+            })} className="min-h-10 rounded-lg border border-slate-200 px-3 text-xs dark:border-slate-700">Next</button>
+            {(['month', 'week'] as const).map((mode) => (
+              <button key={mode} type="button" aria-pressed={calendarMode === mode} onClick={() => setCalendarMode(mode)} className={`min-h-10 rounded-lg px-3 text-xs font-semibold ${calendarMode === mode ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300' : 'border border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>
+                {mode === 'month' ? 'Month' : 'Week'}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 4-Stage Interview Process Roadmap */}
@@ -354,6 +502,35 @@ export function InterviewsPage() {
             description="Interviews with this status will appear here."
           />
         )
+      ) : calendarView ? (
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
+          <div className="grid min-w-[700px] grid-cols-7 gap-1">
+            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((weekday) => (
+              <div key={weekday} className="px-2 py-1 text-[10px] font-bold uppercase text-slate-500">{weekday}</div>
+            ))}
+            {calendarDays.map((day) => {
+              const dayInterviews = filteredInterviews.filter((item) => {
+                const scheduled = new Date(item.scheduled_at)
+                return scheduled.getFullYear() === day.getFullYear()
+                  && scheduled.getMonth() === day.getMonth()
+                  && scheduled.getDate() === day.getDate()
+              })
+              const inCurrentMonth = day.getMonth() === calendarDate.getMonth()
+              return (
+                <div key={day.toISOString()} className={`min-h-24 min-w-0 rounded-lg border p-1.5 ${inCurrentMonth ? 'border-slate-200 dark:border-slate-700' : 'border-transparent bg-slate-50/70 text-slate-400 dark:bg-slate-950/30'}`}>
+                  <p className="text-[10px] font-semibold">{day.getDate()}</p>
+                  <div className="mt-1 space-y-1">
+                    {dayInterviews.map((item) => (
+                      <div key={item.id} className="truncate rounded bg-indigo-50 px-1.5 py-1 text-[9px] text-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-200" title={`${item.interview_type}: ${item.candidate_name || item.company_name || 'Interview'}`}>
+                        {new Date(item.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {item.candidate_name || item.internship_title}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
       ) : (
         <div className="space-y-4">
           {pagedInterviews.map((item) => {
@@ -361,9 +538,9 @@ export function InterviewsPage() {
             const isCompany = session?.role === 'COMPANY'
 
             return (
-              <Card key={item.id} className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                  <div className="space-y-1">
+              <Card id={`interview-${item.id}`} key={item.id} className={`space-y-3 border p-5 transition-colors dark:bg-slate-900 ${highlightedId === String(item.id) ? 'border-indigo-500 ring-2 ring-indigo-300 dark:ring-indigo-700' : 'border-slate-200 dark:border-slate-800'}`}>
+                <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-center gap-2.5 flex-wrap">
                       <h3 className="text-base font-bold text-slate-900 dark:text-white">
                         {item.interview_type} Interview
@@ -420,84 +597,151 @@ export function InterviewsPage() {
                         <strong className="text-slate-700 dark:text-slate-200">Instructions:</strong> {item.notes}
                       </p>
                     )}
+                    {item.status === 'CANCELLED' && (
+                      <p className="rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">
+                        {item.cancel_reason === 'TIME_PASSED'
+                          ? 'Cancelled automatically: time passed'
+                          : `Cancelled: ${item.cancel_reason || 'Manual cancellation'}`}
+                      </p>
+                    )}
+                    {isCompany && item.result && (
+                      <div className="rounded-md border border-indigo-100 bg-indigo-50 p-2.5 text-xs dark:border-indigo-900/60 dark:bg-indigo-950/30">
+                        <strong>Private outcome: {item.result.replaceAll('_', ' ')}</strong>
+                        {item.rating != null && <span> · Rating {item.rating}/5</span>}
+                        {item.feedback && <p className="mt-1 whitespace-pre-wrap">{item.feedback}</p>}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex items-center gap-2 flex-wrap shrink-0">
-                    {item.interview_type === 'VIDEO' && <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={() => setVideoModalInterview(item)}
-                      leftIcon={<Video className="w-3.5 h-3.5" />}
-                      className="bg-indigo-600 hover:bg-indigo-700"
-                    >
-                      Launch In-App Video
-                    </Button>}
-
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => downloadIcs(item)}
-                      leftIcon={<Download className="w-3.5 h-3.5 text-slate-500" />}
-                      title="Export .ics calendar invitation"
-                    >
-                      Sync .ics
-                    </Button>
-
-                    <a
-                      href={getGoogleCalendarUrl(item)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-block"
-                      title="Add to Google Calendar"
-                    >
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        leftIcon={<Calendar className="w-3.5 h-3.5 text-indigo-500" />}
+                  <CardActions>
+                    <CardActionsRow>
+                      <CardActionButton
+                        className="whitespace-nowrap"
+                        aria-label={`Sync calendar invitation for ${item.internship_title || item.interview_type} interview`}
+                        title={item.status === 'CANCELLED' ? 'Calendar sync is unavailable for cancelled interviews' : 'Export .ics calendar invitation'}
+                        disabled={item.status === 'CANCELLED'}
+                        leftIcon={<Download className="h-4 w-4" />}
+                        onClick={() => downloadIcs(item)}
+                      >
+                        Sync .ics
+                      </CardActionButton>
+                      <CardActionButton
+                        className="whitespace-nowrap"
+                        aria-label={`Add ${item.internship_title || item.interview_type} interview to Google Calendar`}
+                        title={item.status === 'CANCELLED' ? 'Google Calendar is unavailable for cancelled interviews' : 'Add to Google Calendar'}
+                        disabled={item.status === 'CANCELLED'}
+                        leftIcon={<Calendar className="h-4 w-4 text-indigo-500" />}
+                        onClick={() => window.open(getGoogleCalendarUrl(item), '_blank', 'noopener,noreferrer')}
                       >
                         Google Cal
-                      </Button>
-                    </a>
+                      </CardActionButton>
+                    </CardActionsRow>
 
-                    {isExternalUrl(item.meeting_link) && (
-                      <a
-                        href={item.meeting_link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-block"
-                      >
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          rightIcon={<ExternalLink className="w-3.5 h-3.5 ml-1" />}
-                        >
-                          External Link
-                        </Button>
-                      </a>
-                    )}
-
-                    {isCompany && item.status === 'SCHEDULED' && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
+                    {isCompany && ['SCHEDULED', 'RESCHEDULED'].includes(item.status) && (
+                      <CardActionsRow>
+                        <CardActionButton
+                          aria-label={`Mark ${item.internship_title || item.interview_type} interview done`}
                           isLoading={updatingId === item.id}
                           onClick={() => handleUpdateStatus(item.id, 'COMPLETED')}
                         >
                           Mark Done
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-rose-600"
+                        </CardActionButton>
+                        <CardActionButton
+                          aria-label={`Reschedule ${item.internship_title || item.interview_type} interview`}
+                          onClick={() => {
+                            setChangeInterview(item)
+                            setChangeKind('RESCHEDULED')
+                            setRescheduledAt(new Date(item.scheduled_at).toISOString().slice(0, 16))
+                            setChangeReason('')
+                          }}
+                        >
+                          Reschedule
+                        </CardActionButton>
+                        <CardActionButton
+                          intent="danger"
+                          aria-label={`Cancel ${item.internship_title || item.interview_type} interview`}
                           isLoading={updatingId === item.id}
-                          onClick={() => handleUpdateStatus(item.id, 'CANCELLED')}
+                          onClick={() => {
+                            setChangeInterview(item)
+                            setChangeKind('CANCELLED')
+                            setChangeReason('')
+                          }}
                         >
                           Cancel
-                        </Button>
-                      </>
+                        </CardActionButton>
+                      </CardActionsRow>
                     )}
-                  </div>
+                    {isCompany && item.status === 'COMPLETED' && (
+                      <CardActionsRow>
+                        <CardActionButton
+                          aria-label={`Record outcome for ${item.internship_title || item.interview_type} interview`}
+                          onClick={() => {
+                            setFeedbackInterview(item)
+                            setFeedbackResult(item.result || 'PASS')
+                            setFeedbackRating(item.rating ? String(item.rating) : '')
+                            setFeedbackText(item.feedback || '')
+                          }}
+                        >
+                          {item.result ? 'Edit outcome' : 'Record outcome'}
+                        </CardActionButton>
+                      </CardActionsRow>
+                    )}
+
+                    {isCompany && item.status === 'CANCELLED' && (
+                      <CardActionsRow>
+                        <CardActionButton
+                          intent="primary"
+                          aria-label={`Reschedule ${item.internship_title || item.interview_type} interview`}
+                          onClick={() => setCancelledReschedule(item)}
+                        >
+                          Reschedule
+                        </CardActionButton>
+                        {item.cancel_reason === 'TIME_PASSED' && (
+                          <CardActionButton
+                            aria-label={`Mark ${item.internship_title || item.interview_type} interview completed`}
+                            isLoading={updatingId === item.id}
+                            onClick={() => handleUpdateStatus(item.id, 'COMPLETED')}
+                          >
+                            Mark completed
+                          </CardActionButton>
+                        )}
+                      </CardActionsRow>
+                    )}
+
+                    {isExternalUrl(item.meeting_link) && (
+                      <CardActionButton
+                        aria-label="Open external meeting link"
+                        rightIcon={<ExternalLink className="h-4 w-4" />}
+                        onClick={() => window.open(item.meeting_link, '_blank', 'noopener,noreferrer')}
+                      >
+                        External Link
+                      </CardActionButton>
+                    )}
+
+                    {item.interview_type === 'VIDEO' && (
+                      <CardActionButton
+                        intent="primary"
+                        aria-label={['SCHEDULED', 'RESCHEDULED'].includes(item.status)
+                          ? 'Launch In-App Video'
+                          : `Launch In-App Video unavailable for ${item.status.toLowerCase()} interview`}
+                        title={['SCHEDULED', 'RESCHEDULED'].includes(item.status)
+                          ? 'Launch the in-app video interview'
+                          : `Video launch is unavailable for ${item.status.toLowerCase()} interviews`}
+                        disabled={!['SCHEDULED', 'RESCHEDULED'].includes(item.status)}
+                        leftIcon={<Video className="h-4 w-4" />}
+                        onClick={() => setVideoModalInterview(item)}
+                      >
+                        Launch In-App Video
+                      </CardActionButton>
+                    )}
+                    {!isCompany && item.status === 'CANCELLED' && (
+                      <Link to={routes.messages({ contactId: item.scheduled_by })} className="block w-full">
+                        <CardActionButton className="whitespace-nowrap" leftIcon={<MessageSquare className="h-4 w-4" />}>
+                          Message Recruiter
+                        </CardActionButton>
+                      </Link>
+                    )}
+                  </CardActions>
                 </div>
               </Card>
             )
@@ -524,6 +768,69 @@ export function InterviewsPage() {
         onClose={() => setIsScheduleModalOpen(false)}
         onScheduled={fetchInterviews}
       />
+      {cancelledReschedule && (
+        <ScheduleInterviewModal
+          isOpen
+          onClose={() => setCancelledReschedule(null)}
+          applicationId={cancelledReschedule.application_id}
+          candidateName={cancelledReschedule.candidate_name}
+          jobTitle={cancelledReschedule.internship_title}
+          rescheduleInterview={cancelledReschedule}
+          onScheduled={async () => {
+            setCancelledReschedule(null)
+            await fetchInterviews()
+          }}
+        />
+      )}
+      <Modal
+        isOpen={feedbackInterview !== null}
+        onClose={() => setFeedbackInterview(null)}
+        title="Private interview outcome"
+        description="This feedback is visible only to your company."
+      >
+        <div className="space-y-4">
+          {feedbackError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-300">{feedbackError}</p>}
+          <fieldset>
+            <legend className="mb-2 text-xs font-semibold text-slate-700 dark:text-slate-200">Result</legend>
+            <div className="grid grid-cols-3 gap-2">
+              {(['PASS', 'FAIL', 'ON_HOLD'] as const).map((result) => (
+                <button key={result} type="button" aria-pressed={feedbackResult === result} onClick={() => setFeedbackResult(result)} className={`min-h-11 rounded-lg border px-2 text-xs font-semibold ${feedbackResult === result ? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300' : 'border-slate-300 text-slate-700 dark:border-slate-700 dark:text-slate-200'}`}>
+                  {result.replaceAll('_', ' ')}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-200">
+            Rating (1–5, optional)
+            <input type="number" min={1} max={5} value={feedbackRating} onChange={(event) => setFeedbackRating(event.target.value)} className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base dark:border-slate-700 dark:bg-slate-800" />
+          </label>
+          <Textarea label="Private feedback" rows={4} maxLength={5000} value={feedbackText} onChange={(event) => setFeedbackText(event.target.value)} />
+          <div className="flex justify-end">
+            <Button type="button" onClick={() => void saveInterviewFeedback()} disabled={savingFeedback} isLoading={savingFeedback}>Save outcome</Button>
+          </div>
+        </div>
+      </Modal>
+      <Modal
+        isOpen={changeInterview !== null}
+        onClose={() => setChangeInterview(null)}
+        title={changeKind === 'RESCHEDULED' ? 'Reschedule interview' : 'Cancel interview'}
+        description={`${changeInterview?.candidate_name || 'Candidate'} · a reason is sent with the candidate notification`}
+      >
+        <form onSubmit={(event) => { event.preventDefault(); void saveInterviewChange() }} className="space-y-4">
+          {changeKind === 'RESCHEDULED' && (
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-200">
+              New date and time
+              <input type="datetime-local" required value={rescheduledAt} onChange={(event) => setRescheduledAt(event.target.value)} className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base dark:border-slate-700 dark:bg-slate-800" />
+            </label>
+          )}
+          <Textarea label="Reason" rows={3} required maxLength={1000} value={changeReason} onChange={(event) => setChangeReason(event.target.value)} />
+          <div className="flex justify-end">
+            <Button type="submit" disabled={savingChange || !changeReason.trim()} isLoading={savingChange}>
+              {changeKind === 'RESCHEDULED' ? 'Save new time' : 'Confirm cancellation'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   )
 }
@@ -575,6 +882,7 @@ export function MessagesPage() {
 
   // Fetch all conversations
   const fetchConversations = async () => {
+    if (!session?.accessToken || document.visibilityState !== 'visible') return
     try {
       const res = await api.get('/conversations')
       const convs = Array.isArray(res.data) ? res.data : []
@@ -605,14 +913,23 @@ export function MessagesPage() {
   }
 
   useEffect(() => {
-    fetchConversations()
-    fetchRecommendedContacts()
-    const interval = setInterval(fetchConversations, 10000)
-    return () => clearInterval(interval)
-  }, [])
+    const refresh = () => {
+      if (!session?.accessToken || document.visibilityState !== 'visible') return
+      void fetchConversations()
+      void fetchRecommendedContacts()
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [session?.accessToken])
 
   // Fetch messages for selected conversation
   const fetchMessages = async (convId: number) => {
+    if (!session?.accessToken || document.visibilityState !== 'visible') return
     setLoadingMsgs(true)
     try {
       const res = await api.get(`/conversations/${convId}/messages`)
@@ -625,16 +942,18 @@ export function MessagesPage() {
   }
 
   useEffect(() => {
-    if (!selectedConv) return
-    fetchMessages(selectedConv.id)
-    const interval = setInterval(() => {
-      api
-        .get(`/conversations/${selectedConv.id}/messages`)
-        .then((res) => setMessages(Array.isArray(res.data) ? res.data : []))
-        .catch(() => {})
-    }, 4000)
-    return () => clearInterval(interval)
-  }, [selectedConv?.id])
+    if (!selectedConv || !session?.accessToken) return
+    const refreshMessages = () => {
+      if (document.visibilityState === 'visible') void fetchMessages(selectedConv.id)
+    }
+    refreshMessages()
+    window.addEventListener('focus', refreshMessages)
+    document.addEventListener('visibilitychange', refreshMessages)
+    return () => {
+      window.removeEventListener('focus', refreshMessages)
+      document.removeEventListener('visibilitychange', refreshMessages)
+    }
+  }, [selectedConv?.id, session?.accessToken])
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -747,7 +1066,7 @@ export function MessagesPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Link to="/interviews">
+          <Link to={routes.interviews({ tab: 'upcoming' })}>
             <Button size="sm" variant="outline" leftIcon={<Calendar className="w-3.5 h-3.5" />}>
               Interview Roadmap
             </Button>
@@ -1066,7 +1385,7 @@ export function MessagesPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <Link to="/interviews">
+                  <Link to={routes.interviews({ tab: 'upcoming' })}>
                     <Button
                       size="sm"
                       variant="outline"
@@ -1088,7 +1407,7 @@ export function MessagesPage() {
                   </span>
                 </div>
                 <Link
-                  to="/interviews"
+                  to={routes.interviews({ tab: 'upcoming' })}
                   className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline flex items-center gap-1 shrink-0 ml-2"
                 >
                   Schedule / View <ArrowRight className="w-3 h-3" />
@@ -1525,6 +1844,32 @@ export function NotificationsPage() {
                       )}
                     </div>
                     <p className="text-xs text-slate-600 dark:text-slate-300">{item.body || item.message}</p>
+                    {session?.role === 'STUDENT' && item.application_id && (
+                      <div className="mt-2 flex flex-wrap items-center gap-3">
+                        <Link
+                          to={routes.application(item.application_id)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            if (!item.read_at) void handleMarkRead(item.id)
+                          }}
+                          className="inline-flex text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                        >
+                          Track application
+                        </Link>
+                        {item.gmail_url && (
+                          <GmailActionLink
+                            href={item.gmail_url}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              if (!item.read_at) void handleMarkRead(item.id)
+                            }}
+                            className="inline-flex text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                          >
+                            View Email
+                          </GmailActionLink>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <span className="text-[11px] text-slate-400 shrink-0">
                     {new Date(item.created_at).toLocaleDateString()}
@@ -1593,14 +1938,23 @@ export function NotificationsPage() {
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setExpandedEmailId(isExpanded ? null : mail.id)}
-                          leftIcon={<Eye className="w-3.5 h-3.5 text-slate-500" />}
-                        >
-                          {isExpanded ? 'Hide Content' : 'View Email'}
-                        </Button>
+                        {mail.gmail_url ? (
+                          <GmailActionLink
+                            href={mail.gmail_url}
+                            className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-indigo-200 bg-white px-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-indigo-800 dark:bg-slate-900 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
+                          >
+                            View Email <ExternalLink className="h-3.5 w-3.5" />
+                          </GmailActionLink>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setExpandedEmailId(isExpanded ? null : mail.id)}
+                            leftIcon={<Eye className="w-3.5 h-3.5 text-slate-500" />}
+                          >
+                            {isExpanded ? 'Hide Content' : 'View Email'}
+                          </Button>
+                        )}
                       </div>
                     </div>
 

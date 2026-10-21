@@ -1,6 +1,6 @@
 """add company verification documents and first login tracking
 
-Revision ID: 0011_company_documents_first_login
+Revision ID: 0011_company_docs_login
 Revises: 0010_clean_interview_links
 """
 
@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0011_company_documents_first_login"
+revision = "0011_company_docs_login"
 down_revision = "0010_clean_interview_links"
 branch_labels = None
 depends_on = None

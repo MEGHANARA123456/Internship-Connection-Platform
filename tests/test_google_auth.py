@@ -53,6 +53,12 @@ async def test_google_auth_new_student(test_client: AsyncClient, google_identity
     assert "refresh_token" in data
     assert data["role"] == "STUDENT"
     assert data["user_id"] > 0
+    profile = await test_client.get(
+        "/api/v1/profiles/student",
+        headers={"Authorization": f"Bearer {data['access_token']}"},
+    )
+    assert profile.status_code == 200
+    assert profile.json()["university"] == ""
 
 
 @pytest.mark.anyio

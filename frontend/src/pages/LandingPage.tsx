@@ -5,6 +5,7 @@ import { useAuthStore } from '../store/auth'
 import { Button } from '../components/ui/Button'
 import { Badge } from '../components/ui/Badge'
 import { Card } from '../components/ui/Card'
+import { routes } from '../lib/routes'
 import {
   GraduationCap,
   Building,
@@ -37,7 +38,7 @@ export function LandingPage() {
 
   const handleHeroSearch = (e: React.FormEvent) => {
     e.preventDefault()
-    navigate(`/opportunities${searchQuery ? `?location=${encodeURIComponent(searchQuery)}` : ''}`)
+    navigate(routes.opportunitySearch(searchQuery ? { location: searchQuery } : {}))
   }
 
   return (
@@ -79,26 +80,26 @@ export function LandingPage() {
 
         {/* Action Buttons */}
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-xs">
-          <Link to="/opportunities">
+          <Link to={routes.opportunities}>
             <Button variant="primary" size="sm" className="shadow-sm">
               Browse Internships
             </Button>
           </Link>
           {!session ? (
             <>
-              <Link to="/register-student">
+              <Link to={routes.studentRegister}>
                 <Button variant="outline" size="sm">
                   Register as Student
                 </Button>
               </Link>
-              <Link to="/register-company">
+              <Link to={routes.companyRegister}>
                 <Button variant="ghost" size="sm" className="text-slate-600">
                   Post an Internship &rarr;
                 </Button>
               </Link>
             </>
           ) : (
-            <Link to="/dashboard">
+            <Link to={routes.dashboard}>
               <Button variant="outline" size="sm">
                 Go to Dashboard &rarr;
               </Button>
@@ -142,7 +143,7 @@ export function LandingPage() {
                 </li>
               </ul>
               <div className="pt-3">
-                <Link to="/register-student">
+                <Link to={routes.studentRegister}>
                   <Button size="sm" variant="outline" className="w-full">
                     Student Signup
                   </Button>
@@ -174,7 +175,7 @@ export function LandingPage() {
                 </li>
               </ul>
               <div className="pt-3">
-                <Link to="/register-company">
+                <Link to={routes.companyRegister}>
                   <Button size="sm" variant="primary" className="w-full">
                     Employer Registration
                   </Button>
@@ -206,7 +207,7 @@ export function LandingPage() {
                 </li>
               </ul>
               <div className="pt-3">
-                <Link to="/login">
+                <Link to={routes.login()}>
                   <Button size="sm" variant="outline" className="w-full">
                     Admin Portal
                   </Button>
@@ -225,7 +226,7 @@ export function LandingPage() {
               <h2 className="text-xl font-bold text-slate-900">Featured Openings</h2>
               <p className="text-xs text-slate-500 mt-0.5">Explore active roles recently approved by moderators.</p>
             </div>
-            <Link to="/opportunities" className="text-xs text-indigo-600 font-semibold hover:underline flex items-center gap-1">
+            <Link to={routes.opportunities} className="text-xs text-indigo-600 font-semibold hover:underline flex items-center gap-1">
               View all roles <ArrowRight className="w-3.5 h-3.5" />
             </Link>
           </div>
@@ -252,7 +253,7 @@ export function LandingPage() {
                     <MapPin className="w-3 h-3" />
                     {job.location}
                   </span>
-                  <Link to="/opportunities" className="text-indigo-600 font-medium hover:underline">
+                  <Link to={routes.opportunities} className="text-indigo-600 font-medium hover:underline">
                     Details &rarr;
                   </Link>
                 </div>
@@ -267,7 +268,7 @@ export function LandingPage() {
         <DesktopAnalysisVisuals
           variant="public"
           title="Transparent Ecosystem Analytics & Insights"
-          subtitle="Explore live recruitment metrics: placement progression, hiring speed, and role distributions"
+          subtitle="Explore live recruitment metrics: applicant progression, hiring speed, and role distributions"
         />
       </section>
 

@@ -1,6 +1,7 @@
 import React, { Component, type ReactNode } from 'react'
 import { AlertCircle, RefreshCw, Home } from 'lucide-react'
 import { Button } from './Button'
+import { routes } from '../../lib/routes'
 
 interface Props {
   children: ReactNode
@@ -30,7 +31,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   handleGoHome = () => {
-    window.location.href = '/'
+    window.location.href = routes.home
   }
 
   render() {

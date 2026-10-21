@@ -1,3 +1,4 @@
+import '@testing-library/jest-dom/vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
@@ -87,7 +88,7 @@ describe('AdminAuditLogsPage', () => {
       expect(screen.getByText('admin@test.com')).toBeDefined()
     })
     // Action badge
-    expect(screen.getByText('user_suspended')).toBeDefined()
+    expect(screen.getAllByText('Users suspended').length).toBeGreaterThan(0)
     // Target cell — /user/ matches both the badge and the target cell, use getAllByText
     expect(screen.getAllByText(/user/).length).toBeGreaterThanOrEqual(1)
 
@@ -115,10 +116,37 @@ describe('AdminAuditLogsPage', () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Actor email')).toBeDefined()
     })
-    // Action select
+    fireEvent.click(screen.getByRole('combobox', { name: 'Filter audit logs by action' }))
     expect(screen.getByRole('option', { name: 'All actions' })).toBeDefined()
-    // Target type select
-    expect(screen.getByRole('option', { name: 'All targets' })).toBeDefined()
+    fireEvent.click(screen.getByRole('combobox', { name: 'Filter audit logs by target type' }))
+    expect(screen.getByRole('option', { name: 'Target type' })).toBeDefined()
+  })
+
+  it('renders resolved target labels and links, and shows a dash without a target', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            id: 2, actor_email: null, actor_role: null, action: 'GDPR_DATA_EXPORT',
+            target_type: 'posting', target_id: 25, target_label: 'Research Intern · Acme',
+            target_url: '/admin/companies/20/postings', metadata: {}, created_at: new Date().toISOString(),
+          },
+          {
+            id: 3, actor_email: 'admin@test.com', actor_role: 'ADMIN', action: 'report_resolved',
+            target_type: null, target_id: null, target_label: null, target_url: null,
+            metadata: {}, created_at: new Date().toISOString(),
+          },
+        ],
+        total: 2, page: 1, page_size: 25,
+      },
+    })
+    render(<BrowserRouter><AdminAuditLogsPage /></BrowserRouter>)
+    expect(await screen.findByText('Research Intern · Acme')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'View' })).toHaveAttribute('href', '/admin/companies/20/postings')
+    expect(screen.getAllByText('Internship').length).toBeGreaterThan(0)
+    expect(screen.getByText('GDPR data export')).toBeInTheDocument()
+    expect(screen.getByText('—')).toBeInTheDocument()
+    expect(screen.getByText('System')).toBeInTheDocument()
   })
 })
 

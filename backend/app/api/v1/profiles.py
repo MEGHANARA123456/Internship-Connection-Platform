@@ -2,6 +2,7 @@
 # Profile endpoints for student, company, and user profile management.
 # -----------------------------------------------------------------------------
 
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 from typing import Annotated, Any
@@ -14,10 +15,11 @@ from app.api.v1.dependencies import DbSession, require_roles
 from app.core.config import get_settings
 from app.models import Application, CompanyProfile, Internship, Resume, StudentProfile, User, UserRole
 from app.schemas.profile import CompanyProfileUpdate, ProfileResponse, ResumeResponse, StudentProfileUpdate
+from app.services.application_events import record_event
 
 router = APIRouter(prefix="/profiles", tags=["profiles"])
-student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]
-company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]
+student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))] # type: ignore
+company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))] # type: ignore
 ALLOWED_TYPES = {"application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 
@@ -112,6 +114,7 @@ async def upload_resume(user: student_only, db: DbSession, file: UploadFile = Fi
         old_path.unlink(missing_ok=True)
         existing.original_filename, existing.stored_filename = file.filename or stored_name, stored_name
         existing.content_type, existing.file_size = file.content_type or "application/octet-stream", len(content)
+        existing.uploaded_at = datetime.now(timezone.utc)
         resume = existing
     else:
         resume = Resume(student_id=user.id, original_filename=file.filename or stored_name, stored_filename=stored_name, content_type=file.content_type or "application/octet-stream", file_size=len(content))
@@ -142,13 +145,32 @@ async def get_my_resume(user: student_only, db: DbSession) -> Resume:
 
 
 @router.get("/resume/{resume_id}", response_model=ResumeResponse)
-async def resume_metadata(resume_id: int, user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))], db: DbSession) -> Resume:
-    return await get_resume_for_user(resume_id, user, db)
+async def resume_metadata(resume_id: int, user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))], db: DbSession) -> Resume:   # type: ignore
+    resume = await get_resume_for_user(resume_id, user, db)
+    if user.role == UserRole.COMPANY:
+        matching_apps = list(await db.scalars(
+            select(Application)
+            .join(Internship, Application.internship_id == Internship.id)
+            .where(Application.student_id == resume.student_id, Internship.company_id == user.id)
+        ))
+        for app in matching_apps:
+            await record_event(db, app.id, "RESUME_VIEWED", user.id, once=True)
+        await db.commit()
+    return resume
 
 
 @router.get("/resume/{resume_id}/download")
-async def download_resume(resume_id: int, user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))], db: DbSession) -> FileResponse:
+async def download_resume(resume_id: int, user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))], db: DbSession) -> FileResponse:   # type: ignore
     resume = await get_resume_for_user(resume_id, user, db)
+    if user.role == UserRole.COMPANY:
+        matching_apps = list(await db.scalars(
+            select(Application)
+            .join(Internship, Application.internship_id == Internship.id)
+            .where(Application.student_id == resume.student_id, Internship.company_id == user.id)
+        ))
+        for app in matching_apps:
+            await record_event(db, app.id, "RESUME_VIEWED", user.id, once=True)
+        await db.commit()
     path = Path(get_settings().resume_storage_path) / resume.stored_filename
     if not path.is_file():
         raise HTTPException(404, "Resume file not found")
@@ -247,7 +269,7 @@ MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024
 
 @router.post("/avatar")
 async def upload_avatar(
-    user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))],
+    user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))], # type: ignore
     db: DbSession,
     file: UploadFile = File(...),
 ) -> dict[str, str]:
@@ -317,7 +339,7 @@ async def get_avatar(filename: str) -> FileResponse:
 
 @router.delete("/avatar")
 async def delete_avatar(
-    user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))],
+    user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))],  # type: ignore
     db: DbSession,
 ) -> dict[str, Any]:
     if user.role == UserRole.STUDENT:

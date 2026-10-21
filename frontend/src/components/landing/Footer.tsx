@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { routes } from '../../lib/routes'
 
 export function Footer() {
   return (
@@ -15,25 +16,25 @@ export function Footer() {
           <div className="space-y-4">
             <h4 className="text-white font-bold text-sm tracking-wide">For Students</h4>
             <ul className="space-y-2 text-sm">
-              <li><Link to="/opportunities" className="hover:text-indigo-400 transition-colors">Browse internships</Link></li>
-              <li><Link to="/register-student" className="hover:text-indigo-400 transition-colors">Register</Link></li>
-              <li><Link to="/login" className="hover:text-indigo-400 transition-colors">Login</Link></li>
+              <li><Link to={routes.opportunities} className="hover:text-indigo-400 transition-colors">Browse internships</Link></li>
+              <li><Link to={routes.studentRegister} className="hover:text-indigo-400 transition-colors">Register</Link></li>
+              <li><Link to={routes.login()} className="hover:text-indigo-400 transition-colors">Login</Link></li>
             </ul>
           </div>
           
           <div className="space-y-4">
             <h4 className="text-white font-bold text-sm tracking-wide">For Companies</h4>
             <ul className="space-y-2 text-sm">
-              <li><Link to="/register-company" className="hover:text-indigo-400 transition-colors">Post an internship</Link></li>
-              <li><Link to="/login" className="hover:text-indigo-400 transition-colors">Login</Link></li>
+              <li><Link to={routes.companyRegister} className="hover:text-indigo-400 transition-colors">Post an internship</Link></li>
+              <li><Link to={routes.login()} className="hover:text-indigo-400 transition-colors">Login</Link></li>
             </ul>
           </div>
           
           <div className="space-y-4">
             <h4 className="text-white font-bold text-sm tracking-wide">Platform</h4>
             <ul className="space-y-2 text-sm">
-              <li><Link to="/privacy" className="hover:text-indigo-400 transition-colors">Privacy Policy</Link></li>
-              <li><Link to="/privacy-center" className="hover:text-indigo-400 transition-colors">Privacy Center</Link></li>
+              <li><Link to={routes.privacyPolicy} className="hover:text-indigo-400 transition-colors">Privacy Policy</Link></li>
+              <li><Link to={routes.privacyCenter} className="hover:text-indigo-400 transition-colors">Privacy Center</Link></li>
             </ul>
           </div>
         </div>

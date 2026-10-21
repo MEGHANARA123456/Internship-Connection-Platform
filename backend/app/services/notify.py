@@ -1,3 +1,4 @@
+# This module provides a function to send notifications to users. It includes the `notify` function, which creates a notification record in the database and optionally sends an email to the user. The function also checks for sensitive information in the notification content and blocks certain types of notifications to prevent sending sensitive codes via email or other channels.
 import logging
 import re
 
@@ -28,6 +29,8 @@ async def notify(
     *,
     email: bool = False,
     html: str | None = None,
+    application_id: int | None = None,
+    defer_delivery: bool = False,
 ) -> Notification | None:
     if notification_type in BLOCKED_NOTIFICATION_TYPES or _CODE_PATTERN.search(title) or _CODE_PATTERN.search(body):
         logger.warning(
@@ -39,6 +42,7 @@ async def notify(
 
     notification = Notification(
         user_id=user_id,
+        application_id=application_id,
         notification_type=notification_type,
         title=title,
         body=body,
@@ -46,7 +50,7 @@ async def notify(
     db.add(notification)
     await db.flush()
 
-    if email:
+    if email and not defer_delivery:
         recipient = await db.scalar(select(User).where(User.id == user_id))
         if recipient is not None:
             await send_dev_email(
@@ -56,26 +60,32 @@ async def notify(
                 html=html,
                 message_type=notification_type,
                 db=db,
+                application_id=application_id,
             )
 
-    try:
-        from app.api.v1.ws import manager
-
-        await manager.send_personal_message(
-            user_id,
-            {
-                "type": "notification_created",
-                "notification": {
-                    "id": notification.id,
-                    "notification_type": notification.notification_type,
-                    "title": notification.title,
-                    "body": notification.body,
-                    "created_at": notification.created_at.isoformat(),
-                    "read_at": notification.read_at.isoformat() if notification.read_at else None,
-                },
-            },
-        )
-    except Exception as exc:
-        logger.warning("Could not send notification to user %s: %s", user_id, exc)
+    if not defer_delivery:
+        try:
+            await dispatch_notification(notification)
+        except Exception as exc:
+            logger.warning("Could not send notification to user %s: %s", user_id, exc)
 
     return notification
+
+
+async def dispatch_notification(notification: Notification) -> None:
+    from app.api.v1.ws import manager
+
+    await manager.send_personal_message(
+        notification.user_id,
+        {
+            "type": "notification_created",
+            "notification": {
+                "id": notification.id,
+                "notification_type": notification.notification_type,
+                "title": notification.title,
+                "body": notification.body,
+                "created_at": notification.created_at.isoformat(),
+                "read_at": notification.read_at.isoformat() if notification.read_at else None,
+            },
+        },
+    )

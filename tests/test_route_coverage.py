@@ -12,7 +12,7 @@ from app.models.base import Base
 
 
 @pytest.mark.anyio
-async def test_notification_read_routes_and_public_institution(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_notification_read_routes_and_removed_feature_routes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -26,9 +26,13 @@ async def test_notification_read_routes_and_public_institution(monkeypatch: pyte
     app.dependency_overrides[get_db] = override_db
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # 1. Institutional stats require an authenticated administrator
+        # Removed feature endpoints are absent irrespective of authentication.
         inst_res = await client.get("/api/v1/institution/placement-stats")
-        assert inst_res.status_code == 401
+        assert inst_res.status_code == 404
+        public_endorsements = await client.get("/api/v1/public/endorsements/x")
+        assert public_endorsements.status_code == 404
+        student_endorsements = await client.get("/api/v1/profiles/student/endorsements/1")
+        assert student_endorsements.status_code == 404
 
         # 2. Create user and notifications
         async with sessions() as session:

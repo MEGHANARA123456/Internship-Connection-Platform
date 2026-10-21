@@ -14,7 +14,7 @@ from app.services.mail import send_dev_email
 from app.services.notify import notify
 
 router = APIRouter(prefix="/profiles/company/documents", tags=["company documents"])
-company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]
+company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]  # type: ignore
 ALLOWED_DOCUMENT_TYPES = {
     "BUSINESS_REGISTRATION",
     "GST_OR_PAN",
@@ -22,7 +22,6 @@ ALLOWED_DOCUMENT_TYPES = {
     "OTHER",
 }
 MAX_DOCUMENTS_PER_COMPANY = 5
-
 
 def document_response(document: CompanyDocument) -> dict:
     return {
@@ -34,7 +33,6 @@ def document_response(document: CompanyDocument) -> dict:
         "file_size": document.file_size,
         "created_at": document.created_at,
     }
-
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def upload_company_document(
@@ -105,7 +103,6 @@ async def upload_company_document(
         )
     return document_response(document)
 
-
 @router.get("")
 async def list_company_documents(user: company_only, db: DbSession) -> list[dict]:
     documents = await db.scalars(
@@ -114,7 +111,6 @@ async def list_company_documents(user: company_only, db: DbSession) -> list[dict
         .order_by(CompanyDocument.created_at.desc(), CompanyDocument.id.desc())
     )
     return [document_response(document) for document in documents]
-
 
 @router.get("/{document_id}/download")
 async def download_company_document(
@@ -134,7 +130,6 @@ async def download_company_document(
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Company document file not found.")
     return FileResponse(path, media_type=document.content_type, filename=document.original_filename)
-
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_company_document(

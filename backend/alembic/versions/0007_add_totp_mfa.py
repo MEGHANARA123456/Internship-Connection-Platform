@@ -19,7 +19,11 @@ depends_on = None
 
 def upgrade() -> None:
     op.add_column("users", sa.Column("mfa_type", sa.String(length=20), nullable=False, server_default="EMAIL"))
-    op.alter_column("users", "mfa_type", server_default=None)
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("users") as batch_op:
+            batch_op.alter_column("mfa_type", server_default=None)
+    else:
+        op.alter_column("users", "mfa_type", server_default=None)
 
 
 def downgrade() -> None:

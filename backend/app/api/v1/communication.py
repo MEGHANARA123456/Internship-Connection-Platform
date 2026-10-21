@@ -13,15 +13,18 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
-from app.models import Application, CompanyProfile, Conversation, Interview, Internship, Message, Notification, StudentProfile, User, UserRole
+from app.models import Application, ApplicationNote, CompanyProfile, Conversation, EmailMessage, Interview, Internship, Message, Notification, StudentProfile, User, UserRole
 from app.api.v1.applications import application_transition_allowed
-from app.schemas.communication import ConversationCreate, InterviewCreate, InterviewResponse, InterviewUpdate, MessageCreate, MessageResponse, NotificationResponse
+from app.schemas.communication import ApplicationNoteCreate, ApplicationNoteResponse, ConversationCreate, InterviewCreate, InterviewFeedbackResponse, InterviewFeedbackUpdate, InterviewResponse, InterviewUpdate, MessageCreate, MessageResponse, NotificationResponse
 from app.services.notify import BLOCKED_NOTIFICATION_TYPES, notify
+from app.services.application_events import record_interview_event, transition_application
+from app.services.mail import visible_gmail_url
 
 router = APIRouter(tags=["communication"])
 logger = logging.getLogger(__name__)
 _CODE_PATTERN = re.compile(r"\b\d{4,8}\b")
 participant = Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))]# type: ignore
+company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]
 
 
 def _is_external_url(value: str | None) -> bool:
@@ -303,14 +306,29 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
     
     # If application is in APPLIED or UNDER_REVIEW, auto-advance to SHORTLISTED so scheduling succeeds seamlessly
     if application.status in ("APPLIED", "UNDER_REVIEW"):
-        application.status = "SHORTLISTED"
+        await transition_application(db, application, "SHORTLISTED", user.id)
     elif application.status not in ("SHORTLISTED", "INTERVIEW_SCHEDULED"):
         if not application_transition_allowed(application.status, "INTERVIEW_SCHEDULED"):
             raise HTTPException(409, f"Cannot schedule an interview from {application.status}")
 
     interview = Interview(application_id=application_id, scheduled_by=user.id, **data.model_dump())
     db.add(interview)
-    application.status = "INTERVIEW_SCHEDULED"
+    await db.flush()
+    event = await transition_application(
+        db,
+        application,
+        "INTERVIEW_SCHEDULED",
+        user.id,
+        note="INTERVIEW_CREATED",
+    )
+    if event is None:
+        await record_interview_event(
+            db,
+            application.id,
+            "INTERVIEW_SCHEDULED",
+            user.id,
+            note="INTERVIEW_CREATED",
+        )
     await db.commit()
     await db.refresh(interview)
     
@@ -362,6 +380,7 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
             notification_body,
             email=True,
             html=html_body,
+            application_id=application_id,
         )
         await db.commit()
         try:
@@ -400,6 +419,9 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
 
 @router.get("/applications/{application_id}/interviews", response_model=list[InterviewResponse])
 async def list_interviews(application_id: int, user: participant, db: DbSession) -> list[Interview]:
+    from app.services.interview_expiry import expire_overdue_interviews
+
+    await expire_overdue_interviews(db)
     application = await db.scalar(select(Application).where(Application.id == application_id, Application.student_id == user.id))
     if application is None:
         application = await db.scalar(select(Application).join(Internship, Application.internship_id == Internship.id).where(Application.id == application_id, Internship.company_id == user.id))
@@ -407,9 +429,57 @@ async def list_interviews(application_id: int, user: participant, db: DbSession)
     return list(await db.scalars(select(Interview).where(Interview.application_id == application_id).order_by(Interview.scheduled_at)))
 
 
+@router.get("/applications/{application_id}/notes", response_model=list[ApplicationNoteResponse])
+async def list_application_notes(
+    application_id: int,
+    user: company_only,
+    db: DbSession,
+) -> list[ApplicationNote]:
+    owns_application = await db.scalar(
+        select(Application.id)
+        .join(Internship, Application.internship_id == Internship.id)
+        .where(Application.id == application_id, Internship.company_id == user.id)
+    )
+    if owns_application is None:
+        raise HTTPException(404, "Application not found")
+    return list(await db.scalars(
+        select(ApplicationNote)
+        .where(ApplicationNote.application_id == application_id)
+        .order_by(ApplicationNote.created_at, ApplicationNote.id)
+    ))
+
+
+@router.post("/applications/{application_id}/notes", response_model=ApplicationNoteResponse, status_code=201)
+async def create_application_note(
+    application_id: int,
+    data: ApplicationNoteCreate,
+    user: company_only,
+    db: DbSession,
+) -> ApplicationNote:
+    owns_application = await db.scalar(
+        select(Application.id)
+        .join(Internship, Application.internship_id == Internship.id)
+        .where(Application.id == application_id, Internship.company_id == user.id)
+    )
+    if owns_application is None:
+        raise HTTPException(404, "Application not found")
+    note = ApplicationNote(
+        application_id=application_id,
+        author_user_id=user.id,
+        body=data.body.strip(),
+    )
+    db.add(note)
+    await db.commit()
+    await db.refresh(note)
+    return note
+
+
 @router.get("/interviews/my", response_model=list[InterviewResponse])
 @router.get("/interviews", response_model=list[InterviewResponse])
 async def list_my_interviews(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[dict]:
+    from app.services.interview_expiry import expire_overdue_interviews
+
+    await expire_overdue_interviews(db)
     if user.role == UserRole.STUDENT:
         query = select(Interview).join(Application, Interview.application_id == Application.id).where(Application.student_id == user.id).order_by(Interview.scheduled_at.desc())
     elif user.role == UserRole.COMPANY:
@@ -434,11 +504,58 @@ async def list_my_interviews(user: Annotated[User, Depends(get_current_user)], d
             "interview_type": inv.interview_type,
             "meeting_link": inv.meeting_link,
             "notes": inv.notes,
+            "cancel_reason": inv.cancel_reason,
+            "cancelled_at": inv.cancelled_at,
             "candidate_name": student_prof.full_name if (student_prof and student_prof.full_name) else (f"Candidate #{app.student_id}" if app else "Candidate"),
             "internship_title": internship.title if (internship and internship.title) else "Internship",
             "company_name": comp_prof.company_name if (comp_prof and comp_prof.company_name) else "Company",
         })
     return results
+
+
+@router.get("/company/interviews")
+async def list_company_interviews(user: company_only, db: DbSession) -> list[dict]:
+    from app.services.interview_expiry import expire_overdue_interviews
+
+    await expire_overdue_interviews(db)
+    rows = (
+        await db.execute(
+            select(
+                Interview,
+                StudentProfile.full_name,
+                Internship.title,
+                CompanyProfile.company_name,
+            )
+            .join(Application, Application.id == Interview.application_id)
+            .join(Internship, Internship.id == Application.internship_id)
+            .outerjoin(StudentProfile, StudentProfile.user_id == Application.student_id)
+            .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
+            .where(Internship.company_id == user.id)
+            .order_by(Interview.scheduled_at.desc())
+        )
+    ).all()
+    return [
+        {
+            "id": interview.id,
+            "application_id": interview.application_id,
+            "scheduled_by": interview.scheduled_by,
+            "status": interview.status,
+            "scheduled_at": interview.scheduled_at,
+            "interview_type": interview.interview_type,
+            "meeting_link": interview.meeting_link,
+            "notes": interview.notes,
+            "candidate_name": candidate_name,
+            "internship_title": title,
+            "company_name": company_name,
+            "result": interview.result,
+            "rating": interview.rating,
+            "feedback": interview.feedback,
+            "feedback_at": interview.feedback_at,
+            "cancel_reason": interview.cancel_reason,
+            "cancelled_at": interview.cancelled_at,
+        }
+        for interview, candidate_name, title, company_name in rows
+    ]
 
 
 @router.patch("/interviews/{interview_id}", response_model=InterviewResponse)
@@ -449,31 +566,166 @@ async def update_interview(interview_id: int, data: InterviewUpdate, user: parti
     internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id)) if application else None
     if application is None or (user.id != application.student_id and user.id != internship.company_id): raise HTTPException(403, "Interview access denied")# type: ignore
     previous_status = interview.status
+    is_cancelled_reschedule = previous_status == "CANCELLED" and data.status == "RESCHEDULED"
+    if is_cancelled_reschedule and (internship is None or internship.company_id != user.id):
+        raise HTTPException(403, "Only the company can reschedule a cancelled interview")
+    is_auto_cancel_completion = (
+        previous_status == "CANCELLED"
+        and data.status == "COMPLETED"
+        and interview.cancel_reason == "TIME_PASSED"
+    )
+    if previous_status == "CANCELLED" and data.status == "COMPLETED":
+        if not is_auto_cancel_completion or internship is None or internship.company_id != user.id:
+            raise HTTPException(403, "Only the company can complete an automatically cancelled interview")
+    if data.status == "CANCELLED" and not (data.change_reason or "").strip():
+        raise HTTPException(422, "A reason is required to cancel an interview")
+    if data.status == "RESCHEDULED":
+        if data.scheduled_at is None:
+            raise HTTPException(422, "A new scheduled time is required to reschedule an interview")
+        scheduled_at = data.scheduled_at
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        if scheduled_at <= datetime.now(timezone.utc):
+            raise HTTPException(422, "The new interview time must be in the future")
+        if not is_cancelled_reschedule and not (data.change_reason or "").strip():
+            raise HTTPException(422, "A reason is required to reschedule an interview")
+        if is_cancelled_reschedule:
+            active_interview = await db.scalar(
+                select(Interview.id).where(
+                    Interview.application_id == application.id,
+                    Interview.id != interview.id,
+                    Interview.status.in_(("SCHEDULED", "RESCHEDULED")),
+                )
+            )
+            if active_interview is not None:
+                raise HTTPException(409, "This application already has an active interview")
     updates = data.model_dump(exclude_unset=True)
+    if data.status == "CANCELLED":
+        updates["cancel_reason"] = (data.change_reason or "").strip()
+        updates["cancelled_at"] = datetime.now(timezone.utc)
+    elif is_cancelled_reschedule:
+        updates["cancel_reason"] = None
+        updates["cancelled_at"] = None
+    elif is_auto_cancel_completion:
+        updates["cancel_reason"] = None
+        updates["cancelled_at"] = None
+    changed_fields = {
+        key: value
+        for key, value in updates.items()
+        if getattr(interview, key) != value
+    }
     for key, value in updates.items(): setattr(interview, key, value)
-    if data.status in {"RESCHEDULED", "CANCELLED"} and data.status != previous_status:
+    if changed_fields:
+        event_type = f"INTERVIEW_{data.status}" if data.status != previous_status else "INTERVIEW_UPDATED"
+        await record_interview_event(
+            db,
+            application.id,
+            event_type,
+            user.id,
+            note=f"{previous_status} to {data.status}",
+        )
+    should_notify_change = (
+        data.status == "RESCHEDULED"
+        and ("scheduled_at" in changed_fields or data.status != previous_status)
+    ) or (data.status == "CANCELLED" and data.status != previous_status)
+    if should_notify_change:
         title = "Interview rescheduled" if data.status == "RESCHEDULED" else "Interview cancelled"
         action = "rescheduled" if data.status == "RESCHEDULED" else "cancelled"
         internship_title = internship.title if internship else "your internship"
+        reason = data.change_reason.strip() if data.change_reason else ""
         await notify(
             db,
             application.student_id,
             f"INTERVIEW_{data.status}",
             title,
-            f"Your interview for {internship_title} has been {action}.",
+            f"Your interview for {internship_title} has been {action}."
+            + (f" Reason: {reason}" if reason else ""),
+            application_id=application.id,
         )
+    await db.refresh(interview)
     await db.commit(); await db.refresh(interview); return interview
 
 
+@router.patch("/interviews/{interview_id}/feedback", response_model=InterviewFeedbackResponse)
+async def update_interview_feedback(
+    interview_id: int,
+    data: InterviewFeedbackUpdate,
+    user: company_only,
+    db: DbSession,
+) -> InterviewFeedbackResponse:
+    interview = await db.scalar(
+        select(Interview)
+        .join(Application, Application.id == Interview.application_id)
+        .join(Internship, Internship.id == Application.internship_id)
+        .where(Interview.id == interview_id, Internship.company_id == user.id)
+    )
+    if interview is None:
+        raise HTTPException(404, "Interview not found")
+    if interview.status != "COMPLETED":
+        raise HTTPException(409, "Interview feedback can only be recorded after completion")
+    interview.result = data.result
+    interview.rating = data.rating
+    interview.feedback = data.feedback
+    interview.feedback_at = datetime.now(timezone.utc)
+    await record_interview_event(
+        db,
+        interview.application_id,
+        "INTERVIEW_FEEDBACK_RECORDED",
+        user.id,
+    )
+    await db.commit()
+    await db.refresh(interview)
+    return InterviewFeedbackResponse(
+        interview_id=interview.id,
+        result=interview.result,
+        rating=interview.rating,
+        feedback=interview.feedback,
+        feedback_at=interview.feedback_at,
+    )
+
+
 @router.get("/notifications", response_model=list[NotificationResponse])
-async def notifications(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[Notification]:
+async def notifications(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[NotificationResponse]:
     items = list(await db.scalars(select(Notification).where(Notification.user_id == user.id).order_by(Notification.created_at.desc())))
-    return [
+    visible_items = [
         item
         for item in items
         if item.notification_type not in BLOCKED_NOTIFICATION_TYPES
         and not _CODE_PATTERN.search(item.title)
         and not _CODE_PATTERN.search(item.body)
+    ]
+    application_ids = {item.application_id for item in visible_items if item.application_id is not None}
+    latest_emails: dict[int, EmailMessage] = {}
+    if application_ids:
+        emails = await db.scalars(
+            select(EmailMessage)
+            .where(
+                EmailMessage.user_id == user.id,
+                EmailMessage.application_id.in_(application_ids),
+            )
+            .order_by(EmailMessage.created_at.desc(), EmailMessage.id.desc())
+        )
+        for email in emails:
+            if email.application_id is not None:
+                latest_emails.setdefault(email.application_id, email)
+
+    return [
+        NotificationResponse(
+            id=item.id,
+            application_id=item.application_id,
+            gmail_url=(
+                visible_gmail_url(latest_emails[application_id], user.email)
+                if application_id is not None and application_id in latest_emails
+                else None
+            ),
+            notification_type=item.notification_type,
+            title=item.title,
+            body=item.body,
+            created_at=item.created_at,
+            read_at=item.read_at,
+        )
+        for item in visible_items
+        for application_id in [item.application_id]
     ]
 
 

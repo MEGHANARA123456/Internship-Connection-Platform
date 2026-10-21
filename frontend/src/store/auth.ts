@@ -16,20 +16,30 @@ export type Session = {
   refreshTokenExpiresIn?: number | null
 } | null
 
+export type SessionPersistence = 'session' | 'local'
+
 export const USER_SCOPED_KEYS = [
   'internsphere_resume_builder',
   'student_github_handle',
   'student_leetcode_handle',
   'student_verified_badges',
-  'student_recommendations',
 ]
+const SESSION_KEY = 'session'
+const SESSION_CHANGED_NOTICE_KEY = 'session_changed_notice'
+
+if (typeof window !== 'undefined') {
+  localStorage.removeItem('student_recommendations')
+}
 
 type AuthState = {
   session: Session
-  setSession: (session: Session) => void
+  persistence: SessionPersistence
+  sessionChangedInAnotherTab: boolean
+  setSession: (session: Session, persistence?: SessionPersistence) => void
   updateName: (name: string) => void
   updateAvatar: (avatar_url: string | null) => void
   logout: () => void
+  clearSessionChangedNotice: () => void
 }
 
 function removeUserScopedData() {
@@ -46,86 +56,114 @@ function sessionsHaveDifferentUsers(current: Session, next: Session): boolean {
   }
   const currentEmail = current.email?.trim().toLowerCase()
   const nextEmail = next.email?.trim().toLowerCase()
-  return Boolean((currentEmail || nextEmail) && currentEmail !== nextEmail)
+  return Boolean(
+    ((currentEmail || nextEmail) && currentEmail !== nextEmail) ||
+    current.role !== next.role,
+  )
 }
 
-function storedSessionMatches(session: Exclude<Session, null>): boolean {
+function readStoredSession(storage: Storage): Session {
   try {
-    const stored = localStorage.getItem('session')
-    if (!stored) return false
-    const storedSession = JSON.parse(stored) as Session
-    return storedSession?.userId === session.userId
+    const stored = storage.getItem(SESSION_KEY)
+    return stored ? JSON.parse(stored) as Session : null
   } catch {
-    return false
+    return null
   }
 }
 
+function getInitialSession(): { session: Session; persistence: SessionPersistence } {
+  const tabSession = readStoredSession(sessionStorage)
+  if (tabSession) return { session: tabSession, persistence: 'session' }
+  const persistentSession = readStoredSession(localStorage)
+  if (persistentSession) return { session: persistentSession, persistence: 'local' }
+  return { session: null, persistence: 'session' }
+}
+
+function storageFor(persistence: SessionPersistence): Storage {
+  return persistence === 'local' ? localStorage : sessionStorage
+}
+
+function storedSessionMatches(
+  session: Exclude<Session, null>,
+  persistence: SessionPersistence,
+): boolean {
+  const storedSession = readStoredSession(storageFor(persistence))
+  return storedSession?.userId === session.userId
+}
+
+const initialSession = getInitialSession()
+
 export const useAuthStore = create<AuthState>((set, get) => ({
-  session: (() => {
-    try {
-      const stored = localStorage.getItem('session')
-      return stored ? JSON.parse(stored) : null
-    } catch {
-      return null
-    }
-  })(),
-  setSession: (session) => {
+  ...initialSession,
+  sessionChangedInAnotherTab: sessionStorage.getItem(SESSION_CHANGED_NOTICE_KEY) === 'true',
+  setSession: (session, requestedPersistence) => {
     const current = get().session
+    const persistence = requestedPersistence ?? get().persistence
     if ((session && !current) || sessionsHaveDifferentUsers(current, session)) {
       removeUserScopedData()
     }
+    const storage = storageFor(persistence)
     if (session) {
-      localStorage.setItem('session', JSON.stringify(session))
+      storage.setItem(SESSION_KEY, JSON.stringify(session))
+      if (persistence === 'local') sessionStorage.removeItem(SESSION_KEY)
     } else {
-      localStorage.removeItem('session')
+      storage.removeItem(SESSION_KEY)
       removeUserScopedData()
     }
-    set({ session })
+    set({ session, persistence })
   },
   updateName: (name) => {
-    const current = get().session
-    if (current) {
-      if (!storedSessionMatches(current)) return
-      const updated = { ...current, name }
-      localStorage.setItem('session', JSON.stringify(updated))
+    const { session, persistence } = get()
+    if (session && storedSessionMatches(session, persistence)) {
+      const updated = { ...session, name }
+      storageFor(persistence).setItem(SESSION_KEY, JSON.stringify(updated))
       set({ session: updated })
     }
   },
   updateAvatar: (avatar_url) => {
-    const current = get().session
-    if (current) {
-      if (!storedSessionMatches(current)) return
-      const updated = { ...current, avatar_url }
-      localStorage.setItem('session', JSON.stringify(updated))
+    const { session, persistence } = get()
+    if (session && storedSessionMatches(session, persistence)) {
+      const updated = { ...session, avatar_url }
+      storageFor(persistence).setItem(SESSION_KEY, JSON.stringify(updated))
       set({ session: updated })
     }
   },
   logout: () => {
-    localStorage.removeItem('session')
+    storageFor(get().persistence).removeItem(SESSION_KEY)
     removeUserScopedData()
-    set({ session: null })
+    set({ session: null, persistence: 'session' })
+  },
+  clearSessionChangedNotice: () => {
+    sessionStorage.removeItem(SESSION_CHANGED_NOTICE_KEY)
+    set({ sessionChangedInAnotherTab: false })
   },
 }))
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
-    if (event.key !== 'session' && event.key !== null) return
+    if (event.key !== SESSION_KEY || event.storageArea !== localStorage) return
 
-    const current = useAuthStore.getState().session
+    const { session: current, persistence } = useAuthStore.getState()
+    if (persistence !== 'local') return
+
     let nextSession: Session = null
     try {
-      nextSession = event.newValue ? JSON.parse(event.newValue) : null
+      nextSession = event.newValue ? JSON.parse(event.newValue) as Session : null
     } catch {
       nextSession = null
     }
 
-    if (
-      (!current && nextSession) ||
-      sessionsHaveDifferentUsers(current, nextSession) ||
-      !nextSession
-    ) {
+    if (sessionsHaveDifferentUsers(current, nextSession) || (current && !nextSession)) {
       removeUserScopedData()
+      sessionStorage.setItem(SESSION_CHANGED_NOTICE_KEY, 'true')
+      useAuthStore.setState({
+        session: null,
+        sessionChangedInAnotherTab: true,
+      })
+      window.setTimeout(() => window.location.reload(), 1200)
+      return
     }
+
     useAuthStore.setState({ session: nextSession })
   })
 }

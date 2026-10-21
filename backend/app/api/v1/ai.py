@@ -1,9 +1,7 @@
 # -----------------------------------------------------------------------------
 # Endpoints for AI-assisted features and AI-related backend actions.
 # -----------------------------------------------------------------------------
-
 from typing import Annotated
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -21,13 +19,12 @@ from app.services.ai import (
 router = APIRouter(prefix="/ai", tags=["ai"])
 student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]# type: ignore
 
-
 class EvaluateAnswerRequest(BaseModel):
     question: str
     answer: str = Field(min_length=3, max_length=5000)
     rubric: str = ""
 
-
+#interesting endpoints for AI-assisted features
 @router.get("/internships/{internship_id}/ats-score")
 async def get_ats_score(internship_id: int, user: student_only, db: DbSession) -> dict:
     internship = await db.scalar(select(Internship).where(Internship.id == internship_id))
@@ -49,7 +46,7 @@ async def get_ats_score(internship_id: int, user: student_only, db: DbSession) -
         job_skills=job_skills,
     )
 
-
+#interesting endpoints for AI-assisted features
 @router.post("/internships/{internship_id}/generate-pitch")
 async def generate_pitch(internship_id: int, user: student_only, db: DbSession) -> dict[str, str]:
     internship = await db.scalar(select(Internship).where(Internship.id == internship_id))
@@ -78,7 +75,6 @@ async def generate_pitch(internship_id: int, user: student_only, db: DbSession) 
 
     return {"pitch": pitch}
 
-
 @router.get("/internships/{internship_id}/mock-interview")
 async def get_mock_interview(internship_id: int, user: student_only, db: DbSession) -> dict:
     internship = await db.scalar(select(Internship).where(Internship.id == internship_id))
@@ -97,7 +93,6 @@ async def get_mock_interview(internship_id: int, user: student_only, db: DbSessi
         "job_title": internship.title,
         "questions": questions,
     }
-
 
 @router.post("/mock-interview/evaluate")
 async def evaluate_answer(data: EvaluateAnswerRequest, user: student_only) -> dict:

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.v1.dependencies import get_db
 from app.main import app
-from app.models import Application, Internship, Notification, User
+from app.models import Application, CompanyProfile, Internship, Notification, StudentProfile, User
 from app.models.base import Base
 
 
@@ -43,6 +43,16 @@ async def _register(client: AsyncClient, sessions, email: str, role: str) -> dic
     async with sessions() as session:
         user = await session.scalar(select(User).where(User.email == email))
         user.is_verified = True
+        if role == "COMPANY":
+            company_profile = await session.scalar(
+                select(CompanyProfile).where(CompanyProfile.user_id == user.id)
+            )
+            company_profile.verification_status = "VERIFIED"
+        else:
+            student_profile = await session.scalar(
+                select(StudentProfile).where(StudentProfile.user_id == user.id)
+            )
+            student_profile.skills = "Python"
         await session.commit()
     login = await client.post("/api/v1/auth/login", json={"email": email, "password": "password123"})
     assert login.status_code == 200
@@ -103,7 +113,7 @@ async def test_closing_internship_notifies_active_applicants(monkeypatch: pytest
             closure_notifications = [item for item in notifications if item.notification_type == "INTERNSHIP_CLOSED"]
             assert len(closure_notifications) == 2
             assert {item.user_id for item in closure_notifications} == {item.student_id for item in applications}
-            assert all("Acme Labs has closed Software Intern." in item.body for item in closure_notifications)
+            assert all("Acme Labs has closed Software Intern to new applications." in item.body for item in closure_notifications)
             assert [item.status for item in applications] == ["APPLIED", "APPLIED"]
     finally:
         await client.__aexit__(None, None, None)

@@ -234,7 +234,7 @@ export function AccountSecurityCard({ userEmail, role: _role = 'User' }: Account
           </div>
           <div>
             <CardTitle className="text-base font-bold text-slate-900 dark:text-white">
-              Account Security & Two-Factor Authentication
+              Security settings
             </CardTitle>
             <CardDescription className="text-xs text-slate-500 dark:text-slate-400">
               Manage your credentials, enable two-factor authentication (MFA), or request an email reset link.

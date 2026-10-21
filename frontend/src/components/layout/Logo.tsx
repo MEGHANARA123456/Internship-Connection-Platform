@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { routes } from '../../lib/routes'
 
 interface LogoProps {
   className?: string
@@ -123,7 +124,7 @@ export function Logo({
 
   if (linkToHome) {
     return (
-      <Link to="/" className="inline-flex items-center group transition-opacity hover:opacity-95">
+      <Link to={routes.home} className="inline-flex items-center group transition-opacity hover:opacity-95">
         {LogoContent}
       </Link>
     )
