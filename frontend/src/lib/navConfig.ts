@@ -76,6 +76,7 @@ export const navigationConfig: Record<NavigationRole, { topBar: NavigationItem[]
       { id: 'admin-moderation', label: 'Jobs Queue', route: routes.adminModeration, icon: Briefcase },
       { id: 'admin-reports', label: 'Disputes', route: routes.adminReports(), icon: ShieldAlert },
       { id: 'admin-audit-logs', label: 'Audit Logs', route: routes.adminAuditLogs(), icon: FileText },
+      { id: 'admin-notifications', label: 'Notifications & Mailbox', route: routes.notifications, icon: Bell, countSource: 'notifications' },
       { id: 'admin-privacy', label: 'Privacy & Security', route: routes.privacySecurity, icon: Lock },
       { id: 'admin-cookie-preferences', label: 'Cookie preferences', icon: Lock, action: 'cookie-preferences' },
       { id: 'admin-view-mode', label: 'Mobile/Desktop view toggle', icon: Smartphone, action: 'view-mode' },

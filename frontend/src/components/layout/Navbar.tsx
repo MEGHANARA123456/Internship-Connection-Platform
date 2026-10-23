@@ -49,6 +49,7 @@ const quickLinks: Record<Exclude<NavigationRole, 'GUEST'>, Array<{ label: string
     { label: 'Interviews', url: routes.interviews({ tab: 'upcoming' }) },
   ],
   ADMIN: [
+    { label: 'Notifications & Mailbox', url: routes.notifications },
     { label: 'Verifications', url: routes.adminVerifications },
     { label: 'Users', url: routes.adminUsers() },
     { label: 'Audit Logs', url: routes.adminAuditLogs() },

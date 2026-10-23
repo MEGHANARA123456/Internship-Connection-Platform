@@ -1964,11 +1964,11 @@ export function NotificationsPage() {
                         {mail.html ? (
                           <div
                             className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 max-h-96 overflow-y-auto"
-                            dangerouslySetInnerHTML={{ __html: mail.html }}
+                            dangerouslySetInnerHTML={{ __html: maskCodes(mail.html) }}
                           />
                         ) : (
                           <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200 whitespace-pre-wrap font-sans leading-relaxed">
-                            {mail.body}
+                            {maskCodes(mail.body)}
                           </div>
                         )}
                       </div>

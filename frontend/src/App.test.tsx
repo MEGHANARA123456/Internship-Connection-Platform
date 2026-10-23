@@ -255,6 +255,80 @@ describe('platform shell', () => {
     expect(screen.queryByText('Browse Internships')).toBeNull()
   })
 
+  it('allows admins to use notifications and their personal mailbox without exposing security codes', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'admin-access-token',
+      refreshToken: 'admin-refresh-token',
+      userId: 75,
+      role: 'ADMIN',
+      email: 'admin@example.com',
+    })
+    const get = vi.spyOn(api, 'get').mockImplementation(async (path) => {
+      if (path === '/notifications') {
+        return {
+          data: [
+            { id: 1, title: 'System update', body: 'A new update is available.', notification_type: 'SYSTEM', created_at: new Date().toISOString() },
+            { id: 2, title: 'Security code 123456', body: 'Use this code: 123456', notification_type: 'OTP', created_at: new Date().toISOString() },
+          ],
+        } as never
+      }
+      if (path === '/me/emails') {
+        return {
+          data: [{
+            id: 'mail-1',
+            to: 'admin@example.com',
+            from: 'security@example.com',
+            subject: 'Your verification code is 654321',
+            body: 'Use code 654321 to sign in.',
+            created_at: new Date().toISOString(),
+          }],
+        } as never
+      }
+      return { data: { unread_notifications: 1 } } as never
+    })
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: null } as never)
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({ data: null } as never)
+
+    render(<MemoryRouter initialEntries={['/notifications']}><App /></MemoryRouter>)
+
+    expect(await screen.findByRole('heading', { name: 'Notifications & Mailbox' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+    expect(screen.getByRole('menuitem', { name: /Notifications & Mailbox/ })).toHaveAttribute('href', '/notifications')
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/notifications'))
+    expect(screen.getByText('System update')).toBeInTheDocument()
+    expect(screen.queryByText(/123456/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('System update'))
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('/notifications/1/read'))
+
+    fireEvent.click(screen.getByRole('button', { name: /Mark all read/ }))
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/notifications/read-all'))
+
+    fireEvent.click(screen.getByRole('button', { name: /My Direct Emails/ }))
+    expect(await screen.findByText('Your verification code is ••••••')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'View Email' }))
+    expect(await screen.findByText('Use code •••••• to sign in.')).toBeInTheDocument()
+    expect(screen.queryByText(/654321/)).not.toBeInTheDocument()
+    expect(get).toHaveBeenCalledWith('/notifications')
+    expect(get).toHaveBeenCalledWith('/me/emails')
+  })
+
+  it.each(['STUDENT', 'COMPANY'] as const)('%s can open notifications without reaching an unavailable or 404 page', async (role) => {
+    useAuthStore.getState().setSession({
+      accessToken: `${role.toLowerCase()}-access-token`,
+      refreshToken: `${role.toLowerCase()}-refresh-token`,
+      userId: role === 'STUDENT' ? 76 : 77,
+      role,
+      email: `${role.toLowerCase()}@example.com`,
+    })
+    vi.spyOn(api, 'get').mockResolvedValue({ data: [] } as never)
+    render(<MemoryRouter initialEntries={['/notifications']}><App /></MemoryRouter>)
+
+    expect(await screen.findByRole('heading', { name: 'Notifications & Mailbox' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: "This page isn't available for your account" })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Page not found' })).not.toBeInTheDocument()
+  })
+
   it('renders the shared interviews page for a company account', async () => {
     useAuthStore.getState().setSession({
       accessToken: 'company-access-token',

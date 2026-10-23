@@ -230,11 +230,17 @@ export default function App() {
               </Route>
             </Route>
 
-            {/* Shared Authenticated Communication Routes */}
+            {/* Interviews and direct messages are limited to students and companies. */}
             <Route element={<ProtectedRoute allowedRoles={['STUDENT', 'COMPANY']} />}>
               <Route element={<CommunicationLayout />}>
                 <Route path={routes.interviews()} element={<InterviewsPage />} />
                 <Route path={routes.messages()} element={<MessagesPage />} />
+              </Route>
+            </Route>
+
+            {/* Notifications and the personal mailbox are available to every account role. */}
+            <Route element={<ProtectedRoute allowedRoles={['STUDENT', 'COMPANY', 'ADMIN']} />}>
+              <Route element={<CommunicationLayout />}>
                 <Route path={routes.notifications} element={<NotificationsPage />} />
               </Route>
             </Route>
