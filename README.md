@@ -14,8 +14,10 @@
 ![Tailwind](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 
-<img src="internsphere_app.png" alt="InternSphere landing page" width="100%" />
 
+<p align="center">
+  <img src="internsphere_app.png" alt="InternSphere Application Preview" width="100%">
+</p>
 </div>
 
 ---
