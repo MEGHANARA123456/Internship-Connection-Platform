@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { describe, expect, it } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { RechartsAnalyticsCharts } from './RechartsAnalyticsCharts'
+import { ResponsiveDonut } from '../charts/ResponsiveChart'
 
 const domainRows = [
   { name: 'Artificial Intelligence / Machine Learning', count: 4 },
@@ -47,5 +48,46 @@ describe('Recharts analytics legends', () => {
     expect(screen.getByRole('table')).toBeInTheDocument()
     expect(screen.getByText('Artificial Intelligence / Machine Learning, Artificial Intelligence / Machine learning')).toBeInTheDocument()
     expect(screen.queryByRole('group', { name: 'Chart legend' })).not.toBeInTheDocument()
+  })
+
+  it('shows all admin action types with readable fallback labels', () => {
+    render(<MemoryRouter><RechartsAnalyticsCharts kind="admin_actions_by_type" label="Admin actions by type" rows={[
+      { name: 'Postings approved', action: 'posting_approved', count: 3 },
+      { name: 'Companies verified', action: 'company_verified', count: 2 },
+      { name: 'Future Admin Action', action: 'future_admin_action', count: 1 },
+    ]} viewAsTable /></MemoryRouter>)
+
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByText('Postings approved')).toBeInTheDocument()
+    expect(screen.getByText('Companies verified')).toBeInTheDocument()
+    expect(screen.getByText('Future admin action')).toBeInTheDocument()
+  })
+
+  it('uses distinct fixed work-mode colors for donut slices and matching legend swatches', () => {
+    render(<MemoryRouter><RechartsAnalyticsCharts kind="work_modes" label="Work-mode split" rows={[
+      { name: 'Remote', count: 4 },
+      { name: 'Onsite', count: 3 },
+      { name: 'Hybrid', count: 2 },
+    ]} viewAsTable={false} /></MemoryRouter>)
+
+    const legend = screen.getByRole('group', { name: 'Chart legend' })
+    const expectedColors = ['#0072B2', '#E69F00', '#009E73']
+    const legendColors = ['Remote', 'Onsite', 'Hybrid'].map((label) => {
+      const button = within(legend).getByRole('button', { name: new RegExp(label) })
+      return button.querySelector('span[aria-hidden="true"]')?.getAttribute('style')
+    })
+    expect(legendColors).toEqual([
+      'background-color: rgb(0, 114, 178);',
+      'background-color: rgb(230, 159, 0);',
+      'background-color: rgb(0, 158, 115);',
+    ])
+
+    const { container } = render(<ResponsiveDonut label="Work-mode split" items={[
+      { label: 'Remote', value: 4 },
+      { label: 'Onsite', value: 3 },
+      { label: 'Hybrid', value: 2 },
+    ]} />)
+    const sliceColors = Array.from(container.querySelectorAll('circle[stroke]')).map((circle) => circle.getAttribute('stroke'))
+    for (const color of expectedColors) expect(sliceColors).toContain(color)
   })
 })

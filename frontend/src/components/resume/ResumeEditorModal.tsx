@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { api } from '../../api/client'
+import { showToast } from '../../lib/feedback'
 
 export interface ResumeData {
   fullName: string
@@ -289,7 +290,7 @@ export function ResumeEditorModal({
       if (onSaveToProfile) onSaveToProfile()
       setTimeout(() => setSaveSuccess(false), 3000)
     } catch {
-      alert('Could not sync changes to live profile, but changes are stored locally.')
+      showToast('Could not sync changes to live profile, but changes are stored locally.', 'error')
     } finally {
       setIsSaving(false)
     }

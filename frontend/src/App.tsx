@@ -5,6 +5,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { api } from './api/client'
 import { useAuthStore } from './store/auth'
 import { PageLoader } from './components/ui/LoadingSkeleton'
+import { FeedbackHost } from './components/ui/FeedbackHost'
 import { routes } from './lib/routes'
 import { NotFoundPage } from './pages/RouteFallbacks'
 
@@ -127,6 +128,9 @@ const ApplicationsPage = lazy(async () => ({ default: (await studentPages()).App
 const ApplicationTimelinePage = lazy(async () => ({ default: (await studentPages()).ApplicationTimelinePage }))
 const StudentProfilePage = lazy(async () => ({ default: (await studentPages()).StudentProfilePage }))
 const StudentAnalyticsPage = lazy(async () => ({ default: (await studentPages()).StudentAnalyticsPage }))
+const skillAssessmentPages = () => import('./pages/SkillAssessmentPages')
+const SkillAssessmentResultPage = lazy(async () => ({ default: (await skillAssessmentPages()).SkillAssessmentResultPage }))
+const SkillAssessmentHistoryPage = lazy(async () => ({ default: (await skillAssessmentPages()).SkillAssessmentHistoryPage }))
 
 const companyPages = () => import('./pages/CompanyPages')
 const CompanyPortalShell = lazy(async () => ({ default: (await companyPages()).CompanyPortalShell }))
@@ -153,9 +157,11 @@ const AdminReportsPage = lazy(async () => ({ default: (await adminPages()).Admin
 const AdminCompaniesPage = lazy(async () => ({ default: (await adminPages()).AdminCompaniesPage }))
 const AdminCompanyPostingsPage = lazy(async () => ({ default: (await adminPages()).AdminCompanyPostingsPage }))
 const AdminAuditLogsPage = lazy(async () => ({ default: (await adminPages()).AdminAuditLogsPage }))
+const AdminSkillAssessmentsPage = lazy(async () => ({ default: (await adminPages()).AdminSkillAssessmentsPage }))
 import { MobileViewSimulator } from './components/ui/MobileViewSimulator'
 const PrivacyPolicyPage = lazy(async () => ({ default: (await import('./pages/PrivacyPolicyPage')).PrivacyPolicyPage }))
 const PrivacySecurityPage = lazy(async () => ({ default: (await import('./pages/PrivacySecurityPage')).PrivacySecurityPage }))
+const ChatbotWidget = lazy(async () => ({ default: (await import('./chatbot/ChatbotWidget')).ChatbotWidget }))
 import { CookieConsentBanner } from './components/ui/CookieConsentBanner'
 import { Footer } from './components/landing/Footer'
 
@@ -179,6 +185,7 @@ export default function App() {
         <SessionIdentityVerifier />
         <SessionChangedBanner />
         <RateLimitNotice />
+        <FeedbackHost />
         <Navbar />
 
         <main className="flex-1 flex flex-col">
@@ -210,6 +217,8 @@ export default function App() {
               <Route path={routes.applications()} element={<ApplicationsPage />} />
               <Route path={routes.applicationDetail} element={<ApplicationTimelinePage />} />
               <Route path={routes.studentProfile} element={<StudentProfilePage />} />
+              <Route path={routes.skillHistory} element={<SkillAssessmentHistoryPage />} />
+              <Route path={routes.skillResultRoute} element={<SkillAssessmentResultPage />} />
             </Route>
 
             {/* Company Dedicated Routes */}
@@ -259,6 +268,7 @@ export default function App() {
               <Route path={routes.adminCompanies} element={<AdminCompaniesPage />} />
               <Route path={routes.adminCompanyPostingsRoute} element={<AdminCompanyPostingsPage />} />
               <Route path={routes.adminAuditLogsRoute} element={<AdminAuditLogsPage />} />
+              <Route path={routes.adminSkills} element={<AdminSkillAssessmentsPage />} />
             </Route>
 
             {/* Privacy & Regulatory Compliance (GDPR / CCPA) */}
@@ -276,6 +286,7 @@ export default function App() {
 
         <Footer />
         <CookieConsentBanner />
+        <Suspense fallback={null}><ChatbotWidget /></Suspense>
       </div>
     </MobileViewSimulator>
   )

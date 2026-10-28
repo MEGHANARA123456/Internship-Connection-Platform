@@ -27,6 +27,22 @@ const RechartsAnalyticsCharts = lazy(async () => {
   return { default: module.RechartsAnalyticsCharts }
 })
 
+const ASSESSMENT_TOPIC_BY_SKILL: Array<[RegExp, string]> = [
+  [/python|backend/, 'python'],
+  [/react|frontend/, 'react'],
+  [/sql|database/, 'sql'],
+  [/data structure|algorithm|\bdsa\b/, 'dsa'],
+  [/machine learning|artificial intelligence|\bai\b/, 'ai'],
+  [/devops|cloud|docker/, 'devops'],
+  [/security|system design/, 'security'],
+  [/typescript|javascript/, 'typescript'],
+]
+
+function assessmentTopicForSkill(skill: string): string | null {
+  const match = ASSESSMENT_TOPIC_BY_SKILL.find(([pattern]) => pattern.test(skill.toLowerCase()))
+  return match?.[1] ?? null
+}
+
 type RangeOption = '7' | '30' | '90' | 'all'
 type FocusOption = string
 
@@ -211,7 +227,7 @@ function chartRows(data: AnalyticsPayload | null, kind: AnalyticsChartKind): Cha
 }
 
 const CHARTS: Array<{ kind: AnalyticsChartKind; title: string; focus: FocusOption }> = [
-  { kind: 'funnel', title: 'Application status funnel', focus: 'funnel' },
+  { kind: 'funnel', title: 'Application funnel', focus: 'funnel' },
   { kind: 'trends', title: 'Activity trend', focus: 'trends' },
   { kind: 'domains', title: 'Roles by domain', focus: 'domains' },
   { kind: 'work_modes', title: 'Work-mode split', focus: 'domains' },
@@ -237,7 +253,7 @@ type KpiCardConfig = {
 const ROLE_CHARTS: Record<AnalyticsKind, Array<{ kind: AnalyticsChartKind; title: string; focus?: FocusOption }>> = {
   student: CHARTS,
   company: [
-    { kind: 'company_pipeline', title: 'Status Per Application ', focus: 'funnel' },
+    { kind: 'company_pipeline', title: 'Status Per Application', focus: 'funnel' },
     { kind: 'conversion_by_role', title: 'Conversion per role', focus: 'funnel' },
     { kind: 'applicants_by_posting', title: 'Applicants per posting', focus: 'domains' },
     { kind: 'applications_over_time', title: 'Applications over time', focus: 'trends' },
@@ -456,6 +472,14 @@ export function UnifiedAnalyticsCard({
     (focus === 'all' || chart.focus === focus || chart.kind === focus)
     && !(variant === 'student' && chart.kind === 'stipend_distribution' && (data?.chart_samples?.stipend_distribution ?? 0) < 5)
   ))
+  const assessmentRecommendations = variant === 'student'
+    ? (data?.charts?.skill_gap ?? [])
+      .filter((row) => (row.missing ?? 0) > 0 && typeof row.name === 'string')
+      .flatMap((row) => {
+        const topic = assessmentTopicForSkill(String(row.name))
+        return topic ? [{ name: String(row.name), topic }] : []
+      })
+    : []
   const metrics = data?.kpis
   const rangeLabel = RANGE_OPTIONS.find((item) => item.value === range)?.label ?? '30 days'
   const periodLabel = range === 'all' ? 'all time' : `last ${rangeLabel.toLowerCase()}`
@@ -639,6 +663,22 @@ export function UnifiedAnalyticsCard({
             )
           })}
         </div>
+        {!loading && !error && assessmentRecommendations.length > 0 && (
+          <section aria-label="Recommended skill assessments" className="mt-5 border-t border-slate-100 pt-4 dark:border-slate-800">
+            <h3 className="mb-2 text-xs font-bold text-slate-800 dark:text-slate-200">Build skills required by recommended roles</h3>
+            <div className="flex flex-wrap gap-2">
+              {assessmentRecommendations.map(({ name, topic }) => (
+                <Link
+                  key={`${topic}-${name}`}
+                  to={`${routes.studentProfile}?assessment=${encodeURIComponent(topic)}`}
+                  className="rounded-lg border border-indigo-200 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-indigo-800 dark:text-indigo-300 dark:hover:bg-indigo-950/50"
+                >
+                  Take assessment: {name}
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
       </Card>
     </div>
   )

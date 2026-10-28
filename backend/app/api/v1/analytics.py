@@ -26,7 +26,7 @@ from app.schemas.admin import (
     TopCompanyItem,
     UserGrowthPoint,
 )
-from app.services.ai import compute_match
+from app.services.ai import compute_explicit_eligibility_fit, compute_match, get_student_resume_text
 from app.services.analytics_domains import normalize_domain_rows
 from app.services.application_funnel import cumulative_student_application_counts
 
@@ -131,7 +131,16 @@ async def company_performance(
             offer_days.append(_elapsed_seconds(application.created_at, event.first_offer) / 86400)
 
     match_query = (
-        select(Application, Internship.title, Internship.description, Internship.skills, StudentProfile.skills)
+        select(
+            Application,
+            Internship.title,
+            Internship.description,
+            Internship.skills,
+            StudentProfile.skills,
+            StudentProfile.graduation_year,
+            StudentProfile.major,
+            StudentProfile.university,
+        )
         .join(Internship, Internship.id == Application.internship_id)
         .outerjoin(StudentProfile, StudentProfile.user_id == Application.student_id)
         .where(Internship.company_id == user.id)
@@ -139,9 +148,22 @@ async def company_performance(
     match_query = _range_filter(match_query, Application.created_at, start)
     match_rows = (await db.execute(match_query.order_by(Application.created_at.desc(), Application.id.desc()).limit(300))).all()
     buckets = {"0-49": 0, "50-69": 0, "70-84": 0, "85+": 0}
-    for application, title, description, required, candidate_skills in match_rows:
-        result = compute_match(_skills(candidate_skills), "", title, description, _skills(required))
+    for _, title, description, required, candidate_skills, graduation_year, major, university in match_rows:
+        result = compute_match(
+            _skills(candidate_skills),
+            "",
+            title,
+            description,
+            _skills(required),
+            eligibility_data=compute_explicit_eligibility_fit(
+                description,
+                graduation_year,
+                f"{major or ''} {university or ''}".strip(),
+            ),
+        )
         score = result["score"]
+        if score is None:
+            continue
         bucket = "0-49" if score < 50 else "50-69" if score < 70 else "70-84" if score < 85 else "85+"
         buckets[bucket] += 1
 
@@ -260,13 +282,23 @@ async def student_insights(
     """Return personal application insights for the authenticated student only."""
     start = _range_start(range_value)
     base_query = (
-        select(Application, Internship.title, Internship.description, Internship.skills, StudentProfile.skills)
+        select(
+            Application,
+            Internship.title,
+            Internship.description,
+            Internship.skills,
+            StudentProfile.skills,
+            StudentProfile.graduation_year,
+            StudentProfile.major,
+            StudentProfile.university,
+        )
         .join(Internship, Internship.id == Application.internship_id)
         .outerjoin(StudentProfile, StudentProfile.user_id == Application.student_id)
         .where(Application.student_id == user.id)
     )
     base_query = _range_filter(base_query, Application.created_at, start)
     application_rows = (await db.execute(base_query)).all()
+    resume_text = await get_student_resume_text(db, user.id)
     application_ids = [row[0].id for row in application_rows]
 
     status_query = (
@@ -313,9 +345,21 @@ async def student_insights(
     match_scores: list[int] = []
     missing_counts: Counter[str] = Counter()
     missing_names: dict[str, str] = {}
-    for application, title, description, required, candidate_skills in application_rows:
-        match = compute_match(_skills(candidate_skills), "", title, description, _skills(required))
-        match_scores.append(match["score"])
+    for application, title, description, required, candidate_skills, graduation_year, major, university in application_rows:
+        match = compute_match(
+            _skills(candidate_skills),
+            resume_text,
+            title,
+            description,
+            _skills(required),
+            eligibility_data=compute_explicit_eligibility_fit(
+                description,
+                graduation_year,
+                f"{major or ''} {university or ''}".strip(),
+            ),
+        )
+        if match["score"] is not None:
+            match_scores.append(match["score"])
         required_names = {skill.casefold(): skill for skill in _skills(required)}
         for skill in match["missing_skills"]:
             normalized = skill.casefold()
@@ -676,20 +720,16 @@ async def admin_action_volume(
     user: admin_only,
     days: int = Query(30, ge=1, le=365),
 ) -> list[dict[str, Any]]:
-    """Count audit actions by day over the last N days."""
+    """Count every audit action type over the last N days."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    rows = list(await db.scalars(
-        select(AuditLog)
+    rows = (await db.execute(
+        select(AuditLog.action, func.count(AuditLog.id))
         .where(AuditLog.created_at >= since)
-        .order_by(AuditLog.created_at, AuditLog.action)
-    ))
-    grouped: dict[tuple[str, str], int] = {}
-    for row in rows:
-        period = row.created_at.strftime("%Y-%m-%d")
-        key = (period, row.action)
-        grouped[key] = grouped.get(key, 0) + 1
+        .group_by(AuditLog.action)
+        .order_by(func.count(AuditLog.id).desc(), AuditLog.action)
+    )).all()
 
     return [
-        AdminActionVolume(period=period, action=action, count=count).model_dump()
-        for (period, action), count in grouped.items()
+        AdminActionVolume(action=action, count=int(count)).model_dump()
+        for action, count in rows
     ]

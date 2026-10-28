@@ -37,6 +37,8 @@ class InternshipResponse(InternshipInput):
     is_saved: bool | None = None
     match_score: int | None = None
     matched_skills: list[str] | None = None
+    match_explanation: str | None = None
+    match: dict | None = None
     applicant_count: int | None = None
 
 

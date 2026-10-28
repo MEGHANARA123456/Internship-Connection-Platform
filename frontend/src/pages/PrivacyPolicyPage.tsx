@@ -158,6 +158,13 @@ export function PrivacyPolicyPage() {
           </ul>
         </section>
 
+        <section className="space-y-3 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 dark:border-indigo-900 dark:bg-indigo-950/30">
+          <h2 className="text-base font-bold text-slate-900 dark:text-white">InternSphere help chatbot</h2>
+          <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300">
+            Chat messages are held only in the open browser session and are cleared when you sign out, switch accounts, or reload. The assistant answers product-help questions and does not access account records. In retrieval mode, questions are matched against the help guide without a language model. If optional language-model mode is enabled, only in-scope text after redaction and selected help passages are processed by the configured provider. Passwords, codes, tokens, and personal details are blocked from model forwarding.
+          </p>
+        </section>
+
         {/* Section 5 */}
         <section className="space-y-3">
           <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">

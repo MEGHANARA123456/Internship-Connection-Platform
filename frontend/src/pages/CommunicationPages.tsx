@@ -18,6 +18,7 @@ import { ScheduleInterviewModal } from '../components/modals/ScheduleInterviewMo
 import { useWebSocketChat } from '../lib/useWebSocketChat'
 import { routes } from '../lib/routes'
 import { isSensitiveNotification, maskCodes, requestNotificationPermission } from '../lib/notifications'
+import { showToast } from '../lib/feedback'
 import {
   Calendar,
   Clock,
@@ -118,7 +119,7 @@ export function InterviewsPage() {
       link.click()
       link.remove()
     } catch {
-      alert('Unable to export calendar invite.')
+      showToast('Unable to export calendar invite.', 'error')
     }
   }
 
@@ -258,7 +259,7 @@ export function InterviewsPage() {
       await api.patch(`/interviews/${interviewId}`, { status: newStatus })
       fetchInterviews()
     } catch {
-      alert('Failed to update interview status.')
+      showToast('Failed to update interview status.', 'error')
     } finally {
       setUpdatingId(null)
     }
@@ -1000,7 +1001,7 @@ export function MessagesPage() {
       setMessages((prev) => [...prev, res.data])
       fetchConversations()
     } catch {
-      alert('Failed to send message.')
+      showToast('Failed to send message.', 'error')
       setNewMessageText(textToSend)
     } finally {
       setSending(false)
@@ -1707,7 +1708,7 @@ export function NotificationsPage() {
       await api.post('/notifications/read-all')
       fetchNotifications()
     } catch {
-      alert('Failed to mark notifications as read.')
+      showToast('Failed to mark notifications as read.', 'error')
     }
   }
 

@@ -6,6 +6,8 @@ import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { ChartSkeleton, KpiSkeleton } from '../ui/LoadingSkeleton'
 import { Activity, Award, Briefcase, Clock, FileText, ShieldCheck, Users } from 'lucide-react'
+import { assignColors } from '../charts/chartColors'
+import { auditActionLabel } from '../../lib/auditActionLabels'
 import {
   ResponsiveBars,
   ResponsiveDonut,
@@ -15,6 +17,7 @@ import {
 } from '../charts/ResponsiveChart'
 
 type StatusCount = { status: string; count: number }
+const TOP_SKILL_SERIES_COLORS = assignColors(['Applicants', 'Required roles'])
 
 interface CompanyPerformance {
   by_role: Array<{
@@ -147,7 +150,7 @@ function ChartFrame({
 }
 
 function DonutChart({ items, label }: { items: Array<{ label: string; value: number }>; label: string }) {
-  const colors = ['#4f46e5', '#06b6d4', '#8b5cf6', '#ec4899', '#10b981', '#f59e0b', '#64748b']
+  const colors = assignColors(items.map((item) => item.label))
   const total = items.reduce((sum, item) => sum + item.value, 0)
   const circumference = 226.2
   let offset = 0
@@ -157,34 +160,26 @@ function DonutChart({ items, label }: { items: Array<{ label: string; value: num
       <svg viewBox="0 0 100 100" className="h-40 w-40 shrink-0" role="img" aria-label={`${label}: ${summary}`}>
         <title>{label}</title>
         <circle cx="50" cy="50" r="36" fill="none" stroke="currentColor" strokeWidth="13" className="text-slate-100 dark:text-slate-800" />
-        {total > 0 && items.map((item, index) => {
+        {total > 0 && items.map((item) => {
           const length = (item.value / total) * circumference
           const currentOffset = offset
           offset += length
           return (
-            <circle
-              key={item.label}
-              cx="50"
-              cy="50"
-              r="36"
-              fill="none"
-              stroke={colors[index % colors.length]}
-              strokeWidth="13"
-              strokeDasharray={`${length} ${circumference - length}`}
-              strokeDashoffset={-currentOffset}
-              transform="rotate(-90 50 50)"
-            >
-              <title>{`${item.label}: ${item.value}`}</title>
-            </circle>
+            <g key={item.label}>
+              <circle cx="50" cy="50" r="36" fill="none" stroke="#ffffff" className="dark:stroke-slate-900" strokeWidth="15" strokeDasharray={`${length} ${circumference - length}`} strokeDashoffset={-currentOffset} transform="rotate(-90 50 50)" />
+              <circle cx="50" cy="50" r="36" fill="none" stroke={colors[item.label]} strokeWidth="13" strokeDasharray={`${length} ${circumference - length}`} strokeDashoffset={-currentOffset} transform="rotate(-90 50 50)">
+                <title>{`${item.label}: ${item.value}`}</title>
+              </circle>
+            </g>
           )
         })}
         <text x="50" y="48" textAnchor="middle" className="fill-slate-900 text-[13px] font-bold dark:fill-white">{total}</text>
         <text x="50" y="60" textAnchor="middle" className="fill-slate-500 text-[6px] dark:fill-slate-400">applications</text>
       </svg>
       <div className="space-y-2 text-xs">
-        {items.map((item, index) => (
+        {items.map((item) => (
           <div key={item.label} className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: colors[index % colors.length] }} />
+            <span className="h-2.5 w-2.5 rounded-full border border-slate-500" style={{ backgroundColor: colors[item.label] }} />
             <span className="text-slate-600 dark:text-slate-300">{item.label}</span>
             <span className="font-semibold text-slate-900 dark:text-white">{item.value}</span>
           </div>
@@ -203,6 +198,7 @@ function HorizontalBars({
   label: string
 }) {
   const max = Math.max(...items.map((item) => item.value), 1)
+  const colors = assignColors(items.map((item) => item.label))
   const summary = items.map((item) => `${item.label}: ${item.value}${item.detail ? `, ${item.detail}` : ''}`).join('; ')
   return (
     <div role="img" aria-label={`${label}. ${summary}`} className="space-y-4">
@@ -214,7 +210,7 @@ function HorizontalBars({
             <span className="shrink-0 font-semibold text-slate-900 dark:text-white">{item.value}</span>
           </div>
           <div className="h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-            <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.max(item.value > 0 ? 2 : 0, (item.value / max) * 100)}%` }} />
+            <div className="h-full rounded-full" style={{ width: `${Math.max(item.value > 0 ? 2 : 0, (item.value / max) * 100)}%`, backgroundColor: colors[item.label] }} />
           </div>
           {item.detail && <p className="text-[10px] text-slate-500 dark:text-slate-400">{item.detail}</p>}
         </div>
@@ -334,13 +330,14 @@ export function CompanyPerformanceCharts({
               const shortlistedOnly = Math.max(0, role.shortlisted - role.offers)
               const offersNotAccepted = Math.max(0, role.offers - role.accepted)
               const values = [lostBeforeShortlist, shortlistedOnly, offersNotAccepted, role.accepted]
-              const colors = ['bg-slate-300 dark:bg-slate-700', 'bg-indigo-400', 'bg-violet-500', 'bg-emerald-500']
+              const stageColors = assignColors(['Not shortlisted', 'Shortlisted', 'Offer pending', 'Accepted'])
+              const stages = ['Not shortlisted', 'Shortlisted', 'Offer pending', 'Accepted']
               const denominator = Math.max(role.applications, 1)
               return (
                 <div key={role.internship_id} title={`${role.title}: ${role.applications} applications, ${role.shortlisted} shortlisted, ${role.offers} offers, ${role.accepted} accepted`}>
                   <div className="mb-2 flex justify-between gap-2 text-xs"><span className="truncate text-slate-600 dark:text-slate-300">{role.title}</span><span className="font-semibold text-slate-800 dark:text-slate-200">{role.applications} applications</span></div>
                   <div className="flex h-5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                    {values.map((value, index) => value > 0 ? <div key={index} className={colors[index]} style={{ width: `${(value / denominator) * 100}%` }} /> : null)}
+                    {values.map((value, index) => value > 0 ? <div key={stages[index]} style={{ width: `${(value / denominator) * 100}%`, backgroundColor: stageColors[stages[index]] }} /> : null)}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-slate-500 dark:text-slate-400">
                     <span>Shortlisted {role.shortlisted}</span><span>Offers {role.offers}</span><span>Accepted {role.accepted}</span>
@@ -370,7 +367,7 @@ export function CompanyPerformanceCharts({
                 const max = Math.max(skill.applicants, skill.required_by_roles, 1)
                 return <div key={skill.skill} title={`${skill.skill}: ${skill.applicants} applicants; required by ${skill.required_by_roles} roles`}>
                   <div className="mb-1 flex justify-between text-xs"><span className="text-slate-700 dark:text-slate-300">{skill.skill}</span><span className="text-slate-500">{skill.applicants} / {skill.required_by_roles}</span></div>
-                  <div className="space-y-1"><div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-2 rounded-full bg-indigo-500" style={{ width: `${(skill.applicants / max) * 100}%` }} /></div><div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-2 rounded-full bg-amber-500" style={{ width: `${(skill.required_by_roles / max) * 100}%` }} /></div></div>
+                  <div className="space-y-1"><div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-2 rounded-full" style={{ width: `${(skill.applicants / max) * 100}%`, backgroundColor: TOP_SKILL_SERIES_COLORS.Applicants }} /></div><div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-2 rounded-full" style={{ width: `${(skill.required_by_roles / max) * 100}%`, backgroundColor: TOP_SKILL_SERIES_COLORS['Required roles'] }} /></div></div>
                 </div>
               })}
             </div>
@@ -659,7 +656,11 @@ export function RoleAnalyticsCharts({
     ? (studentData?.skills_gap ?? []).slice(0, 3).map((item) => ({ label: item.skill, detail: `Missing in ${item.missing_count} roles` }))
     : variant === 'company'
       ? (companyData?.top_skills ?? []).slice(0, 3).map((item) => ({ label: item.skill, detail: `${item.applicants} applicants · required by ${item.required_by_roles} roles` }))
-      : Array.from(adminActions.reduce((map, item) => map.set(item.action, (map.get(item.action) ?? 0) + item.count), new Map<string, number>()), ([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 3).map((item) => ({ label: item.label, detail: `${item.value} actions · last 14 days` }))
+      : Array.from(adminActions.reduce((map, item) => {
+          const label = auditActionLabel(item.action)
+          map.set(label, (map.get(label) ?? 0) + item.count)
+          return map
+        }, new Map<string, number>()), ([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 3).map((item) => ({ label: item.label, detail: `${item.value} actions · last 14 days` }))
 
   let chartTitle = ''
   let chartLoading = false
@@ -691,7 +692,7 @@ export function RoleAnalyticsCharts({
         { label: 'Accepted', color: '#10b981' },
       ]} />
     } else if (chart === 'status_mix') {
-      chartTitle = 'Status mix'
+      chartTitle = 'Status Per Application'
       empty = !hasApps || !statuses.length
       chartContent = <ResponsiveDonut label="Application status mix" items={statuses} />
     } else if (chart === 'match_distribution') {
@@ -769,7 +770,11 @@ export function RoleAnalyticsCharts({
     }
   } else if (variant === 'admin') {
     const growth = userGrowth
-    const actionsByType = Array.from(adminActions.reduce((map, item) => map.set(item.action, (map.get(item.action) ?? 0) + item.count), new Map<string, number>()), ([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value)
+    const actionsByType = Array.from(adminActions.reduce((map, item) => {
+      const label = auditActionLabel(item.action)
+      map.set(label, (map.get(label) ?? 0) + item.count)
+      return map
+    }, new Map<string, number>()), ([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value)
     const adminLoading = chart === 'admin_actions' ? actionsLoading : growthLoading
     const adminError = chart === 'admin_actions' ? actionsError : growthError
     chartLoading = adminLoading
@@ -777,7 +782,7 @@ export function RoleAnalyticsCharts({
     chartRetry = chart === 'admin_actions' ? actionsRetry : growthRetry
     caption = chart === 'admin_actions' ? `Sample size: ${totalAdminActions} actions · Last 14 days` : `Sample size: ${growth.reduce((sum, item) => sum + item.students + item.companies + item.admins, 0)} signups · Last 6 months`
     if (chart === 'user_growth') {
-      chartTitle = 'User growth'
+      chartTitle = 'Signups over time'
       empty = !growth.length
       chartContent = <ResponsiveLineChart label="Monthly user growth by account type" series={[
         { label: 'Students', values: growth.map((item) => ({ label: item.period, value: item.students })), color: '#4f46e5' },
@@ -785,7 +790,7 @@ export function RoleAnalyticsCharts({
         { label: 'Admins', values: growth.map((item) => ({ label: item.period, value: item.admins })), color: '#f59e0b' },
       ]} />
     } else if (chart === 'admin_actions') {
-      chartTitle = 'Admin action volume by action'
+      chartTitle = 'Admin actions by type'
       empty = !actionsByType.length
       chartContent = <ResponsiveBars label="Admin action volume aggregated by action" items={actionsByType} />
     }

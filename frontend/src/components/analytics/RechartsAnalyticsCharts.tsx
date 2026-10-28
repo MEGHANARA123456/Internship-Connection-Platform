@@ -18,7 +18,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { auditActionLabel } from '../../lib/auditActionLabels'
 import { ChartLegend, type ChartLegendItem } from '../charts/ChartLegend'
-import { chartColorFor } from '../charts/chartColors'
+import { assignColors } from '../charts/chartColors'
 import { routes } from '../../lib/routes'
 
 export interface ChartDatum {
@@ -295,27 +295,49 @@ export function RechartsAnalyticsCharts({
   const animation = !reducedMotion()
   const tickColor = 'var(--analytics-axis, #64748b)'
   const gridColor = 'var(--analytics-grid, #e2e8f0)'
-  const seriesConfig: ChartLegendItem[] = kind === 'response_times'
-    ? [{ id: 'days', label: 'Days to first response', color: chartColorFor('Applications'), shape: 'square' as const }]
-    : kind === 'skill_gap'
-      ? [{ id: 'have', label: 'You have it', color: chartColorFor('You have it'), shape: 'square' as const }, { id: 'missing', label: 'Missing', color: chartColorFor('Missing'), shape: 'square' as const }]
-      : kind === 'top_companies'
-        ? STATUS_SERIES.map((key) => ({ id: key, label: statusLabel(key), color: chartColorFor(key), shape: 'square' as const }))
-        : kind === 'conversion_by_role'
-          ? ROLE_SERIES.map((key) => ({ id: key, label: statusLabel(key), color: chartColorFor(key), shape: 'square' as const }))
-          : kind === 'status_over_time'
-            ? STATUS_SERIES.map((key) => ({ id: key, label: statusLabel(key), color: chartColorFor(key), shape: 'square' as const }))
-            : kind === 'activity_calendar'
-              ? [
-                { id: 'applications', label: 'Applications', color: chartColorFor('Applications'), value: displayRows.reduce((sum, row) => sum + (row.applications ?? 0), 0), shape: 'square' as const },
-                { id: 'interviews', label: 'Interviews', color: chartColorFor('Interviews'), value: displayRows.reduce((sum, row) => sum + (row.interviews ?? 0), 0), shape: 'square' as const },
-              ]
+  const chartSeriesKeys = kind === 'top_companies' || kind === 'status_over_time'
+    ? STATUS_SERIES
+    : kind === 'conversion_by_role'
+      ? ROLE_SERIES
+      : kind === 'skill_gap'
+        ? ['You have it', 'Missing']
+        : kind === 'response_times'
+          ? ['Applications', 'Median']
+          : kind === 'activity_calendar'
+            ? ['Applications', 'Interviews']
             : kind === 'signups_over_time'
-              ? [{ id: 'students', label: 'Students', color: chartColorFor('Students'), shape: 'line' as const }, { id: 'companies', label: 'Companies', color: chartColorFor('Companies'), shape: 'dashed' as const }]
+              ? ['Students', 'Companies']
               : kind === 'trends'
-                ? [{ id: 'applications', label: 'Applications', color: chartColorFor('Applications'), shape: 'line' as const }, { id: 'interviews', label: 'Interview-stage applications', color: chartColorFor('Interview-stage applications'), shape: 'dashed' as const }, { id: 'offers', label: 'Offers', color: chartColorFor('Offers'), shape: 'line' as const }]
-                : ['applications_over_time', 'admin_applications_over_time'].includes(kind)
-                  ? [{ id: 'count', label: 'Applications', color: chartColorFor('Applications'), shape: 'line' as const }]
+                ? ['Applications', 'Interview-stage applications', 'Offers']
+                : kind === 'applications_over_time' || kind === 'admin_applications_over_time' || kind === 'funnel' || kind === 'company_pipeline'
+                  ? ['Applications']
+                  : []
+  const chartColors = assignColors([
+    ...displayRows.map((row) => row.fullName ?? row.name),
+    ...chartSeriesKeys,
+  ])
+  const colorForKey = (key: string) => chartColors[key]
+  const seriesConfig: ChartLegendItem[] = kind === 'response_times'
+    ? [{ id: 'days', label: 'Days to first response', color: colorForKey('Applications'), shape: 'square' as const }]
+    : kind === 'skill_gap'
+      ? [{ id: 'have', label: 'You have it', color: colorForKey('You have it'), shape: 'square' as const }, { id: 'missing', label: 'Missing', color: colorForKey('Missing'), shape: 'square' as const }]
+      : kind === 'top_companies'
+        ? STATUS_SERIES.map((key) => ({ id: key, label: statusLabel(key), color: colorForKey(key), shape: 'square' as const }))
+        : kind === 'conversion_by_role'
+          ? ROLE_SERIES.map((key) => ({ id: key, label: statusLabel(key), color: colorForKey(key), shape: 'square' as const }))
+          : kind === 'status_over_time'
+              ? STATUS_SERIES.map((key) => ({ id: key, label: statusLabel(key), color: colorForKey(key), shape: 'square' as const }))
+              : kind === 'activity_calendar'
+                ? [
+                  { id: 'applications', label: 'Applications', color: colorForKey('Applications'), value: displayRows.reduce((sum, row) => sum + (row.applications ?? 0), 0), shape: 'square' as const },
+                  { id: 'interviews', label: 'Interviews', color: colorForKey('Interviews'), value: displayRows.reduce((sum, row) => sum + (row.interviews ?? 0), 0), shape: 'square' as const },
+                ]
+              : kind === 'signups_over_time'
+                ? [{ id: 'students', label: 'Students', color: colorForKey('Students'), shape: 'line' as const }, { id: 'companies', label: 'Companies', color: colorForKey('Companies'), shape: 'dashed' as const }]
+              : kind === 'trends'
+                  ? [{ id: 'applications', label: 'Applications', color: colorForKey('Applications'), shape: 'line' as const }, { id: 'interviews', label: 'Interview-stage applications', color: colorForKey('Interview-stage applications'), shape: 'dashed' as const }, { id: 'offers', label: 'Offers', color: colorForKey('Offers'), shape: 'line' as const }]
+                  : ['applications_over_time', 'admin_applications_over_time'].includes(kind)
+                    ? [{ id: 'count', label: 'Applications', color: colorForKey('Applications'), shape: 'line' as const }]
                   : ['domains', 'work_modes', 'status', 'internships_by_status', 'verification_status', 'interview_outcomes'].includes(kind)
                     ? displayRows.map((row) => {
                       const fullName = row.fullName ?? row.name
@@ -324,16 +346,16 @@ export function RechartsAnalyticsCharts({
                         : ['status', 'internships_by_status', 'verification_status', 'interview_outcomes'].includes(kind)
                           ? statusLabel(fullName)
                           : fullName
-                      return { id: row.name, label, color: chartColorFor(fullName), value: row.count, shape: ['status', 'work_modes', 'internships_by_status', 'verification_status', 'interview_outcomes'].includes(kind) ? 'circle' as const : 'square' as const }
+                      return { id: row.name, label, color: colorForKey(fullName), value: row.count, shape: ['status', 'work_modes', 'internships_by_status', 'verification_status', 'interview_outcomes'].includes(kind) ? 'circle' as const : 'square' as const }
                     })
                     : kind === 'funnel' || kind === 'company_pipeline'
-                      ? [{ id: 'count', label: 'Applications', color: chartColorFor('Applications'), shape: 'square' as const }]
-                      : displayRows.map((row) => ({ id: row.name, label: kind === 'admin_actions_by_type' ? auditActionLabel(row.action ?? row.name) : row.fullName ?? row.name, color: chartColorFor(row.fullName ?? row.name), value: row.count, shape: 'square' as const }))
+                      ? [{ id: 'count', label: 'Applications', color: colorForKey('Applications'), shape: 'square' as const }]
+                      : displayRows.map((row) => ({ id: row.name, label: kind === 'admin_actions_by_type' ? auditActionLabel(row.action ?? row.name) : row.fullName ?? row.name, color: colorForKey(row.fullName ?? row.name), value: row.count, shape: 'square' as const }))
   if (kind === 'response_times' && displayRows[0]?.median_days != null) {
     seriesConfig.push({
       id: 'median',
       label: `Median ${displayRows[0].median_days} days`,
-      color: chartColorFor('Median'),
+      color: colorForKey('Median'),
       value: displayRows[0].median_days,
       shape: 'dashed',
     })
@@ -396,7 +418,7 @@ export function RechartsAnalyticsCharts({
               + (hiddenItems.includes('interviews') ? 0 : row.interviews ?? 0)
             const intensity = Math.max(0.12, count / maxCount)
             return (
-              <div key={row.date ?? row.name} title={`${row.date ?? row.name}: ${row.applications ?? 0} applications, ${row.interviews ?? 0} interviews`} aria-label={`${row.date ?? row.name}: ${row.applications ?? 0} applications, ${row.interviews ?? 0} interviews`} className="flex aspect-square min-w-0 flex-col items-center justify-center rounded-md text-[9px] text-white" style={{ backgroundColor: `color-mix(in srgb, ${hiddenItems.includes('applications') ? chartColorFor('Interviews') : chartColorFor('Applications')} ${Math.round(intensity * 100)}%, var(--analytics-grid, #e2e8f0))` }}>
+              <div key={row.date ?? row.name} title={`${row.date ?? row.name}: ${row.applications ?? 0} applications, ${row.interviews ?? 0} interviews`} aria-label={`${row.date ?? row.name}: ${row.applications ?? 0} applications, ${row.interviews ?? 0} interviews`} className="flex aspect-square min-w-0 flex-col items-center justify-center rounded-md text-[9px] text-white" style={{ backgroundColor: `color-mix(in srgb, ${hiddenItems.includes('applications') ? colorForKey('Interviews') : colorForKey('Applications')} ${Math.round(intensity * 100)}%, var(--analytics-grid, #e2e8f0))` }}>
                 <span>{dateLabel(row.date ?? row.name)}</span>
                 <span className="font-bold">{count}</span>
               </div>
@@ -442,8 +464,8 @@ export function RechartsAnalyticsCharts({
             <XAxis dataKey="name" tick={<CategoryAxisTick textAnchor="middle" />} tickLine={false} axisLine={false} interval="preserveStartEnd" />
             <YAxis allowDecimals tick={{ fill: tickColor, fontSize: 10 }} tickLine={false} axisLine={false} width={42} />
             <Tooltip content={<ChartTooltip />} />
-            {displayRows[0]?.median_days != null && !hiddenItems.includes('median') && <ReferenceLine y={displayRows[0].median_days} stroke={chartColorFor('Median')} strokeDasharray="5 4" label={{ value: `Median ${displayRows[0].median_days}d`, fill: tickColor, fontSize: 10 }} />}
-            {!hiddenItems.includes('days') && <Bar dataKey="days" name="Days to first response" fill={chartColorFor('Applications')} radius={[6, 6, 0, 0]} barSize={22} isAnimationActive={animation} />}
+            {displayRows[0]?.median_days != null && !hiddenItems.includes('median') && <ReferenceLine y={displayRows[0].median_days} stroke={colorForKey('Median')} strokeDasharray="5 4" label={{ value: `Median ${displayRows[0].median_days}d`, fill: tickColor, fontSize: 10 }} />}
+            {!hiddenItems.includes('days') && <Bar dataKey="days" name="Days to first response" fill={colorForKey('Applications')} radius={[6, 6, 0, 0]} barSize={22} isAnimationActive={animation} />}
           </BarChart>
         ) : kind === 'skill_gap' || kind === 'top_companies' || kind === 'conversion_by_role' ? (
           <BarChart {...commonProps} data={displayRows} layout="vertical" barCategoryGap={8}>
@@ -453,15 +475,15 @@ export function RechartsAnalyticsCharts({
             <Tooltip content={<ChartTooltip />} />
             {kind === 'skill_gap' ? (
               <>
-                {!hiddenItems.includes('have') && <Bar dataKey="have" name="You have it" stackId="skills" fill={chartColorFor('You have it')} fillOpacity={highlighted === null || highlighted === 'have' ? 1 : 0.25} barSize={20} isAnimationActive={animation} />}
-                {!hiddenItems.includes('missing') && <Bar dataKey="missing" name="Missing" stackId="skills" fill={chartColorFor('Missing')} fillOpacity={highlighted === null || highlighted === 'missing' ? 1 : 0.25} radius={[0, 6, 6, 0]} barSize={20} isAnimationActive={animation} />}
+                {!hiddenItems.includes('have') && <Bar dataKey="have" name="You have it" stackId="skills" fill={colorForKey('You have it')} fillOpacity={highlighted === null || highlighted === 'have' ? 1 : 0.25} barSize={20} isAnimationActive={animation} />}
+                {!hiddenItems.includes('missing') && <Bar dataKey="missing" name="Missing" stackId="skills" fill={colorForKey('Missing')} fillOpacity={highlighted === null || highlighted === 'missing' ? 1 : 0.25} radius={[0, 6, 6, 0]} barSize={20} isAnimationActive={animation} />}
               </>
             ) : (
               (kind === 'top_companies'
                 ? ['applied', 'under_review', 'shortlisted', 'interview', 'selected', 'accepted', 'rejected', 'withdrawn']
                 : ['applied', 'under_review', 'shortlisted', 'interview_scheduled', 'selected', 'accepted']
               ).map((key) => (
-                !hiddenItems.includes(key) &&                 <Bar key={key} dataKey={key} name={statusLabel(key)} stackId="companies" fill={chartColorFor(key)} fillOpacity={highlighted === null || highlighted === key ? 1 : 0.25} barSize={20} isAnimationActive={animation} />
+                !hiddenItems.includes(key) &&                 <Bar key={key} dataKey={key} name={statusLabel(key)} stackId="companies" fill={colorForKey(key)} fillOpacity={highlighted === null || highlighted === key ? 1 : 0.25} barSize={20} isAnimationActive={animation} />
               ))
             )}
           </BarChart>
@@ -472,7 +494,7 @@ export function RechartsAnalyticsCharts({
             <YAxis allowDecimals={false} tick={{ fill: tickColor, fontSize: 10 }} tickLine={false} axisLine={false} width={36} />
             <Tooltip content={<ChartTooltip />} labelFormatter={(value) => dateLabel(String(value))} />
             {STATUS_SERIES.map((key) => (
-              !hiddenItems.includes(key) && <Area key={key} name={statusLabel(key)} dataKey={key} type="monotone" stackId="status" stroke={chartColorFor(key)} fill={chartColorFor(key)} fillOpacity={highlighted === null || highlighted === key ? 0.22 : 0.05} isAnimationActive={animation} />
+              !hiddenItems.includes(key) && <Area key={key} name={statusLabel(key)} dataKey={key} type="monotone" stackId="status" stroke={colorForKey(key)} fill={colorForKey(key)} fillOpacity={highlighted === null || highlighted === key ? 0.22 : 0.05} isAnimationActive={animation} />
             ))}
           </AreaChart>
         ) : kind === 'trends' || kind === 'applications_over_time' || kind === 'admin_applications_over_time' || kind === 'signups_over_time' ? (
@@ -483,26 +505,26 @@ export function RechartsAnalyticsCharts({
             <Tooltip content={<ChartTooltip />} labelFormatter={(value) => dateLabel(String(value))} />
             {kind === 'signups_over_time' ? (
               <>
-                {!hiddenItems.includes('students') && <Area name="Students" dataKey="students" type="monotone" stroke={chartColorFor('Students')} fill={chartColorFor('Students')} fillOpacity={highlighted === null || highlighted === 'students' ? 0.16 : 0.03} strokeWidth={2.5} activeDot={{ r: 5 }} isAnimationActive={animation} />}
-                {!hiddenItems.includes('companies') && <Area name="Companies" dataKey="companies" type="monotone" stroke={chartColorFor('Companies')} fill={chartColorFor('Companies')} fillOpacity={highlighted === null || highlighted === 'companies' ? 0.08 : 0.02} strokeWidth={2} activeDot={{ r: 4 }} isAnimationActive={animation} />}
+                {!hiddenItems.includes('students') && <Area name="Students" dataKey="students" type="monotone" stroke={colorForKey('Students')} fill={colorForKey('Students')} fillOpacity={highlighted === null || highlighted === 'students' ? 0.16 : 0.03} strokeWidth={2.5} activeDot={{ r: 5 }} isAnimationActive={animation} />}
+                {!hiddenItems.includes('companies') && <Area name="Companies" dataKey="companies" type="monotone" stroke={colorForKey('Companies')} fill={colorForKey('Companies')} fillOpacity={highlighted === null || highlighted === 'companies' ? 0.08 : 0.02} strokeWidth={2} activeDot={{ r: 4 }} isAnimationActive={animation} />}
               </>
             ) : kind === 'trends' ? (
               <>
-                {!hiddenItems.includes('applications') && <Area name="Applications" dataKey="applications" type="monotone" stroke={chartColorFor('Applications')} fill={chartColorFor('Applications')} fillOpacity={highlighted === null || highlighted === 'applications' ? 0.16 : 0.03} strokeWidth={2.5} activeDot={{ r: 5 }} isAnimationActive={animation} />}
-                {!hiddenItems.includes('interviews') && <Area name="Interview-stage applications" dataKey="interviews" type="monotone" stroke={chartColorFor('Interview-stage applications')} fill={chartColorFor('Interview-stage applications')} fillOpacity={highlighted === null || highlighted === 'interviews' ? 0.08 : 0.02} strokeWidth={2} activeDot={{ r: 4 }} isAnimationActive={animation} />}
+                {!hiddenItems.includes('applications') && <Area name="Applications" dataKey="applications" type="monotone" stroke={colorForKey('Applications')} fill={colorForKey('Applications')} fillOpacity={highlighted === null || highlighted === 'applications' ? 0.16 : 0.03} strokeWidth={2.5} activeDot={{ r: 5 }} isAnimationActive={animation} />}
+                {!hiddenItems.includes('interviews') && <Area name="Interview-stage applications" dataKey="interviews" type="monotone" stroke={colorForKey('Interview-stage applications')} fill={colorForKey('Interview-stage applications')} fillOpacity={highlighted === null || highlighted === 'interviews' ? 0.08 : 0.02} strokeWidth={2} activeDot={{ r: 4 }} isAnimationActive={animation} />}
               </>
             ) : (
               <>
-                {!hiddenItems.includes('count') && <Area name="Applications" dataKey="count" type="monotone" stroke={chartColorFor('Applications')} fill={chartColorFor('Applications')} fillOpacity={highlighted === null || highlighted === 'count' ? 0.16 : 0.03} strokeWidth={2.5} activeDot={{ r: 5 }} isAnimationActive={animation} />}
+                {!hiddenItems.includes('count') && <Area name="Applications" dataKey="count" type="monotone" stroke={colorForKey('Applications')} fill={colorForKey('Applications')} fillOpacity={highlighted === null || highlighted === 'count' ? 0.16 : 0.03} strokeWidth={2.5} activeDot={{ r: 5 }} isAnimationActive={animation} />}
               </>
             )}
-            {kind === 'trends' && !hiddenItems.includes('offers') && <Area name="Offers" dataKey="offers" type="monotone" stroke={chartColorFor('Offers')} fill={chartColorFor('Offers')} fillOpacity={highlighted === null || highlighted === 'offers' ? 0.06 : 0.02} strokeWidth={2} activeDot={{ r: 4 }} isAnimationActive={animation} />}
+            {kind === 'trends' && !hiddenItems.includes('offers') && <Area name="Offers" dataKey="offers" type="monotone" stroke={colorForKey('Offers')} fill={colorForKey('Offers')} fillOpacity={highlighted === null || highlighted === 'offers' ? 0.06 : 0.02} strokeWidth={2} activeDot={{ r: 4 }} isAnimationActive={animation} />}
           </AreaChart>
         ) : kind === 'status' || kind === 'work_modes' || kind === 'internships_by_status' || kind === 'verification_status' || kind === 'interview_outcomes' ? (
           <PieChart>
             <Tooltip content={<ChartTooltip />} />
             <Pie data={visibleRows} dataKey="count" nameKey="name" cx="50%" cy="46%" innerRadius="48%" outerRadius="70%" paddingAngle={2} cornerRadius={4} isAnimationActive={animation} labelLine={false}>
-              {visibleRows.map((row) => <Cell key={row.name} fill={chartColorFor(row.fullName ?? row.name)} fillOpacity={highlighted === null || highlighted === row.name ? 1 : 0.25} stroke="var(--analytics-surface, #ffffff)" strokeWidth={2} />)}
+              {visibleRows.map((row) => <Cell key={row.name} fill={colorForKey(row.fullName ?? row.name)} fillOpacity={highlighted === null || highlighted === row.name ? 1 : 0.25} stroke="var(--analytics-surface, #ffffff)" strokeWidth={2} />)}
               <LabelList dataKey="count" position="inside" fill="#ffffff" fontSize={11} fontWeight={700} />
             </Pie>
           </PieChart>
@@ -512,11 +534,11 @@ export function RechartsAnalyticsCharts({
             <XAxis type="number" allowDecimals={false} tickCount={4} tick={{ fill: tickColor, fontSize: 10 }} tickLine={false} axisLine={false} />
             <YAxis type="category" dataKey="name" tickFormatter={(value) => truncateLabel(kind === 'admin_actions_by_type' ? auditActionLabel(String(value)) : String(value))} width={Math.min(185, Math.max(100, ...displayRows.map((row) => truncateLabel(row.name).length * 7 + 12)))} interval={0} tick={<CategoryAxisTick formatValue={kind === 'admin_actions_by_type' ? auditActionLabel : undefined} />} tickLine={false} axisLine={false} />
             <Tooltip content={<ChartTooltip />} />
-            <Bar dataKey="count" name={kind === 'funnel' || kind === 'company_pipeline' ? 'Applications' : 'Count'} fill={chartColorFor(kind === 'funnel' || kind === 'company_pipeline' ? 'Applications' : 'Count')} radius={[0, 7, 7, 0]} barSize={20} isAnimationActive={animation}>
+            <Bar dataKey="count" name={kind === 'funnel' || kind === 'company_pipeline' ? 'Applications' : 'Count'} fill={colorForKey(kind === 'funnel' || kind === 'company_pipeline' ? 'Applications' : 'Count')} radius={[0, 7, 7, 0]} barSize={20} isAnimationActive={animation}>
               {visibleRows.map((row) => (
                 <Cell
                   key={row.name}
-                  fill={kind === 'funnel' || kind === 'company_pipeline' || RANKED_BAR_KINDS.includes(kind) ? chartColorFor(kind === 'funnel' || kind === 'company_pipeline' ? 'Applications' : 'Applications') : chartColorFor(row.fullName ?? row.name)}
+                  fill={kind === 'funnel' || kind === 'company_pipeline' ? colorForKey('Applications') : colorForKey(row.fullName ?? row.name)}
                   fillOpacity={highlighted === null || highlighted === row.name || !categoryLegend ? 1 : 0.25}
                   opacity={RANKED_BAR_KINDS.includes(kind) ? 0.35 + 0.65 * row.count / Math.max(1, ...visibleRows.map((entry) => entry.count)) : 1}
                   cursor={kind === 'admin_actions_by_type' ? 'pointer' : undefined}

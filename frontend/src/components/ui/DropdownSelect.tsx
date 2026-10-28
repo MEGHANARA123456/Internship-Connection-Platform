@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 
 export interface DropdownOption {
@@ -27,6 +27,7 @@ export function DropdownSelect({
 }: DropdownSelectProps) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const controlId = useId()
   const selected = options.find((option) => option.value === value)
 
   useEffect(() => {
@@ -57,8 +58,14 @@ export function DropdownSelect({
   }
 
   return (
-    <div ref={rootRef} className={`relative min-w-0 ${className}`}>
+    <div ref={rootRef} className={`relative min-w-0 space-y-1.5 text-left ${className}`}>
+      {label && (
+        <label htmlFor={controlId} className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+          {label}
+        </label>
+      )}
       <button
+        id={controlId}
         type="button"
         role="combobox"
         aria-label={ariaLabel ?? label}

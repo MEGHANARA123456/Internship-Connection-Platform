@@ -22,13 +22,17 @@ export const USER_SCOPED_KEYS = [
   'internsphere_resume_builder',
   'student_github_handle',
   'student_leetcode_handle',
-  'student_verified_badges',
 ]
 const SESSION_KEY = 'session'
 const SESSION_CHANGED_NOTICE_KEY = 'session_changed_notice'
+const LEGACY_SKILL_BADGES_MIGRATION_KEY = 'student_skill_badges_migrated_v1'
 
 if (typeof window !== 'undefined') {
   localStorage.removeItem('student_recommendations')
+  if (localStorage.getItem(LEGACY_SKILL_BADGES_MIGRATION_KEY) !== 'true') {
+    localStorage.removeItem('student_verified_badges')
+    localStorage.setItem(LEGACY_SKILL_BADGES_MIGRATION_KEY, 'true')
+  }
 }
 
 type AuthState = {
@@ -131,7 +135,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: () => {
     storageFor(get().persistence).removeItem(SESSION_KEY)
     removeUserScopedData()
-    set({ session: null, persistence: 'session' })
+    sessionStorage.removeItem(SESSION_CHANGED_NOTICE_KEY)
+    set({ session: null, persistence: 'session', sessionChangedInAnotherTab: false })
   },
   clearSessionChangedNotice: () => {
     sessionStorage.removeItem(SESSION_CHANGED_NOTICE_KEY)

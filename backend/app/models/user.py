@@ -10,7 +10,7 @@ except ImportError:
     class StrEnum(str, Enum):
         pass
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, false, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, false, func, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -66,6 +66,7 @@ class StudentProfile(Base):
     skills: Mapped[str] = mapped_column(Text, default="")
     institution_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    show_verified_badges: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
     user: Mapped[User] = relationship(back_populates="student_profile")
 
 
@@ -354,3 +355,90 @@ class AuditLog(Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class SkillQuestion(Base):
+    __tablename__ = "skill_questions"
+    __table_args__ = (UniqueConstraint("topic", "prompt", name="uq_skill_question_topic_prompt"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    topic: Mapped[str] = mapped_column(String(100), index=True)
+    prompt: Mapped[str] = mapped_column(Text)
+    options: Mapped[list[str]] = mapped_column(JSON)
+    correct_index: Mapped[int] = mapped_column(Integer)
+    correct_answers: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    explanation: Mapped[str] = mapped_column(Text)
+    difficulty: Mapped[str] = mapped_column(String(30), default="MEDIUM", server_default="MEDIUM")
+    subtopic: Mapped[str] = mapped_column(String(100), default="fundamentals", server_default="fundamentals")
+    question_type: Mapped[str] = mapped_column(String(20), default="SINGLE", server_default="SINGLE")
+    source: Mapped[str] = mapped_column(String(500), default="InternSphere curated assessment bank", server_default="InternSphere curated assessment bank")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class SkillAttempt(Base):
+    __tablename__ = "skill_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    topic: Mapped[str] = mapped_column(String(100), index=True)
+    question_ids: Mapped[list[int]] = mapped_column(JSON)
+    question_snapshots: Mapped[list[dict[str, object]]] = mapped_column(JSON)
+    option_orders: Mapped[list[list[int]]] = mapped_column(JSON)
+    answers: Mapped[list[int | list[int]] | None] = mapped_column(JSON, nullable=True)
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    raw_score: Mapped[float | None] = mapped_column(nullable=True)
+    weighted_percentage: Mapped[float | None] = mapped_column(nullable=True)
+    level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    time_taken_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    question_time_seconds: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    subtopic_scores: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
+    difficulty_scores: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
+    percentile: Mapped[float | None] = mapped_column(nullable=True)
+    passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SkillBadge(Base):
+    __tablename__ = "skill_badges"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    topic: Mapped[str] = mapped_column(String(100), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    level: Mapped[str] = mapped_column(String(20))
+    score: Mapped[int] = mapped_column(Integer)
+    attempt_id: Mapped[int] = mapped_column(ForeignKey("skill_attempts.id", ondelete="CASCADE"), index=True)
+    earned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SkillLearningResource(Base):
+    __tablename__ = "skill_learning_resources"
+    __table_args__ = (
+        UniqueConstraint("topic", "subtopic", "url", name="uq_skill_learning_resource_url"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    topic: Mapped[str] = mapped_column(String(100), index=True)
+    subtopic: Mapped[str] = mapped_column(String(100), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    url: Mapped[str] = mapped_column(String(1000))
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+    )

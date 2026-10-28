@@ -1,11 +1,17 @@
 from datetime import datetime, timezone
 from typing import Any
 
+from app.models import (
+    Application,
+    CompanyProfile,
+    Internship,
+    Resume,
+    StudentProfile,
+    User,
+)
+from app.services.ai import compute_explicit_eligibility_fit, compute_match, get_student_resume_text
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models import Application, CompanyProfile, Internship, Resume, StudentProfile, User
-from app.services.ai import compute_match, get_student_resume_text
 
 
 async def check_eligibility(
@@ -95,8 +101,13 @@ async def check_eligibility(
         internship.title,
         internship.description,
         job_skills,
+        eligibility_data=compute_explicit_eligibility_fit(
+            internship.description,
+            profile.graduation_year if profile else None,
+            f"{profile.major} {profile.university}" if profile else "",
+        ),
     )
-    if match["score"] < 50:
+    if match["score"] is not None and match["score"] < 50:
         warnings.append({
             "code": "LOW_MATCH",
             "message": "Your match score is below 50. You can still apply.",

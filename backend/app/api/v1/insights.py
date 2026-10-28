@@ -20,9 +20,10 @@ from app.models import (
     User,
     UserRole,
 )
-from app.services.ai import compute_match, get_student_resume_text
+from app.services.ai import compute_explicit_eligibility_fit, compute_match, get_student_resume_text
 from app.services.analytics_domains import normalize_domain_rows
 from app.services.application_funnel import cumulative_student_application_counts
+from app.services.audit import audit_action_label
 
 router = APIRouter(tags=["analytics"])
 dashboard_user = Annotated[User, Depends(require_roles(UserRole.COMPANY, UserRole.ADMIN))]# type: ignore
@@ -187,6 +188,9 @@ async def student_insights(
             Internship.description,
             Internship.skills,
             StudentProfile.skills,
+            StudentProfile.graduation_year,
+            StudentProfile.major,
+            StudentProfile.university,
         )
         .join(Internship, Internship.id == Application.internship_id)
         .outerjoin(StudentProfile, StudentProfile.user_id == Application.student_id)
@@ -195,14 +199,22 @@ async def student_insights(
     match_rows = (await db.execute(match_query)).all()
     matches: list[int] = []
     score_buckets = {"0-49": 0, "50-69": 0, "70-84": 0, "85-100": 0}
-    for _, title, description, required_skills, student_skills in match_rows:
+    resume_text = await get_student_resume_text(db, user.id)
+    for _, title, description, required_skills, student_skills, graduation_year, major, university in match_rows:
         match = compute_match(
             [item.strip() for item in (student_skills or "").split(",") if item.strip()],
-            "",
+            resume_text,
             title,
             description,
             [item.strip() for item in (required_skills or "").split(",") if item.strip()],
+            eligibility_data=compute_explicit_eligibility_fit(
+                description,
+                graduation_year,
+                f"{major or ''} {university or ''}".strip(),
+            ),
         )
+        if match["score"] is None:
+            continue
         score = int(match["score"])
         matches.append(score)
         bucket = "0-49" if score < 50 else "50-69" if score < 70 else "70-84" if score < 85 else "85-100"
@@ -863,7 +875,7 @@ async def admin_insights(
     response.headers["Cache-Control"] = "no-store"
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    action_cutoff = now - timedelta(days=14)
+    range_cutoff = _cutoff(range_value)
     current_month_users = select(func.count(User.id)).where(User.created_at >= month_start)
     total_signups = int(await db.scalar(current_month_users) or 0)
     student_signups = int(await db.scalar(
@@ -872,9 +884,11 @@ async def admin_insights(
     company_signups = int(await db.scalar(
         select(func.count(User.id)).where(User.created_at >= month_start, User.role == UserRole.COMPANY)
     ) or 0)
+    action_query = select(AuditLog.action, func.count(AuditLog.id))
+    if range_cutoff is not None:
+        action_query = action_query.where(AuditLog.created_at >= range_cutoff)
     action_rows = (await db.execute(
-        select(AuditLog.action, func.count(AuditLog.id))
-        .where(AuditLog.created_at >= action_cutoff)
+        action_query
         .group_by(AuditLog.action)
         .order_by(func.count(AuditLog.id).desc(), AuditLog.action)
     )).all()
@@ -889,7 +903,6 @@ async def admin_insights(
         select(func.count(Report.id)).where(Report.status == "OPEN")
     ) or 0)
 
-    range_cutoff = _cutoff(range_value)
     signups_query = select(
         func.date(User.created_at), User.role, func.count(User.id)
     )
@@ -936,7 +949,7 @@ async def admin_insights(
             "users_signed_up": {"value": total_signups, "sample_size": total_signups, "definition": "All user accounts created since the start of the current UTC month."},
             "student_signups": {"value": student_signups, "sample_size": student_signups, "definition": "Student accounts created since the start of the current UTC month."},
             "company_signups": {"value": company_signups, "sample_size": company_signups, "definition": "Company accounts created since the start of the current UTC month."},
-            "admin_actions": {"value": total_actions, "sample_size": total_actions, "definition": "Audit log records created in the last 14 days."},
+            "admin_actions": {"value": total_actions, "sample_size": total_actions, "definition": "Audit log records created in the selected reporting range."},
             "pending_verifications": {"value": pending_verifications, "sample_size": pending_verifications, "definition": "Company profiles currently awaiting verification."},
             "job_queue": {"value": pending_jobs, "sample_size": pending_jobs, "definition": "Internships currently awaiting moderation."},
             "disputes": {"value": open_disputes, "sample_size": open_disputes, "definition": "Reports currently open."},
@@ -945,7 +958,10 @@ async def admin_insights(
             "signups_over_time": [{"name": day, "date": day, **counts} for day, counts in sorted(signup_buckets.items())],
             "admin_applications_over_time": [{"name": str(day), "date": str(day), "count": int(count)} for day, count in applications],
             "internships_by_status": [{"name": str(status).replace("_", " ").title(), "count": int(count)} for status, count in internship_status_rows],
-            "admin_actions_by_type": [{"name": str(action), "count": int(count), "action": str(action)} for action, count in action_rows],
+            "admin_actions_by_type": [
+                {"name": audit_action_label(str(action)), "count": int(count), "action": str(action)}
+                for action, count in action_rows
+            ],
             "verification_status": [{"name": str(status).title(), "count": int(count)} for status, count in verification_rows],
             "top_domains": normalize_domain_rows(domain_rows),# type: ignore
         },

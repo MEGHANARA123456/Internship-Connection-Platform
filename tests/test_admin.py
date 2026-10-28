@@ -82,7 +82,7 @@ async def test_admin_deletes_user_and_writes_audit(db_setup) -> None:
     async with db_setup() as db:
         assert await db.get(User, target.id) is None
         audit = await db.scalar(
-            select(AuditLog).where(AuditLog.action == "ADMIN_USER_DELETED")
+            select(AuditLog).where(AuditLog.action == "admin_user_deleted")
         )
     assert audit is not None
     assert audit.actor_id == admin.id

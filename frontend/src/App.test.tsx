@@ -156,7 +156,7 @@ describe('platform shell', () => {
       email: 'student@example.com',
       name: 'Student',
     })
-    vi.spyOn(api, 'get').mockImplementation(async (path) => {
+    const get = vi.spyOn(api, 'get').mockImplementation(async (path) => {
       if (path === '/auth/me') return { data: { id: 21, email: 'student@example.com', name: 'Student' } } as never
       if (path === '/notifications' || path === '/internships/saved') return { data: [] } as never
       return { data: { items: [], total: 0, applications: [], counts: {} } } as never
@@ -170,7 +170,8 @@ describe('platform shell', () => {
     fireEvent.click(screen.getByRole('button', { name: /Internships/ }))
     fireEvent.click(screen.getByRole('menuitem', { name: /Saved internships/ }))
 
-    expect(await screen.findByText('No saved internships')).toBeTruthy()
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/internships/saved'))
+    expect(await screen.findByText('No saved internships', {}, { timeout: 5000 })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Saved Roles' }).className).toContain('bg-indigo-600')
   })
 
@@ -311,6 +312,25 @@ describe('platform shell', () => {
     expect(screen.queryByText(/654321/)).not.toBeInTheDocument()
     expect(get).toHaveBeenCalledWith('/notifications')
     expect(get).toHaveBeenCalledWith('/me/emails')
+  })
+
+  it('routes admins to skill assessment management from the admin menu', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'admin-access-token',
+      refreshToken: 'admin-refresh-token',
+      userId: 78,
+      role: 'ADMIN',
+      email: 'admin@example.com',
+    })
+    vi.spyOn(api, 'get').mockResolvedValue({ data: [] } as never)
+
+    render(<MemoryRouter initialEntries={['/admin/skill-assessments']}><App /></MemoryRouter>)
+
+    expect(await screen.findByRole('heading', { name: 'Skill assessments' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+    expect(screen.getByRole('menuitem', { name: 'Skill assessments' })).toHaveAttribute('href', '/admin/skill-assessments')
+    expect(screen.queryByRole('heading', { name: "This page isn't available for your account" })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Page not found' })).not.toBeInTheDocument()
   })
 
   it.each(['STUDENT', 'COMPANY'] as const)('%s can open notifications without reaching an unavailable or 404 page', async (role) => {

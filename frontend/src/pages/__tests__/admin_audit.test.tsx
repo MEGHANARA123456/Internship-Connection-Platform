@@ -88,7 +88,7 @@ describe('AdminAuditLogsPage', () => {
       expect(screen.getByText('admin@test.com')).toBeDefined()
     })
     // Action badge
-    expect(screen.getAllByText('Users suspended').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Users blocked').length).toBeGreaterThan(0)
     // Target cell — /user/ matches both the badge and the target cell, use getAllByText
     expect(screen.getAllByText(/user/).length).toBeGreaterThanOrEqual(1)
 

@@ -24,6 +24,8 @@ from app.api.v1.reviews import router as reviews_router
 from app.api.v1.privacy import router as privacy_router
 from app.api.v1.search import router as search_router
 from app.api.v1.insights import router as insights_router
+from app.api.v1.skills import router as skills_router
+from app.chatbot.router import router as chatbot_router
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
 from app.models import (
     Application,
@@ -55,6 +57,8 @@ api_router.include_router(reviews_router)
 api_router.include_router(privacy_router)
 api_router.include_router(search_router)
 api_router.include_router(insights_router)
+api_router.include_router(skills_router)
+api_router.include_router(chatbot_router)
 
 
 

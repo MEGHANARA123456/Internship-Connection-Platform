@@ -564,12 +564,16 @@ async def moderate_company_posting(
         ip_address=_get_ip(request),
     )
     action_text = {"PUBLISHED": "approved", "REJECTED": "rejected", "CLOSED": "closed"}[data.status]
+    display_title = item.title.replace("_", " ").replace("-", " ").title()
+    notification_body = f'Your internship "{display_title}" was {action_text}.'
+    if data.status == "REJECTED" and data.reason:
+        notification_body += f" Reason: {data.reason.strip()}"
     await notify(
         db,
         item.company_id,
         "INTERNSHIP_REVIEW",
         f"Internship {action_text}",
-        f"Your internship {item.title} was {action_text}.",
+        notification_body,
     )
     await db.commit()
     return {"id": item.id, "status": item.status}
@@ -643,12 +647,16 @@ async def moderate_internship(
         ip_address=_get_ip(request),
     )
     action_text = {"PUBLISHED": "approved", "REJECTED": "rejected", "CLOSED": "closed"}[data.status]
+    display_title = item.title.replace("_", " ").replace("-", " ").title()
+    notification_body = f'Your internship "{display_title}" was {action_text}.'
+    if data.status == "REJECTED" and data.reason:
+        notification_body += f" Reason: {data.reason.strip()}"
     await notify(
         db,
         item.company_id,
         "INTERNSHIP_REVIEW",
         f"Internship {action_text}",
-        f"Your internship {item.title} was {action_text}.",
+        notification_body,
     )
     await db.commit()
     return {"id": item.id, "status": item.status}
@@ -675,13 +683,13 @@ async def update_report(
         raise HTTPException(409, f"Cannot move {report.status} to {data.status}")
     report.status = data.status
     report.resolution_notes = data.resolution_notes
-    if data.status == "RESOLVED":
-        await write_audit(
-            db, actor=user, action="report_resolved",
-            target_type="user", target_id=report.reported_user_id,
-            metadata={"report_id": report_id, "resolution_notes": data.resolution_notes},
-            ip_address=_get_ip(request),
-        )
+    await write_audit(
+        db, actor=user,
+        action="report_resolved" if data.status == "RESOLVED" else "report_status_updated",
+        target_type="report", target_id=report_id,
+        metadata={"reported_user_id": report.reported_user_id, "status": data.status},
+        ip_address=_get_ip(request),
+    )
     await db.commit()
     await db.refresh(report)
     return report

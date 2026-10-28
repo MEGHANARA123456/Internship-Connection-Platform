@@ -21,6 +21,7 @@ import { useAuthStore } from '../store/auth'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 import { KpiCard } from '../components/dashboard/KpiCard'
 import { routes } from '../lib/routes'
+import { confirmAction, showToast } from '../lib/feedback'
 import { AvatarUploadCard } from '../components/ui/AvatarUploadCard'
 import {
   Plus,
@@ -324,7 +325,12 @@ interface CompanyApplicant {
   status: string
   created_at: string
   resume_id: number | null
+  has_resume?: boolean
+  resume_filename?: string | null
+  resume_size?: number | null
   match_score: number | null
+  match_explanation?: string | null
+  verified_badges?: Array<{ id: number; topic: string; title: string; level: string; score: number; expires_at: string }>
 }
 
 const applicantStages = [
@@ -337,7 +343,7 @@ const applicantStages = [
   { key: 'REJECTED', label: 'Rejected' },
 ]
 
-function LegacyCompanyApplicantsPage({
+export function LegacyCompanyApplicantsPage({
   pipeline = false,
   initialStatus,
 }: {
@@ -351,6 +357,7 @@ function LegacyCompanyApplicantsPage({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [processingId, setProcessingId] = useState<number | null>(null)
+  const [downloadingResumeId, setDownloadingResumeId] = useState<number | null>(null)
   const [activeInterview, setActiveInterview] = useState<CompanyApplicant | null>(null)
   const [notesApplicant, setNotesApplicant] = useState<CompanyApplicant | null>(null)
   const [applicationNotes, setApplicationNotes] = useState<Array<{ id: number; body: string; created_at: string }>>([])
@@ -428,22 +435,35 @@ function LegacyCompanyApplicantsPage({
       await load()
     } catch (requestError) {
       console.error(`Unable to move applicant ${item.id} to ${nextStatus}.`, requestError)
-      window.alert('That status change was refused. Refresh the list and try a valid next step.')
+      showToast('That status change was refused. Refresh the list and try a valid next step.', 'error')
     } finally {
       setProcessingId(null)
     }
   }
 
   const downloadResume = async (item: CompanyApplicant) => {
-    if (!item.resume_id) {
-      window.alert('This candidate has not attached a resume.')
+    if (!item.has_resume && !item.resume_id) {
+      showToast('Resume not uploaded by the student', 'error')
       return
     }
+    if (!item.resume_id) {
+      showToast('Resume not uploaded by the student', 'error')
+      return
+    }
+    setDownloadingResumeId(item.id)
     try {
-      await downloadAuthenticatedFile(`/profiles/resume/${item.resume_id}/download`, `resume_candidate_${item.student_id}.pdf`)
+      const filename = await downloadAuthenticatedFile(`/profiles/resume/${item.resume_id}/download`, item.resume_filename || `resume_candidate_${item.student_id}.pdf`)
+      showToast(`Resume downloaded: ${filename}`, 'success')
     } catch (requestError) {
       console.error(`Unable to download resume for applicant ${item.id}.`, requestError)
-      window.alert('Resume download failed. Please try again.')
+      const status = (requestError as any)?.response?.status
+      showToast(status === 404
+        ? 'Resume not uploaded by the student'
+        : status === 403
+          ? "You don't have access to this resume"
+          : "Couldn't download the resume, please try again", 'error')
+    } finally {
+      setDownloadingResumeId(null)
     }
   }
 
@@ -477,7 +497,7 @@ function LegacyCompanyApplicantsPage({
 
   const actions = (item: CompanyApplicant) => (
     <div className="flex flex-wrap gap-2">
-      <Button size="sm" variant="outline" disabled={!item.resume_id} onClick={() => void downloadResume(item)}>Resume</Button>
+      <Button size="sm" variant="outline" isLoading={downloadingResumeId === item.id} title={item.has_resume || item.resume_id ? `Download ${item.resume_filename || 'resume'}` : 'Resume not uploaded by the student'} className={!item.has_resume && !item.resume_id ? 'text-slate-400 dark:text-slate-500' : ''} onClick={() => void downloadResume(item)}>Resume</Button>
       <Button size="sm" variant="outline" disabled={processingId === item.id} onClick={() => void changeStatus(item, 'UNDER_REVIEW')}>Review</Button>
       <Button size="sm" variant="outline" disabled={processingId === item.id} onClick={() => void changeStatus(item, 'SHORTLISTED')}>Shortlist</Button>
       <Button size="sm" variant="outline" onClick={() => void openNotes(item)}>Notes</Button>
@@ -608,9 +628,9 @@ export function CompanyApplicantsPage({
   initialStatus?: string
 }) {
   if (pipeline || initialStatus === 'SHORTLISTED') {
-    return <CompanyApplicantsRedesign pipeline={pipeline} />
+    return <CompanyApplicantsRedesign pipeline={pipeline} view={pipeline ? undefined : 'shortlisted'} />
   }
-  return <LegacyCompanyApplicantsPage pipeline={pipeline} initialStatus={initialStatus} />
+  return <CompanyApplicantsRedesign pipeline={false} view="applicants" />
 }
 
 export function CompanyJobsPage() {
@@ -675,18 +695,18 @@ export function CompanyJobsPage() {
       await fetchJobs()
     } catch (requestError) {
       console.error(`Unable to duplicate internship ${jobId}.`, requestError)
-      alert('Failed to duplicate internship.')
+      showToast('Failed to duplicate internship.', 'error')
     }
   }
 
   const deleteDraft = async (jobId: number) => {
-    if (!confirm('Delete this draft internship? This cannot be undone.')) return
+    if (!await confirmAction({ title: 'Delete draft internship?', message: 'This cannot be undone.', confirmLabel: 'Delete draft', destructive: true })) return
     try {
       await api.delete(`/internships/${jobId}`)
       await fetchJobs()
     } catch (requestError) {
       console.error(`Unable to delete internship draft ${jobId}.`, requestError)
-      alert('Only draft internships can be deleted.')
+      showToast('Only draft internships can be deleted.', 'error')
     }
   }
 
@@ -696,7 +716,7 @@ export function CompanyJobsPage() {
       await api.post(`/internships/${jobId}/submit`)
       fetchJobs()
     } catch {
-      alert('Failed to submit internship for approval.')
+      showToast('Failed to submit internship for approval.', 'error')
     } finally {
       setSubmittingId(null)
     }
@@ -711,7 +731,7 @@ export function CompanyJobsPage() {
       setRejectPending(false)
       setClosureNote('')
     } catch {
-      alert('Unable to load the applicant preview for this role.')
+      showToast('Unable to load the applicant preview for this role.', 'error')
     }
   }
 
@@ -727,7 +747,7 @@ export function CompanyJobsPage() {
       setClosePreview(null)
       await fetchJobs()
     } catch {
-      alert('Failed to close internship.')
+      showToast('Failed to close internship.', 'error')
     } finally {
       setClosing(false)
     }
@@ -1098,7 +1118,7 @@ export function JobFormPage() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 w-full">
-      <Card className="bg-white">
+      <Card className="bg-white dark:bg-slate-900">
         <CardHeader>
           <CardTitle>{isEditing ? 'Edit Internship' : 'Post an Internship'}</CardTitle>
           <CardDescription>
@@ -1138,7 +1158,7 @@ export function JobFormPage() {
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-3">
               <DropdownSelect
                 label="Work Mode"
                 value={watch('work_mode')}
@@ -1169,7 +1189,7 @@ export function JobFormPage() {
             </div>
 
             <Input
-              label="Application Deadline (Optional)"
+              label="Application Deadline "
               type="date"
               error={errors.deadline?.message}
               {...register('deadline')}
@@ -1224,6 +1244,7 @@ export function JobApplicantsPage() {
   const [selectedAppIds, setSelectedAppIds] = useState<Set<number>>(new Set())
   const [bulkProcessing, setBulkProcessing] = useState(false)
   const [updatingApplicationId, setUpdatingApplicationId] = useState<number | null>(null)
+  const [downloadingResumeId, setDownloadingResumeId] = useState<number | null>(null)
   const [draggedAppId, setDraggedAppId] = useState<number | null>(null)
   const [mobileStageFilter, setMobileStageFilter] = useState<string>('ALL')
 
@@ -1258,21 +1279,34 @@ export function JobApplicantsPage() {
       }
       await fetchApplicants()
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to update candidate stage.')
+      showToast(err.response?.data?.detail || 'Failed to update candidate stage.', 'error')
     } finally {
       setUpdatingApplicationId(null)
     }
   }
 
   const handleDownloadResume = async (app: any) => {
-    if (!app.resume_id) {
-      alert('This candidate has not attached a resume.')
+    if (!app.has_resume && !app.resume_id) {
+      showToast('Resume not uploaded by the student', 'error')
       return
     }
+    if (!app.resume_id) {
+      showToast('Resume not uploaded by the student', 'error')
+      return
+    }
+    setDownloadingResumeId(app.id)
     try {
-      await downloadAuthenticatedFile(`/profiles/resume/${app.resume_id}/download`, `resume_candidate_${app.student_id}.pdf`)
-    } catch {
-      alert('Failed to download candidate resume.')
+      const filename = await downloadAuthenticatedFile(`/profiles/resume/${app.resume_id}/download`, app.resume_filename || `resume_candidate_${app.student_id}.pdf`)
+      showToast(`Resume downloaded: ${filename}`, 'success')
+    } catch (requestError) {
+      const status = (requestError as any)?.response?.status
+      showToast(status === 404
+        ? 'Resume not uploaded by the student'
+        : status === 403
+          ? "You don't have access to this resume"
+          : "Couldn't download the resume, please try again", 'error')
+    } finally {
+      setDownloadingResumeId(null)
     }
   }
 
@@ -1336,7 +1370,7 @@ export function JobApplicantsPage() {
       setSelectedAppIds(new Set())
       await fetchApplicants()
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to bulk shortlist candidates')
+      showToast(err.response?.data?.detail || 'Failed to bulk shortlist candidates', 'error')
     } finally {
       setBulkProcessing(false)
     }
@@ -1344,7 +1378,12 @@ export function JobApplicantsPage() {
 
   const handleBulkReject = async () => {
     if (selectedAppIds.size === 0) return
-    if (!confirm(`Are you sure you want to reject ${selectedAppIds.size} selected candidate(s)?`)) return
+    if (!await confirmAction({
+      title: 'Reject selected candidates?',
+      message: `Reject ${selectedAppIds.size} selected candidate(s)? They will be notified.`,
+      confirmLabel: 'Reject candidates',
+      destructive: true,
+    })) return
     setBulkProcessing(true)
     try {
       await api.post('/applications/bulk-status', {
@@ -1354,7 +1393,7 @@ export function JobApplicantsPage() {
       setSelectedAppIds(new Set())
       await fetchApplicants()
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to bulk reject candidates')
+      showToast(err.response?.data?.detail || 'Failed to bulk reject candidates', 'error')
     } finally {
       setBulkProcessing(false)
     }
@@ -1627,7 +1666,8 @@ export function JobApplicantsPage() {
                           <div className="mt-2 flex flex-wrap gap-1">
                             {(app.student_skills ?? []).slice(0, 5).map((skill: string) => <span key={skill} title={skill} className="max-w-24 truncate rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">{skill}</span>)}
                             {(app.student_skills?.length ?? 0) > 5 && <span title={app.student_skills.join(', ')} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">+{app.student_skills.length - 5} more</span>}
-                            {app.match_score != null && <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">{Math.round(app.match_score)}% match</span>}
+                            {app.match_score != null && <span title={app.match_explanation || undefined} className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">{Math.round(app.match_score)}% match</span>}
+                            {(app.verified_badges ?? []).map((badge: { id: number; topic: string; title: string; level: string }) => <span key={badge.id} title={`${badge.title} · ${badge.level}`} className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">Verified: {badge.topic}</span>)}
                           </div>
 
                           {app.cover_note && (
@@ -1716,7 +1756,8 @@ export function JobApplicantsPage() {
                         {(app.student_skills?.length ?? 0) > 5 && <span title={app.student_skills.join(', ')} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">+{app.student_skills.length - 5} more</span>}
                         {!(app.student_skills?.length) && <span className="text-slate-400">—</span>}
                       </div>
-                      {app.match_score != null && <span className="mt-1 block text-[10px] font-semibold text-indigo-700 dark:text-indigo-300">{Math.round(app.match_score)}% match</span>}
+                      {app.match_score != null && <span title={app.match_explanation || undefined} className="mt-1 block text-[10px] font-semibold text-indigo-700 dark:text-indigo-300">{Math.round(app.match_score)}% match</span>}
+                      {(app.verified_badges ?? []).length > 0 && <div className="mt-1 flex flex-wrap gap-1">{(app.verified_badges ?? []).map((badge: { id: number; topic: string; title: string; level: string }) => <span key={badge.id} title={`${badge.title} · ${badge.level}`} className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">Verified: {badge.topic}</span>)}</div>}
                     </td>
                     <td className="p-3.5">
                       <Badge status={app.status}>{app.status === 'ACCEPTED' ? 'Offer Accepted' : app.status}</Badge>
@@ -1768,7 +1809,7 @@ export function JobApplicantsPage() {
             <p className="text-slate-600 dark:text-slate-300">{reviewApplicant.student_university || 'Education not provided'}</p>
             <p><strong>Skills:</strong> {(reviewApplicant.student_skills ?? []).join(', ') || 'Not provided'}</p>
             <p className="whitespace-pre-wrap"><strong>Cover note:</strong> {reviewApplicant.cover_note || 'No cover note provided.'}</p>
-            <Button variant="outline" disabled={!reviewApplicant.resume_id} onClick={() => void handleDownloadResume(reviewApplicant)} leftIcon={<FileText className="h-4 w-4" />}>View resume</Button>
+            <Button variant="outline" isLoading={downloadingResumeId === reviewApplicant.id} title={reviewApplicant.has_resume || reviewApplicant.resume_id ? `Download ${reviewApplicant.resume_filename || 'resume'}` : 'Resume not uploaded by the student'} className={!reviewApplicant.has_resume && !reviewApplicant.resume_id ? 'text-slate-400 dark:text-slate-500' : ''} onClick={() => void handleDownloadResume(reviewApplicant)} leftIcon={<FileText className="h-4 w-4" />}>View resume</Button>
           </div>
         )}
       </Modal>

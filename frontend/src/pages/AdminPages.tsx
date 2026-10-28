@@ -33,12 +33,17 @@ import {
   EyeOff,
   LayoutDashboard,
   Trash2,
+  Award,
+  Pencil,
+  Plus,
+  Upload,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 import { auditActionLabel } from '../lib/auditActionLabels'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 import { useAuthStore } from '../store/auth'
 import { KpiCard } from '../components/dashboard/KpiCard'
+import { confirmAction, showToast } from '../lib/feedback'
 import { routes } from '../lib/routes'
 
 // --- 1. Admin Dashboard ---
@@ -114,7 +119,7 @@ export function AdminDashboardPage() {
       await api.post(`/admin/companies/${userId}/verification`, { status })
       await fetchDashboardData()
     } catch {
-      alert('Verification status update failed')
+      showToast('Verification status update failed', 'error')
     } finally {
       setActionLoading(null)
     }
@@ -126,7 +131,7 @@ export function AdminDashboardPage() {
       await api.post(`/admin/internships/${jobId}/moderate`, { status })
       await fetchDashboardData()
     } catch {
-      alert('Job moderation status update failed')
+      showToast('Job moderation status update failed', 'error')
     } finally {
       setActionLoading(null)
     }
@@ -561,7 +566,7 @@ export function AdminUsersPage() {
       }
       fetchUsers()
     } catch {
-      alert('Failed to update user status.')
+      showToast('Failed to update user status.', 'error')
     } finally {
       setActionId(null)
     }
@@ -588,7 +593,7 @@ export function AdminUsersPage() {
       window.setTimeout(() => setSuccessToast(''), 4000)
       void fetchUsers(false)
     } catch (error: any) {
-      alert(error.response?.data?.detail || 'Failed to permanently delete user.')
+      showToast(error.response?.data?.detail || 'Failed to permanently delete user.', 'error')
     } finally {
       setDeletingUser(false)
     }
@@ -600,7 +605,7 @@ export function AdminUsersPage() {
       const res = await api.get(`/admin/users/${userId}`)
       setSelectedUser(res.data)
     } catch {
-      alert('Failed to load user details.')
+      showToast('Failed to load user details.', 'error')
     } finally {
       setDetailLoading(false)
     }
@@ -1144,7 +1149,7 @@ export function AdminModerationPage() {
       await api.post(`/admin/internships/${jobId}/moderation`, { status })
       fetchJobs()
     } catch {
-      alert('Failed to update internship status.')
+      showToast('Failed to update internship status.', 'error')
     } finally {
       setActionId(null)
     }
@@ -1266,7 +1271,7 @@ export function AdminReportsPage() {
       })
       fetchReports()
     } catch {
-      alert('Failed to update report status.')
+      showToast('Failed to update report status.', 'error')
     }
   }
 
@@ -1282,7 +1287,7 @@ export function AdminReportsPage() {
       setResolutionNotes('')
       fetchReports()
     } catch {
-      alert('Failed to resolve report.')
+      showToast('Failed to resolve report.', 'error')
     } finally {
       setSubmittingResolution(false)
     }
@@ -1433,7 +1438,7 @@ export function AdminCompaniesPage() {
       await api.post(`/admin/companies/${userId}/verification`, { status })
       await fetchCompanies()
     } catch {
-      alert('Failed to update company verification status.')
+      showToast('Failed to update company verification status.', 'error')
     } finally {
       setActionId(null)
     }
@@ -1559,6 +1564,449 @@ export function AdminAuditLogsPage() {
         </tr>
       })}</tbody></table></div>}
       <div className="flex items-center justify-between text-xs text-slate-500"><span>{total} total events</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</Button><span className="px-2 py-2">Page {page}</span><Button size="sm" variant="outline" disabled={page * pageSize >= total} onClick={() => setPage((current) => current + 1)}>Next</Button></div></div>
+    </div>
+  )
+}
+
+type AdminSkillQuestion = {
+  id: number
+  topic: string
+  subtopic: string
+  prompt: string
+  options: string[]
+  correct_index: number
+  correct_answers: number[] | null
+  explanation: string
+  difficulty: string
+  question_type: string
+  source: string
+  active: boolean
+}
+
+type SkillTopicStats = {
+  topic: string
+  attempts: number
+  pass_rate: number
+  average_score: number | null
+  active_questions: number
+  difficulty_pool_sizes: Record<string, number>
+  bank_warnings: string[]
+  weakest_subtopics: Array<{ subtopic: string; average_percentage: number; attempts: number }>
+  hardest_questions: Array<{ question_id: number; prompt: string; attempts: number; correct_rate: number | null }>
+}
+
+type AdminLearningResource = {
+  id: number
+  topic: string
+  subtopic: string
+  title: string
+  url: string
+  active: boolean
+}
+
+const EMPTY_SKILL_QUESTION = {
+  topic: '',
+  subtopic: 'fundamentals',
+  prompt: '',
+  options: '',
+  correct_index: '0',
+  correct_answers: '',
+  explanation: '',
+  difficulty: 'MEDIUM',
+  question_type: 'SINGLE',
+  source: 'Admin curated question',
+}
+
+export function AdminSkillAssessmentsPage() {
+  const [questions, setQuestions] = useState<AdminSkillQuestion[]>([])
+  const [stats, setStats] = useState<SkillTopicStats[]>([])
+  const [resources, setResources] = useState<AdminLearningResource[]>([])
+  const [resourceDraft, setResourceDraft] = useState({ topic: '', subtopic: 'general', title: '', url: '' })
+  const [editingResourceId, setEditingResourceId] = useState<number | null>(null)
+  const [topicFilter, setTopicFilter] = useState('')
+  const [draft, setDraft] = useState(EMPTY_SKILL_QUESTION)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  const load = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [questionResponse, statsResponse, resourceResponse] = await Promise.all([
+        api.get('/skills/admin/questions'),
+        api.get('/skills/admin/stats'),
+        api.get('/skills/admin/resources'),
+      ])
+      setQuestions(questionResponse.data || [])
+      setStats(statsResponse.data || [])
+      setResources(resourceResponse.data || [])
+    } catch (requestError) {
+      console.error('Unable to load skill assessment administration data.', requestError)
+      setError('Could not load skill assessment questions and statistics.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { void load() }, [])
+
+  const resetDraft = () => {
+    setDraft(EMPTY_SKILL_QUESTION)
+    setEditingId(null)
+  }
+
+  const beginEdit = (question: AdminSkillQuestion) => {
+    setEditingId(question.id)
+    setDraft({
+      topic: question.topic,
+      subtopic: question.subtopic,
+      prompt: question.prompt,
+      options: question.options.join('\n'),
+      correct_index: String(question.correct_index),
+      correct_answers: question.correct_answers?.join(', ') ?? '',
+      explanation: question.explanation,
+      difficulty: question.difficulty,
+      question_type: question.question_type,
+      source: question.source,
+    })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const saveQuestion = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSaving(true)
+    setError('')
+    setSuccess('')
+    const options = draft.options.split(/\r?\n/).map((option) => option.trim()).filter(Boolean)
+    const payload = {
+      topic: draft.topic.trim(),
+      subtopic: draft.subtopic.trim(),
+      prompt: draft.prompt.trim(),
+      options,
+      correct_index: Number(draft.correct_index),
+      correct_answers: draft.question_type === 'MULTI'
+        ? draft.correct_answers.split(',').map((value) => Number(value.trim())).filter(Number.isInteger)
+        : [],
+      explanation: draft.explanation.trim(),
+      difficulty: draft.difficulty,
+      question_type: draft.question_type,
+      source: draft.source.trim(),
+    }
+    try {
+      if (editingId == null) await api.post('/skills/admin/questions', payload)
+      else await api.patch(`/skills/admin/questions/${editingId}`, payload)
+      setSuccess(editingId == null ? 'Question created and audit logged.' : 'Question updated and audit logged.')
+      resetDraft()
+      await load()
+    } catch (requestError) {
+      console.error('Unable to save admin skill assessment question.', requestError)
+      const detail = (requestError as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : 'Question could not be saved.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleQuestion = async (question: AdminSkillQuestion) => {
+    setError('')
+    try {
+      await api.patch(`/skills/admin/questions/${question.id}`, { active: !question.active })
+      await load()
+    } catch (requestError) {
+      console.error(`Unable to update skill question ${question.id}.`, requestError)
+      setError('Question activation could not be changed.')
+    }
+  }
+
+  const deleteQuestion = async (question: AdminSkillQuestion) => {
+    if (!await confirmAction({
+      title: 'Delete skill question?',
+      message: `Delete this ${question.topic} question?`,
+      confirmLabel: 'Delete question',
+      destructive: true,
+    })) return
+    setError('')
+    try {
+      await api.delete(`/skills/admin/questions/${question.id}`)
+      setSuccess('Question deleted and audit logged.')
+      await load()
+    } catch (requestError) {
+      console.error(`Unable to delete skill question ${question.id}.`, requestError)
+      setError('Question could not be deleted.')
+    }
+  }
+
+  const importCsv = async (file: File | undefined) => {
+    if (!file) return
+    setError('')
+    setSuccess('')
+    const payload = new FormData()
+    payload.append('file', file)
+    try {
+      const response = await api.post('/skills/admin/questions/import', payload, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setSuccess(`${response.data.imported} questions imported and audit logged.`)
+      await load()
+    } catch (requestError) {
+      console.error('Unable to import skill assessment CSV.', requestError)
+      const detail = (requestError as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : 'CSV import failed. Check the headers, options, and answer index.')
+    }
+  }
+
+  const resetResourceDraft = () => {
+    setResourceDraft({ topic: '', subtopic: 'general', title: '', url: '' })
+    setEditingResourceId(null)
+  }
+
+  const saveResource = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setError('')
+    setSuccess('')
+    try {
+      if (editingResourceId == null) {
+        await api.post('/skills/admin/resources', resourceDraft)
+        setSuccess('Learning resource added and audit logged.')
+      } else {
+        await api.patch(`/skills/admin/resources/${editingResourceId}`, {
+          title: resourceDraft.title,
+          url: resourceDraft.url,
+        })
+        setSuccess('Learning resource updated and audit logged.')
+      }
+      resetResourceDraft()
+      await load()
+    } catch (requestError) {
+      console.error('Unable to save skill assessment learning resource.', requestError)
+      const detail = (requestError as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : 'Learning resource could not be saved.')
+    }
+  }
+
+  const toggleResource = async (resource: AdminLearningResource) => {
+    setError('')
+    try {
+      await api.patch(`/skills/admin/resources/${resource.id}`, { active: !resource.active })
+      await load()
+    } catch (requestError) {
+      console.error(`Unable to update learning resource ${resource.id}.`, requestError)
+      setError('Learning resource activation could not be changed.')
+    }
+  }
+
+  const deleteResource = async (resource: AdminLearningResource) => {
+    if (!await confirmAction({
+      title: 'Delete learning resource?',
+      message: `Delete the learning link "${resource.title}"?`,
+      confirmLabel: 'Delete resource',
+      destructive: true,
+    })) return
+    setError('')
+    try {
+      await api.delete(`/skills/admin/resources/${resource.id}`)
+      setSuccess('Learning resource deleted and audit logged.')
+      if (editingResourceId === resource.id) resetResourceDraft()
+      await load()
+    } catch (requestError) {
+      console.error(`Unable to delete learning resource ${resource.id}.`, requestError)
+      setError('Learning resource could not be deleted.')
+    }
+  }
+
+  const topics = Array.from(new Set(questions.map((question) => question.topic))).sort()
+  const visibleQuestions = questions.filter((question) => !topicFilter || question.topic === topicFilter)
+
+  return (
+    <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Skill assessments</h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage server-graded question banks, imports, activation, and topic results.</p>
+        </div>
+        <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+          <Upload className="h-4 w-4" /> Import CSV
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            className="sr-only"
+            aria-label="Import assessment questions from CSV"
+            onChange={(event) => {
+              void importCsv(event.target.files?.[0])
+              event.target.value = ''
+            }}
+          />
+        </label>
+      </header>
+
+      {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">{error}</p>}
+      {success && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">{success}</p>}
+
+      <section aria-label="Assessment topic statistics" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {stats.map((item) => (
+          <Card key={item.topic} className="space-y-2 p-4 dark:bg-slate-900">
+            <h2 className="font-semibold text-slate-900 dark:text-white">{item.topic}</h2>
+            <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
+              <span>{item.attempts} attempts</span><span>{item.pass_rate}% passed</span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Average score: {item.average_score == null ? '—' : `${item.average_score}%`}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{item.active_questions} active questions</p>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Pools: {Object.entries(item.difficulty_pool_sizes).map(([difficulty, count]) => `${difficulty.toLowerCase()} ${count}`).join(' · ')}
+            </p>
+            {item.bank_warnings.map((warning) => (
+              <p key={warning} className="rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">{warning}</p>
+            ))}
+            {item.weakest_subtopics.length > 0 && (
+              <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                Weakest: {item.weakest_subtopics.map((subtopic) => `${subtopic.subtopic} ${subtopic.average_percentage}%`).join(' · ')}
+              </p>
+            )}
+            {item.hardest_questions[0] && (
+              <p className="line-clamp-2 text-[11px] text-slate-600 dark:text-slate-300">
+                Hardest: {item.hardest_questions[0].prompt}
+                {item.hardest_questions[0].correct_rate != null ? ` (${item.hardest_questions[0].correct_rate}% correct)` : ' (not attempted)'}
+              </p>
+            )}
+          </Card>
+        ))}
+      </section>
+
+      <Card className="p-4 dark:bg-slate-900">
+        <h2 className="mb-3 flex items-center gap-2 text-base font-bold text-slate-900 dark:text-white">
+          {editingId == null ? <Plus className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+          {editingId == null ? 'Add question' : `Edit question #${editingId}`}
+        </h2>
+        <form onSubmit={(event) => void saveQuestion(event)} className="grid gap-3 md:grid-cols-2">
+          <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Topic ID
+            <input required value={draft.topic} onChange={(event) => setDraft((current) => ({ ...current, topic: event.target.value }))} placeholder="python" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+          </label>
+          <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Subtopic ID
+            <input required value={draft.subtopic} onChange={(event) => setDraft((current) => ({ ...current, subtopic: event.target.value }))} placeholder="async-io" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+          </label>
+          <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Difficulty
+            <DropdownSelect aria-label="Question difficulty" value={draft.difficulty} onChange={(difficulty) => setDraft((current) => ({ ...current, difficulty }))} options={[{ label: 'Easy (1 point)', value: 'EASY' }, { label: 'Medium (2 points)', value: 'MEDIUM' }, { label: 'Hard (3 points)', value: 'HARD' }]} />
+          </label>
+          <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Question type
+            <DropdownSelect aria-label="Question type" value={draft.question_type} onChange={(question_type) => setDraft((current) => ({ ...current, question_type }))} options={[{ label: 'Single answer', value: 'SINGLE' }, { label: 'Multiple answers', value: 'MULTI' }, { label: 'True / false', value: 'TRUE_FALSE' }]} />
+          </label>
+          <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300 md:col-span-2">
+            Question
+            <Textarea required rows={2} value={draft.prompt} onChange={(event) => setDraft((current) => ({ ...current, prompt: event.target.value }))} />
+          </label>
+          <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Answer options (one per line)
+            <Textarea required rows={4} value={draft.options} onChange={(event) => setDraft((current) => ({ ...current, options: event.target.value }))} />
+          </label>
+          <div className="space-y-3">
+            <label className="block space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+              {draft.question_type === 'MULTI' ? 'Correct option indexes (comma separated)' : 'Correct option index (starting at 0)'}
+              {draft.question_type === 'MULTI' ? (
+                <input required value={draft.correct_answers} onChange={(event) => setDraft((current) => ({ ...current, correct_answers: event.target.value }))} placeholder="0, 2" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+              ) : (
+                <input required type="number" min={0} value={draft.correct_index} onChange={(event) => setDraft((current) => ({ ...current, correct_index: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+              )}
+            </label>
+            <label className="block space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Explanation
+              <Textarea required rows={3} value={draft.explanation} onChange={(event) => setDraft((current) => ({ ...current, explanation: event.target.value }))} />
+            </label>
+            <label className="block space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Source
+              <input required value={draft.source} onChange={(event) => setDraft((current) => ({ ...current, source: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-2 md:col-span-2">
+            <Button type="submit" variant="primary" size="sm" isLoading={saving}>{editingId == null ? 'Create question' : 'Save question'}</Button>
+            {editingId != null && <Button type="button" variant="outline" size="sm" onClick={resetDraft}>Cancel edit</Button>}
+          </div>
+        </form>
+      </Card>
+
+      <section className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Question bank ({visibleQuestions.length})</h2>
+          <DropdownSelect aria-label="Filter questions by topic" value={topicFilter} onChange={setTopicFilter} options={[{ label: 'All topics', value: '' }, ...topics.map((topic) => ({ label: topic, value: topic }))]} />
+        </div>
+        {loading ? <TableSkeleton rows={5} /> : visibleQuestions.length === 0 ? (
+          <EmptyState icon={Award} title="No questions found" description="Add a question or change the topic filter." />
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <table className="w-full min-w-[760px] text-left text-xs">
+              <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800 dark:text-slate-300"><tr><th className="p-3">Topic / prompt</th><th className="p-3">Options</th><th className="p-3">Type / difficulty</th><th className="p-3">State</th><th className="p-3 text-right">Actions</th></tr></thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {visibleQuestions.map((question) => (
+                  <tr key={question.id}>
+                    <td className="max-w-lg p-3"><span className="font-semibold text-indigo-700 dark:text-indigo-300">{question.topic}</span><p className="mt-1 text-slate-800 dark:text-slate-200">{question.prompt}</p></td>
+                    <td className="p-3 text-slate-600 dark:text-slate-300">{question.options.length} options · correct #{question.question_type === 'MULTI' ? question.correct_answers?.join(', ') : question.correct_index}</td>
+                    <td className="p-3 text-slate-600 dark:text-slate-300">{question.subtopic} · {question.question_type} · {question.difficulty}</td>
+                    <td className="p-3"><Badge variant={question.active ? 'emerald' : 'slate'}>{question.active ? 'Active' : 'Inactive'}</Badge></td>
+                    <td className="p-3"><div className="flex justify-end gap-2">
+                      <Button size="sm" variant="outline" onClick={() => beginEdit(question)}>Edit</Button>
+                      <Button size="sm" variant="outline" onClick={() => void toggleQuestion(question)}>{question.active ? 'Deactivate' : 'Activate'}</Button>
+                      <Button size="sm" variant="ghost" onClick={() => void deleteQuestion(question)} aria-label={`Delete question ${question.id}`}><Trash2 className="h-4 w-4 text-rose-600" /></Button>
+                    </div></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <Card className="space-y-4 p-4 dark:bg-slate-900">
+        <div>
+          <h2 className="text-base font-bold text-slate-900 dark:text-white">Study resources</h2>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Curated links shown for weak assessment subtopics.</p>
+        </div>
+        <form onSubmit={(event) => void saveResource(event)} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Topic ID
+            <input required disabled={editingResourceId != null} value={resourceDraft.topic} onChange={(event) => setResourceDraft((current) => ({ ...current, topic: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800" />
+          </label>
+          <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Subtopic ID
+            <input required disabled={editingResourceId != null} value={resourceDraft.subtopic} onChange={(event) => setResourceDraft((current) => ({ ...current, subtopic: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800" />
+          </label>
+          <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Title
+            <input required value={resourceDraft.title} onChange={(event) => setResourceDraft((current) => ({ ...current, title: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+          </label>
+          <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+            HTTPS / HTTP URL
+            <input required type="url" value={resourceDraft.url} onChange={(event) => setResourceDraft((current) => ({ ...current, url: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+          </label>
+          <div className="flex gap-2 sm:col-span-2 lg:col-span-4">
+            <Button type="submit" variant="primary" size="sm">{editingResourceId == null ? 'Add resource' : 'Save resource'}</Button>
+            {editingResourceId != null && <Button type="button" variant="outline" size="sm" onClick={resetResourceDraft}>Cancel edit</Button>}
+          </div>
+        </form>
+        <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+          {resources.map((resource) => (
+            <li key={resource.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="font-semibold text-slate-900 dark:text-white">{resource.title}</p>
+                <p className="break-all text-xs text-slate-500 dark:text-slate-400">{resource.topic} / {resource.subtopic} · {resource.url}</p>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Button size="sm" variant="outline" onClick={() => {
+                  setEditingResourceId(resource.id)
+                  setResourceDraft({ topic: resource.topic, subtopic: resource.subtopic, title: resource.title, url: resource.url })
+                }}>Edit</Button>
+                <Button size="sm" variant="outline" onClick={() => void toggleResource(resource)}>{resource.active ? 'Deactivate' : 'Activate'}</Button>
+                <Button size="sm" variant="ghost" onClick={() => void deleteResource(resource)} aria-label={`Delete learning resource ${resource.id}`}><Trash2 className="h-4 w-4 text-rose-600" /></Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </Card>
     </div>
   )
 }

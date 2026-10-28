@@ -50,6 +50,7 @@ const quickLinks: Record<Exclude<NavigationRole, 'GUEST'>, Array<{ label: string
   ],
   ADMIN: [
     { label: 'Notifications & Mailbox', url: routes.notifications },
+    { label: 'Skill assessments', url: routes.adminSkills },
     { label: 'Verifications', url: routes.adminVerifications },
     { label: 'Users', url: routes.adminUsers() },
     { label: 'Audit Logs', url: routes.adminAuditLogs() },

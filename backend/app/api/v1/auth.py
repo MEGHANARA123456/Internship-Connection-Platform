@@ -83,9 +83,9 @@ logger = logging.getLogger(__name__)
 def _is_expired(dt: datetime | None) -> bool:
     if dt is None:
         return True
-    if dt.tzinfo is not None:
-        return dt < datetime.now(timezone.utc)
-    return dt < datetime.utcnow()
+    if dt.utcoffset() is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt < datetime.now(timezone.utc)
 
 
 async def verify_google_credential(

@@ -1,0 +1,522 @@
+[
+  {
+    "topic": "python",
+    "prompt": "What is the primary benefit of Python asyncio event loops in backend APIs?",
+    "options": [
+      "It runs code faster by using multiple CPU cores directly",
+      "It allows concurrent I/O operations without multi-threading overhead",
+      "It compiles Python to machine code ahead of time",
+      "It replaces the need for database indexing"
+    ],
+    "correct_index": 1,
+    "explanation": "Asyncio enables non-blocking asynchronous I/O concurrency on a single thread.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "python",
+    "prompt": "In FastAPI, what does Depends() provide?",
+    "options": [
+      "Automated database migrations",
+      "A declarative dependency injection system for request handlers",
+      "CSS style preprocessing",
+      "WebSocket keepalive heartbeats"
+    ],
+    "correct_index": 1,
+    "explanation": "Depends() allows clean dependency injection of database sessions, auth, and services.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "python",
+    "prompt": "Which HTTP status code signifies that a resource was successfully created?",
+    "options": [
+      "200 OK",
+      "201 Created",
+      "204 No Content",
+      "301 Moved"
+    ],
+    "correct_index": 1,
+    "explanation": "HTTP 201 Created is the standard response code for successful POST creation.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "python",
+    "prompt": "What is the purpose of Pydantic models in modern Python APIs?",
+    "options": [
+      "Render HTML templates to the browser",
+      "Type validation, serialization, and schema definition",
+      "Compress binary PDF files",
+      "Execute raw SQL migrations"
+    ],
+    "correct_index": 1,
+    "explanation": "Pydantic handles runtime data validation, parsing, and serialization.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "python",
+    "prompt": "How does connection pooling improve database performance?",
+    "options": [
+      "It caches all table rows into system RAM permanently",
+      "It reuses existing open database connections instead of reopening TCP handshakes",
+      "It removes the need for primary keys",
+      "It bypasses SQL query planning"
+    ],
+    "correct_index": 1,
+    "explanation": "Connection pooling reuses established connections, eliminating expensive handshake overhead.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "react",
+    "prompt": "What is the primary rule when using React Hooks like useState and useEffect?",
+    "options": [
+      "They must be called inside loops or conditional if statements",
+      "They must only be called at the top level of function components",
+      "They can only be used in class components",
+      "They must return a Promise"
+    ],
+    "correct_index": 1,
+    "explanation": "Hooks must always be called at the top level to ensure deterministic call ordering across renders.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "react",
+    "prompt": "Why is the \"key\" prop critical when rendering dynamic lists in React?",
+    "options": [
+      "It provides CSS classes to each item",
+      "It allows React virtual DOM diffing to identify which items have changed, moved, or deleted",
+      "It automatically encrypts the rendered data",
+      "It triggers garbage collection on unmounted nodes"
+    ],
+    "correct_index": 1,
+    "explanation": "Keys give elements a stable identity for React reconciliation.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "react",
+    "prompt": "What does the useCallback hook return?",
+    "options": [
+      "A memoized callback function instance that only updates when dependencies change",
+      "The resolved result value of an async network call",
+      "A ref to an underlying DOM node",
+      "A dispatch action for Redux store"
+    ],
+    "correct_index": 0,
+    "explanation": "useCallback memoizes function definitions between re-renders.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "react",
+    "prompt": "What is the purpose of React Error Boundaries?",
+    "options": [
+      "Catch syntax errors during Vite compilation",
+      "Catch JavaScript runtime errors anywhere in the child component tree and display a fallback UI",
+      "Prevent users from submitting invalid forms",
+      "Encrypt local storage keys"
+    ],
+    "correct_index": 1,
+    "explanation": "Error Boundaries gracefully catch errors in the render tree without crashing the entire app.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "react",
+    "prompt": "In Tailwind CSS, how is dark mode typically activated?",
+    "options": [
+      "By creating separate .dark.css stylesheet files",
+      "By using the \"dark:\" variant applied when a parent or root element has the \"dark\" class",
+      "By changing the browser OS locale",
+      "By using inline CSS !important flags"
+    ],
+    "correct_index": 1,
+    "explanation": "Tailwind dark variant activates styles when the .dark class is on the html/root element.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "sql",
+    "prompt": "What does an ACID-compliant database guarantee?",
+    "options": [
+      "Atomicity, Consistency, Isolation, and Durability of transactions",
+      "Automatic Cloud Index Distribution",
+      "Async Connection Interface Delivery",
+      "All Queries In Data"
+    ],
+    "correct_index": 0,
+    "explanation": "ACID guarantees reliable processing of database transactions.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "sql",
+    "prompt": "What is the main benefit of a B-Tree index on a foreign key column?",
+    "options": [
+      "Decreases storage space required on disk",
+      "Accelerates JOIN queries and equality searches from O(N) full table scans to O(log N)",
+      "Automatically deletes orphaned child rows",
+      "Encrypts column values at rest"
+    ],
+    "correct_index": 1,
+    "explanation": "Indexes speed up lookups and joins from full sequential scans to logarithmic tree searches.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "sql",
+    "prompt": "What is the difference between WHERE and HAVING in SQL?",
+    "options": [
+      "WHERE filters rows before aggregation; HAVING filters aggregate groups after GROUP BY",
+      "HAVING is only used in SQLite; WHERE is used in PostgreSQL",
+      "WHERE is for strings; HAVING is for numeric values",
+      "There is no difference between them"
+    ],
+    "correct_index": 0,
+    "explanation": "WHERE filters individual records; HAVING filters aggregated groups.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "sql",
+    "prompt": "In PostgreSQL, what is the best datatype to store unique UUIDs or timestamps with timezone?",
+    "options": [
+      "VARCHAR(255) and INT",
+      "UUID and TIMESTAMPTZ",
+      "BLOB and TEXT",
+      "CHAR(10) and DATE"
+    ],
+    "correct_index": 1,
+    "explanation": "UUID and TIMESTAMPTZ provide native binary efficiency and timezone correctness.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "sql",
+    "prompt": "What does a database migration tool (like Alembic) do?",
+    "options": [
+      "Moves files from frontend to backend",
+      "Tracks, applies, and rolls back versioned incremental schema changes reliably",
+      "Converts SQL tables into MongoDB documents automatically",
+      "Compresses images before storing in S3"
+    ],
+    "correct_index": 1,
+    "explanation": "Migration frameworks track and version database schema evolutions over time.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "dsa",
+    "prompt": "What is the average time complexity of searching in a balanced Binary Search Tree (AVL or Red-Black)?",
+    "options": [
+      "O(1)",
+      "O(log N)",
+      "O(N)",
+      "O(N log N)"
+    ],
+    "correct_index": 1,
+    "explanation": "Balanced BSTs maintain logarithmic height, guaranteeing O(log N) search, insertion, and deletion.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "dsa",
+    "prompt": "Which data structure operates on a Last-In, First-Out (LIFO) order and powers function recursion calls?",
+    "options": [
+      "Queue",
+      "Stack",
+      "Linked List",
+      "Max-Heap"
+    ],
+    "correct_index": 1,
+    "explanation": "A Stack enforces LIFO ordering and manages execution frames during function calls.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "dsa",
+    "prompt": "What is the primary characteristic of Dijkstra’s graph algorithm?",
+    "options": [
+      "Finds minimum spanning trees for disconnected graphs",
+      "Finds shortest paths from a single source node to all other nodes in a non-negative weighted graph",
+      "Detects cycles in directed bipartite graphs",
+      "Sorts nodes topologically in O(1) time"
+    ],
+    "correct_index": 1,
+    "explanation": "Dijkstra computes single-source shortest path paths using a priority queue greedy strategy.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "dsa",
+    "prompt": "What is linear probing in hash tables?",
+    "options": [
+      "A sorting technique for hash values",
+      "An open-addressing collision resolution method that checks consecutive adjacent slots sequentially",
+      "A cryptographic hash digest verification",
+      "A garbage collection sweep"
+    ],
+    "correct_index": 1,
+    "explanation": "Linear probing resolves bucket hash collisions by stepping linearly through succeeding array slots.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "dsa",
+    "prompt": "When finding the median of a continuous stream of numbers, which structure combination is optimal?",
+    "options": [
+      "Two balanced binary search trees",
+      "A Max-Heap for the smaller half and a Min-Heap for the larger half",
+      "A circular doubly-linked list",
+      "A single static array with quicksort on every insert"
+    ],
+    "correct_index": 1,
+    "explanation": "Dual heaps (Max-Heap + Min-Heap) provide O(1) median retrieval and O(log N) insertion.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "ai",
+    "prompt": "What is the primary role of a loss function during neural network training?",
+    "options": [
+      "Compressing weights for mobile deployment",
+      "Quantifying the difference between predictions and actual targets to guide gradient backpropagation",
+      "Formatting CSV datasets into image tensors",
+      "Preventing GPU memory exhaustion"
+    ],
+    "correct_index": 1,
+    "explanation": "The loss function computes error penalty, allowing optimizers to compute gradients via backprop.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "ai",
+    "prompt": "What core mechanism enables Transformer architectures to model long-range token relationships without recurrence?",
+    "options": [
+      "Convolutional pooling layers",
+      "Multi-Head Self-Attention mechanisms",
+      "Dropout regularization",
+      "Batch normalization layers"
+    ],
+    "correct_index": 1,
+    "explanation": "Self-attention calculates pairwise affinity scores between all tokens regardless of sequence distance.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "ai",
+    "prompt": "What does \"overfitting\" mean in machine learning?",
+    "options": [
+      "The model trains too slowly due to low learning rates",
+      "The model memorizes training noise and fails to generalize effectively to unseen test data",
+      "The model lacks sufficient parameters to capture patterns",
+      "The dataset contains too few features"
+    ],
+    "correct_index": 1,
+    "explanation": "Overfitting occurs when high-capacity models fit training quirks rather than true underlying distributions.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "ai",
+    "prompt": "In Retrieval-Augmented Generation (RAG), why are vector embeddings used?",
+    "options": [
+      "To convert text documents into dense numerical vectors for semantic similarity searches",
+      "To replace SQL databases entirely",
+      "To encrypt user prompts on the frontend",
+      "To spell-check user questions"
+    ],
+    "correct_index": 0,
+    "explanation": "Embeddings map textual context into vector space, enabling cosine similarity retrieval.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "ai",
+    "prompt": "Which popular deep learning optimizer combines momentum with adaptive per-parameter learning rates?",
+    "options": [
+      "SGD without momentum",
+      "Adam (Adaptive Moment Estimation)",
+      "K-Means",
+      "Adagrad Fixed"
+    ],
+    "correct_index": 1,
+    "explanation": "Adam combines first and second moment moving averages for robust optimization.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "devops",
+    "prompt": "What is the key benefit of multi-stage Docker builds?",
+    "options": [
+      "Allows running multiple operating systems simultaneously",
+      "Minimizes final production image size by discarding build tools, compilers, and intermediate layers",
+      "Replaces Kubernetes orchestration entirely",
+      "Encrypts container root filesystems"
+    ],
+    "correct_index": 1,
+    "explanation": "Multi-stage builds leave compilation SDKs and temporary dependencies behind, producing lean production images.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "devops",
+    "prompt": "In Kubernetes, what is the smallest deployable unit of execution?",
+    "options": [
+      "Node",
+      "Pod",
+      "Cluster",
+      "Namespace"
+    ],
+    "correct_index": 1,
+    "explanation": "A Pod represents a single instance of a running process in a Kubernetes cluster.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "devops",
+    "prompt": "What is the primary benefit of Infrastructure as Code (IaC) tools like Terraform?",
+    "options": [
+      "Writing frontend React components in YAML",
+      "Declarative, automated, version-controlled provisioning of repeatable cloud infrastructure",
+      "Direct live hot-reloading of Python code",
+      "Replacing relational database tables"
+    ],
+    "correct_index": 1,
+    "explanation": "IaC allows infrastructure to be codified, reviewed, tested, and reproducibly created across environments.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "devops",
+    "prompt": "What is the role of an edge reverse proxy (such as NGINX or Envoy)?",
+    "options": [
+      "Compiling TypeScript code to WebAssembly",
+      "Handling SSL/TLS termination, request routing, rate limiting, and load balancing",
+      "Serving as the primary relational database",
+      "Executing cron jobs inside containers"
+    ],
+    "correct_index": 1,
+    "explanation": "Reverse proxies act as intermediaries providing TLS offloading, security filtering, and load distribution.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "devops",
+    "prompt": "In CI/CD, what distinguishes Continuous Deployment from Continuous Delivery?",
+    "options": [
+      "Continuous Deployment automatically deploys validated changes straight to production without manual gate approval",
+      "Continuous Delivery is only used for mobile apps",
+      "Continuous Deployment does not run automated tests",
+      "There is no functional distinction"
+    ],
+    "correct_index": 0,
+    "explanation": "Continuous Deployment automates the entire pipeline through production release without human gates.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "security",
+    "prompt": "How do Cross-Site Scripting (XSS) attacks compromise web clients?",
+    "options": [
+      "By overwhelming network bandwidth with DDoS packets",
+      "By executing attacker-injected malicious JavaScript scripts inside the browser context of unsuspecting users",
+      "By brute-forcing SSH keys on the server",
+      "By intercepting wireless radio frequencies"
+    ],
+    "correct_index": 1,
+    "explanation": "XSS exploits unescaped or unvalidated user input to execute scripts in the victim browser.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "security",
+    "prompt": "Why must user passwords always be hashed with a unique salt using bcrypt, Argon2, or PBKDF2?",
+    "options": [
+      "To make passwords shorter for database indexing",
+      "To defeat rainbow table lookups and dramatically slow down offline brute-force hardware cracking",
+      "To allow symmetric two-way password decryption by admins",
+      "To satisfy HTML form constraints"
+    ],
+    "correct_index": 1,
+    "explanation": "Salting prevents identical hash values for common passwords; slow key-derivation protects against GPU attacks.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "security",
+    "prompt": "What does the CAP Theorem state for distributed database systems?",
+    "options": [
+      "Systems can provide Consistency, Availability, and Partition Tolerance simultaneously",
+      "In the event of a network partition, a distributed system can guarantee at most Consistency OR Availability",
+      "Databases must always use ACID transactions",
+      "Caching always guarantees eventual consistency"
+    ],
+    "correct_index": 1,
+    "explanation": "CAP states that under network partitions (P), distributed nodes must choose between Consistency (C) and Availability (A).",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "security",
+    "prompt": "Which cookie attribute provides strong built-in browser protection against Cross-Site Request Forgery (CSRF)?",
+    "options": [
+      "Path=/",
+      "SameSite=Lax or SameSite=Strict",
+      "Expires=Session",
+      "Domain=.com"
+    ],
+    "correct_index": 1,
+    "explanation": "The SameSite cookie flag prevents cookies from being sent on cross-site state-changing HTTP requests.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "security",
+    "prompt": "What is the purpose of the Circuit Breaker pattern in microservices?",
+    "options": [
+      "Terminates idle TCP connections after 60 seconds",
+      "Fails fast when downstream services become degraded or unresponsive, preventing cascading catastrophic failures",
+      "Encrypts inter-service gRPC payloads",
+      "Automatically restarts dead Docker containers"
+    ],
+    "correct_index": 1,
+    "explanation": "Circuit breakers stop calling failing downstream dependencies, allowing them to recover without cascading exhaustion.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "typescript",
+    "prompt": "What is the difference between \"unknown\" and \"any\" in TypeScript?",
+    "options": [
+      "\"unknown\" is type-safe because properties cannot be accessed without narrowing or explicit type guards first",
+      "\"any\" throws compiler errors when assigned to string",
+      "\"unknown\" can only hold null or undefined",
+      "They are identical aliases in TypeScript"
+    ],
+    "correct_index": 0,
+    "explanation": "\"unknown\" forces developers to narrow types safely before invoking methods or reading properties.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "typescript",
+    "prompt": "In the JavaScript runtime, what role does the Event Loop play?",
+    "options": [
+      "Compiles V8 bytecode into ARM instructions",
+      "Monitors the Call Stack and moves callbacks from Microtask/Macrotask queues when the stack is empty",
+      "Manages CSS layout calculations in the DOM tree",
+      "Creates background Web Workers for every async function"
+    ],
+    "correct_index": 1,
+    "explanation": "The Event Loop coordinates asynchronous non-blocking task execution on the single JavaScript thread.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "typescript",
+    "prompt": "What is a Discriminated Union in TypeScript?",
+    "options": [
+      "A union type where each member shares a common literal property used by the compiler for exhaustiveness checking",
+      "A union of conflicting primitive types like string and number",
+      "A union that cannot be exported from a module",
+      "A deprecated TypeScript 1.0 feature"
+    ],
+    "correct_index": 0,
+    "explanation": "Discriminated unions use literal tag properties (e.g. status: \"success\" | \"error\") for pattern matching.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "typescript",
+    "prompt": "What is a JavaScript closure?",
+    "options": [
+      "A method to close browser tabs programmatically",
+      "A function that retains lexical scope access to variables in its enclosing outer scope even after the outer function returns",
+      "A syntax error in arrow functions",
+      "An immutable object frozen with Object.freeze()"
+    ],
+    "correct_index": 1,
+    "explanation": "Closures bundle a function with references to its surrounding lexical state.",
+    "difficulty": "intermediate"
+  },
+  {
+    "topic": "typescript",
+    "prompt": "What does Promise.allSettled() guarantee compared to Promise.all()?",
+    "options": [
+      "It rejects immediately on the first failure",
+      "It waits for all promises to either resolve or reject, returning an array of all individual outcomes",
+      "It executes promises sequentially instead of in parallel",
+      "It cancels remaining promises if one is slow"
+    ],
+    "correct_index": 1,
+    "explanation": "Promise.allSettled never short-circuits on rejection, returning status and value/reason for every input promise.",
+    "difficulty": "intermediate"
+  }
+]

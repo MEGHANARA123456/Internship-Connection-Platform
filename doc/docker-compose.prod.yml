@@ -4,18 +4,25 @@ services:
     ports: []
   backend:
     restart: unless-stopped
-    ports: ["127.0.0.1:8000:8000"]
+    ports: ["127.0.0.1:${BACKEND_PORT:-8011}:8000"]
   frontend:
-    image: null
+    image: internsphere-frontend:prod
     command: null
     working_dir: null
     volumes: []
     build:
-      context: ./frontend
+      context: ..
+      dockerfile: doc/Dockerfile.frontend
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8011/api/v1}
     restart: unless-stopped
-    ports: ["80:80"]
+    ports: ["${FRONTEND_PORT:-5175}:80"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       backend:
         condition: service_healthy

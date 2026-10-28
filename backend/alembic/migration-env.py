@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.models.base import Base
 import app.models.user
+import app.models.kb_chunk
 from app.core.config import get_settings
 
 # Read the database URL from the app settings and set it for Alembic.

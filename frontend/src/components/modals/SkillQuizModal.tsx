@@ -1,694 +1,386 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { api } from '../../api/client'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
-import { CheckCircle2, Award, Sparkles, AlertCircle } from 'lucide-react'
-
-interface Question {
-  question: string
-  options: string[]
-  correctIndex: number
-  explanation: string
-}
+import { AlertCircle, Award, CheckCircle2, Clock3, Sparkles } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { routes } from '../../lib/routes'
 
 interface SkillTopic {
   id: string
   name: string
   icon: string
-  badgeTitle: string
-  questions: Question[]
 }
 
-const TOPICS: SkillTopic[] = [
-  {
-    id: 'python',
-    name: 'Python & Backend Architecture',
-    icon: '🐍',
-    badgeTitle: 'Verified Python Specialist',
-    questions: [
-      {
-        question: 'What is the primary benefit of Python asyncio event loops in backend APIs?',
-        options: [
-          'It runs code faster by using multiple CPU cores directly',
-          'It allows concurrent I/O operations without multi-threading overhead',
-          'It compiles Python to machine code ahead of time',
-          'It replaces the need for database indexing',
-        ],
-        correctIndex: 1,
-        explanation: 'Asyncio enables non-blocking asynchronous I/O concurrency on a single thread.',
-      },
-      {
-        question: 'In FastAPI, what does Depends() provide?',
-        options: [
-          'Automated database migrations',
-          'A declarative dependency injection system for request handlers',
-          'CSS style preprocessing',
-          'WebSocket keepalive heartbeats',
-        ],
-        correctIndex: 1,
-        explanation: 'Depends() allows clean dependency injection of database sessions, auth, and services.',
-      },
-      {
-        question: 'Which HTTP status code signifies that a resource was successfully created?',
-        options: ['200 OK', '201 Created', '204 No Content', '301 Moved'],
-        correctIndex: 1,
-        explanation: 'HTTP 201 Created is the standard response code for successful POST creation.',
-      },
-      {
-        question: 'What is the purpose of Pydantic models in modern Python APIs?',
-        options: [
-          'Render HTML templates to the browser',
-          'Type validation, serialization, and schema definition',
-          'Compress binary PDF files',
-          'Execute raw SQL migrations',
-        ],
-        correctIndex: 1,
-        explanation: 'Pydantic handles runtime data validation, parsing, and serialization.',
-      },
-      {
-        question: 'How does connection pooling improve database performance?',
-        options: [
-          'It caches all table rows into system RAM permanently',
-          'It reuses existing open database connections instead of reopening TCP handshakes',
-          'It removes the need for primary keys',
-          'It bypasses SQL query planning',
-        ],
-        correctIndex: 1,
-        explanation: 'Connection pooling reuses established connections, eliminating expensive handshake overhead.',
-      },
-    ],
-  },
-  {
-    id: 'react',
-    name: 'React & Modern Frontend',
-    icon: '⚛️',
-    badgeTitle: 'Verified React Pro',
-    questions: [
-      {
-        question: 'What is the primary rule when using React Hooks like useState and useEffect?',
-        options: [
-          'They must be called inside loops or conditional if statements',
-          'They must only be called at the top level of function components',
-          'They can only be used in class components',
-          'They must return a Promise',
-        ],
-        correctIndex: 1,
-        explanation: 'Hooks must always be called at the top level to ensure deterministic call ordering across renders.',
-      },
-      {
-        question: 'Why is the "key" prop critical when rendering dynamic lists in React?',
-        options: [
-          'It provides CSS classes to each item',
-          'It allows React virtual DOM diffing to identify which items have changed, moved, or deleted',
-          'It automatically encrypts the rendered data',
-          'It triggers garbage collection on unmounted nodes',
-        ],
-        correctIndex: 1,
-        explanation: 'Keys give elements a stable identity for React reconciliation.',
-      },
-      {
-        question: 'What does the useCallback hook return?',
-        options: [
-          'A memoized callback function instance that only updates when dependencies change',
-          'The resolved result value of an async network call',
-          'A ref to an underlying DOM node',
-          'A dispatch action for Redux store',
-        ],
-        correctIndex: 0,
-        explanation: 'useCallback memoizes function definitions between re-renders.',
-      },
-      {
-        question: 'What is the purpose of React Error Boundaries?',
-        options: [
-          'Catch syntax errors during Vite compilation',
-          'Catch JavaScript runtime errors anywhere in the child component tree and display a fallback UI',
-          'Prevent users from submitting invalid forms',
-          'Encrypt local storage keys',
-        ],
-        correctIndex: 1,
-        explanation: 'Error Boundaries gracefully catch errors in the render tree without crashing the entire app.',
-      },
-      {
-        question: 'In Tailwind CSS, how is dark mode typically activated?',
-        options: [
-          'By creating separate .dark.css stylesheet files',
-          'By using the "dark:" variant applied when a parent or root element has the "dark" class',
-          'By changing the browser OS locale',
-          'By using inline CSS !important flags',
-        ],
-        correctIndex: 1,
-        explanation: 'Tailwind dark variant activates styles when the .dark class is on the html/root element.',
-      },
-    ],
-  },
-  {
-    id: 'sql',
-    name: 'SQL & Database Design',
-    icon: '🗄️',
-    badgeTitle: 'Verified SQL Specialist',
-    questions: [
-      {
-        question: 'What does an ACID-compliant database guarantee?',
-        options: [
-          'Atomicity, Consistency, Isolation, and Durability of transactions',
-          'Automatic Cloud Index Distribution',
-          'Async Connection Interface Delivery',
-          'All Queries In Data',
-        ],
-        correctIndex: 0,
-        explanation: 'ACID guarantees reliable processing of database transactions.',
-      },
-      {
-        question: 'What is the main benefit of a B-Tree index on a foreign key column?',
-        options: [
-          'Decreases storage space required on disk',
-          'Accelerates JOIN queries and equality searches from O(N) full table scans to O(log N)',
-          'Automatically deletes orphaned child rows',
-          'Encrypts column values at rest',
-        ],
-        correctIndex: 1,
-        explanation: 'Indexes speed up lookups and joins from full sequential scans to logarithmic tree searches.',
-      },
-      {
-        question: 'What is the difference between WHERE and HAVING in SQL?',
-        options: [
-          'WHERE filters rows before aggregation; HAVING filters aggregate groups after GROUP BY',
-          'HAVING is only used in SQLite; WHERE is used in PostgreSQL',
-          'WHERE is for strings; HAVING is for numeric values',
-          'There is no difference between them',
-        ],
-        correctIndex: 0,
-        explanation: 'WHERE filters individual records; HAVING filters aggregated groups.',
-      },
-      {
-        question: 'In PostgreSQL, what is the best datatype to store unique UUIDs or timestamps with timezone?',
-        options: [
-          'VARCHAR(255) and INT',
-          'UUID and TIMESTAMPTZ',
-          'BLOB and TEXT',
-          'CHAR(10) and DATE',
-        ],
-        correctIndex: 1,
-        explanation: 'UUID and TIMESTAMPTZ provide native binary efficiency and timezone correctness.',
-      },
-      {
-        question: 'What does a database migration tool (like Alembic) do?',
-        options: [
-          'Moves files from frontend to backend',
-          'Tracks, applies, and rolls back versioned incremental schema changes reliably',
-          'Converts SQL tables into MongoDB documents automatically',
-          'Compresses images before storing in S3',
-        ],
-        correctIndex: 1,
-        explanation: 'Migration frameworks track and version database schema evolutions over time.',
-      },
-    ],
-  },
-  {
-    id: 'dsa',
-    name: 'Data Structures & Algorithms',
-    icon: '⚡',
-    badgeTitle: 'Verified DSA Problem Solver',
-    questions: [
-      {
-        question: 'What is the average time complexity of searching in a balanced Binary Search Tree (AVL or Red-Black)?',
-        options: ['O(1)', 'O(log N)', 'O(N)', 'O(N log N)'],
-        correctIndex: 1,
-        explanation: 'Balanced BSTs maintain logarithmic height, guaranteeing O(log N) search, insertion, and deletion.',
-      },
-      {
-        question: 'Which data structure operates on a Last-In, First-Out (LIFO) order and powers function recursion calls?',
-        options: ['Queue', 'Stack', 'Linked List', 'Max-Heap'],
-        correctIndex: 1,
-        explanation: 'A Stack enforces LIFO ordering and manages execution frames during function calls.',
-      },
-      {
-        question: 'What is the primary characteristic of Dijkstra’s graph algorithm?',
-        options: [
-          'Finds minimum spanning trees for disconnected graphs',
-          'Finds shortest paths from a single source node to all other nodes in a non-negative weighted graph',
-          'Detects cycles in directed bipartite graphs',
-          'Sorts nodes topologically in O(1) time',
-        ],
-        correctIndex: 1,
-        explanation: 'Dijkstra computes single-source shortest path paths using a priority queue greedy strategy.',
-      },
-      {
-        question: 'What is linear probing in hash tables?',
-        options: [
-          'A sorting technique for hash values',
-          'An open-addressing collision resolution method that checks consecutive adjacent slots sequentially',
-          'A cryptographic hash digest verification',
-          'A garbage collection sweep',
-        ],
-        correctIndex: 1,
-        explanation: 'Linear probing resolves bucket hash collisions by stepping linearly through succeeding array slots.',
-      },
-      {
-        question: 'When finding the median of a continuous stream of numbers, which structure combination is optimal?',
-        options: [
-          'Two balanced binary search trees',
-          'A Max-Heap for the smaller half and a Min-Heap for the larger half',
-          'A circular doubly-linked list',
-          'A single static array with quicksort on every insert',
-        ],
-        correctIndex: 1,
-        explanation: 'Dual heaps (Max-Heap + Min-Heap) provide O(1) median retrieval and O(log N) insertion.',
-      },
-    ],
-  },
-  {
-    id: 'ai',
-    name: 'Machine Learning & AI Engineering',
-    icon: '🤖',
-    badgeTitle: 'Verified AI/ML Engineer',
-    questions: [
-      {
-        question: 'What is the primary role of a loss function during neural network training?',
-        options: [
-          'Compressing weights for mobile deployment',
-          'Quantifying the difference between predictions and actual targets to guide gradient backpropagation',
-          'Formatting CSV datasets into image tensors',
-          'Preventing GPU memory exhaustion',
-        ],
-        correctIndex: 1,
-        explanation: 'The loss function computes error penalty, allowing optimizers to compute gradients via backprop.',
-      },
-      {
-        question: 'What core mechanism enables Transformer architectures to model long-range token relationships without recurrence?',
-        options: [
-          'Convolutional pooling layers',
-          'Multi-Head Self-Attention mechanisms',
-          'Dropout regularization',
-          'Batch normalization layers',
-        ],
-        correctIndex: 1,
-        explanation: 'Self-attention calculates pairwise affinity scores between all tokens regardless of sequence distance.',
-      },
-      {
-        question: 'What does "overfitting" mean in machine learning?',
-        options: [
-          'The model trains too slowly due to low learning rates',
-          'The model memorizes training noise and fails to generalize effectively to unseen test data',
-          'The model lacks sufficient parameters to capture patterns',
-          'The dataset contains too few features',
-        ],
-        correctIndex: 1,
-        explanation: 'Overfitting occurs when high-capacity models fit training quirks rather than true underlying distributions.',
-      },
-      {
-        question: 'In Retrieval-Augmented Generation (RAG), why are vector embeddings used?',
-        options: [
-          'To convert text documents into dense numerical vectors for semantic similarity searches',
-          'To replace SQL databases entirely',
-          'To encrypt user prompts on the frontend',
-          'To spell-check user questions',
-        ],
-        correctIndex: 0,
-        explanation: 'Embeddings map textual context into vector space, enabling cosine similarity retrieval.',
-      },
-      {
-        question: 'Which popular deep learning optimizer combines momentum with adaptive per-parameter learning rates?',
-        options: ['SGD without momentum', 'Adam (Adaptive Moment Estimation)', 'K-Means', 'Adagrad Fixed'],
-        correctIndex: 1,
-        explanation: 'Adam combines first and second moment moving averages for robust optimization.',
-      },
-    ],
-  },
-  {
-    id: 'devops',
-    name: 'Cloud, Docker & DevOps',
-    icon: '☁️',
-    badgeTitle: 'Verified Cloud & DevOps Specialist',
-    questions: [
-      {
-        question: 'What is the key benefit of multi-stage Docker builds?',
-        options: [
-          'Allows running multiple operating systems simultaneously',
-          'Minimizes final production image size by discarding build tools, compilers, and intermediate layers',
-          'Replaces Kubernetes orchestration entirely',
-          'Encrypts container root filesystems',
-        ],
-        correctIndex: 1,
-        explanation: 'Multi-stage builds leave compilation SDKs and temporary dependencies behind, producing lean production images.',
-      },
-      {
-        question: 'In Kubernetes, what is the smallest deployable unit of execution?',
-        options: ['Node', 'Pod', 'Cluster', 'Namespace'],
-        correctIndex: 1,
-        explanation: 'A Pod represents a single instance of a running process in a Kubernetes cluster.',
-      },
-      {
-        question: 'What is the primary benefit of Infrastructure as Code (IaC) tools like Terraform?',
-        options: [
-          'Writing frontend React components in YAML',
-          'Declarative, automated, version-controlled provisioning of repeatable cloud infrastructure',
-          'Direct live hot-reloading of Python code',
-          'Replacing relational database tables',
-        ],
-        correctIndex: 1,
-        explanation: 'IaC allows infrastructure to be codified, reviewed, tested, and reproducibly created across environments.',
-      },
-      {
-        question: 'What is the role of an edge reverse proxy (such as NGINX or Envoy)?',
-        options: [
-          'Compiling TypeScript code to WebAssembly',
-          'Handling SSL/TLS termination, request routing, rate limiting, and load balancing',
-          'Serving as the primary relational database',
-          'Executing cron jobs inside containers',
-        ],
-        correctIndex: 1,
-        explanation: 'Reverse proxies act as intermediaries providing TLS offloading, security filtering, and load distribution.',
-      },
-      {
-        question: 'In CI/CD, what distinguishes Continuous Deployment from Continuous Delivery?',
-        options: [
-          'Continuous Deployment automatically deploys validated changes straight to production without manual gate approval',
-          'Continuous Delivery is only used for mobile apps',
-          'Continuous Deployment does not run automated tests',
-          'There is no functional distinction',
-        ],
-        correctIndex: 0,
-        explanation: 'Continuous Deployment automates the entire pipeline through production release without human gates.',
-      },
-    ],
-  },
-  {
-    id: 'security',
-    name: 'Web Security & System Design',
-    icon: '🛡️',
-    badgeTitle: 'Verified Security & Systems Pro',
-    questions: [
-      {
-        question: 'How do Cross-Site Scripting (XSS) attacks compromise web clients?',
-        options: [
-          'By overwhelming network bandwidth with DDoS packets',
-          'By executing attacker-injected malicious JavaScript scripts inside the browser context of unsuspecting users',
-          'By brute-forcing SSH keys on the server',
-          'By intercepting wireless radio frequencies',
-        ],
-        correctIndex: 1,
-        explanation: 'XSS exploits unescaped or unvalidated user input to execute scripts in the victim browser.',
-      },
-      {
-        question: 'Why must user passwords always be hashed with a unique salt using bcrypt, Argon2, or PBKDF2?',
-        options: [
-          'To make passwords shorter for database indexing',
-          'To defeat rainbow table lookups and dramatically slow down offline brute-force hardware cracking',
-          'To allow symmetric two-way password decryption by admins',
-          'To satisfy HTML form constraints',
-        ],
-        correctIndex: 1,
-        explanation: 'Salting prevents identical hash values for common passwords; slow key-derivation protects against GPU attacks.',
-      },
-      {
-        question: 'What does the CAP Theorem state for distributed database systems?',
-        options: [
-          'Systems can provide Consistency, Availability, and Partition Tolerance simultaneously',
-          'In the event of a network partition, a distributed system can guarantee at most Consistency OR Availability',
-          'Databases must always use ACID transactions',
-          'Caching always guarantees eventual consistency',
-        ],
-        correctIndex: 1,
-        explanation: 'CAP states that under network partitions (P), distributed nodes must choose between Consistency (C) and Availability (A).',
-      },
-      {
-        question: 'Which cookie attribute provides strong built-in browser protection against Cross-Site Request Forgery (CSRF)?',
-        options: ['Path=/', 'SameSite=Lax or SameSite=Strict', 'Expires=Session', 'Domain=.com'],
-        correctIndex: 1,
-        explanation: 'The SameSite cookie flag prevents cookies from being sent on cross-site state-changing HTTP requests.',
-      },
-      {
-        question: 'What is the purpose of the Circuit Breaker pattern in microservices?',
-        options: [
-          'Terminates idle TCP connections after 60 seconds',
-          'Fails fast when downstream services become degraded or unresponsive, preventing cascading catastrophic failures',
-          'Encrypts inter-service gRPC payloads',
-          'Automatically restarts dead Docker containers',
-        ],
-        correctIndex: 1,
-        explanation: 'Circuit breakers stop calling failing downstream dependencies, allowing them to recover without cascading exhaustion.',
-      },
-    ],
-  },
-  {
-    id: 'typescript',
-    name: 'JavaScript & TypeScript Mastery',
-    icon: '📜',
-    badgeTitle: 'Verified TypeScript Specialist',
-    questions: [
-      {
-        question: 'What is the difference between "unknown" and "any" in TypeScript?',
-        options: [
-          '"unknown" is type-safe because properties cannot be accessed without narrowing or explicit type guards first',
-          '"any" throws compiler errors when assigned to string',
-          '"unknown" can only hold null or undefined',
-          'They are identical aliases in TypeScript',
-        ],
-        correctIndex: 0,
-        explanation: '"unknown" forces developers to narrow types safely before invoking methods or reading properties.',
-      },
-      {
-        question: 'In the JavaScript runtime, what role does the Event Loop play?',
-        options: [
-          'Compiles V8 bytecode into ARM instructions',
-          'Monitors the Call Stack and moves callbacks from Microtask/Macrotask queues when the stack is empty',
-          'Manages CSS layout calculations in the DOM tree',
-          'Creates background Web Workers for every async function',
-        ],
-        correctIndex: 1,
-        explanation: 'The Event Loop coordinates asynchronous non-blocking task execution on the single JavaScript thread.',
-      },
-      {
-        question: 'What is a Discriminated Union in TypeScript?',
-        options: [
-          'A union type where each member shares a common literal property used by the compiler for exhaustiveness checking',
-          'A union of conflicting primitive types like string and number',
-          'A union that cannot be exported from a module',
-          'A deprecated TypeScript 1.0 feature',
-        ],
-        correctIndex: 0,
-        explanation: 'Discriminated unions use literal tag properties (e.g. status: "success" | "error") for pattern matching.',
-      },
-      {
-        question: 'What is a JavaScript closure?',
-        options: [
-          'A method to close browser tabs programmatically',
-          'A function that retains lexical scope access to variables in its enclosing outer scope even after the outer function returns',
-          'A syntax error in arrow functions',
-          'An immutable object frozen with Object.freeze()',
-        ],
-        correctIndex: 1,
-        explanation: 'Closures bundle a function with references to its surrounding lexical state.',
-      },
-      {
-        question: 'What does Promise.allSettled() guarantee compared to Promise.all()?',
-        options: [
-          'It rejects immediately on the first failure',
-          'It waits for all promises to either resolve or reject, returning an array of all individual outcomes',
-          'It executes promises sequentially instead of in parallel',
-          'It cancels remaining promises if one is slow',
-        ],
-        correctIndex: 1,
-        explanation: 'Promise.allSettled never short-circuits on rejection, returning status and value/reason for every input promise.',
-      },
-    ],
-  },
-]
+interface AssessmentQuestion {
+  id: number
+  prompt: string
+  options: string[]
+  difficulty: string
+  subtopic: string
+  question_type: 'SINGLE' | 'MULTI' | 'TRUE_FALSE'
+}
+
+interface AssessmentAttempt {
+  attempt_id: number
+  topic: string
+  expires_at: string
+  duration_seconds: number
+  questions: AssessmentQuestion[]
+}
+
+interface AssessmentExplanation {
+  question_id: number
+  prompt: string
+  selected_answer: string | string[]
+  correct_answer: string | string[]
+  explanation: string
+  is_correct: boolean
+  earned_credit: number
+  time_seconds: number
+}
+
+interface AssessmentResult {
+  attempt_id: number
+  raw_score: number
+  score: number
+  weighted_percentage: number
+  passed: boolean
+  level: string
+  percentile: number | string
+  time_taken_seconds: number
+  badge: {
+    topic: string
+    title: string
+    level: string
+    score: number
+    earned_at: string
+    expires_at: string
+  } | null
+  questions: AssessmentExplanation[]
+}
+
+type QuizAnswer = number | number[]
+
+function hasAnswer(answer: QuizAnswer | undefined): boolean {
+  return Array.isArray(answer) ? answer.length > 0 : typeof answer === 'number' && answer >= 0
+}
+
+function answerText(answer: string | string[]): string {
+  return Array.isArray(answer) ? answer.join(', ') || 'No option selected' : answer
+}
 
 interface SkillQuizModalProps {
   isOpen: boolean
   onClose: () => void
-  onBadgeAwarded: (badge: { topicId: string; title: string; score: number; date: string }) => void
+  onBadgeAwarded?: (badge: AssessmentResult['badge']) => void
+  initialTopic?: string | null
 }
 
-export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded }: SkillQuizModalProps) {
-  const [selectedTopic, setSelectedTopic] = useState<SkillTopic | null>(null)
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
-  const [selectedAnswers, setSelectedAnswers] = useState<number[]>([])
-  const [isFinished, setIsFinished] = useState(false)
-  const [score, setScore] = useState(0)
+function errorMessage(error: unknown): string {
+  const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+  return typeof detail === 'string' ? detail : 'The assessment request failed. Please try again.'
+}
 
-  const handleStartTopic = (topic: SkillTopic) => {
-    setSelectedTopic(topic)
-    setCurrentQuestionIndex(0)
-    setSelectedAnswers([])
-    setIsFinished(false)
-    setScore(0)
-  }
+function formatTime(seconds: number): string {
+  const minutes = Math.floor(seconds / 60)
+  return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+}
 
-  const handleSelectAnswer = (index: number) => {
-    const updated = [...selectedAnswers]
-    updated[currentQuestionIndex] = index
-    setSelectedAnswers(updated)
-  }
+export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }: SkillQuizModalProps) {
+  const [topics, setTopics] = useState<SkillTopic[]>([])
+  const [loadingTopics, setLoadingTopics] = useState(false)
+  const [attempt, setAttempt] = useState<AssessmentAttempt | null>(null)
+  const [result, setResult] = useState<AssessmentResult | null>(null)
+  const [answers, setAnswers] = useState<QuizAnswer[]>([])
+  const [questionTimes, setQuestionTimes] = useState<number[]>([])
+  const questionStartedAt = useRef(Date.now())
+  const [questionIndex, setQuestionIndex] = useState(0)
+  const [secondsLeft, setSecondsLeft] = useState(0)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const [expired, setExpired] = useState(false)
 
-  const handleNextQuestion = () => {
-    if (!selectedTopic) return
-    if (currentQuestionIndex < selectedTopic.questions.length - 1) {
-      setCurrentQuestionIndex((prev) => prev + 1)
-    } else {
-      // Calculate score
-      let correct = 0
-      selectedTopic.questions.forEach((q, idx) => {
-        if (selectedAnswers[idx] === q.correctIndex) {
-          correct += 1
-        }
+  useEffect(() => {
+    if (!isOpen) return
+    let active = true
+    setLoadingTopics(true)
+    setError('')
+    api.get('/skills/topics')
+      .then(({ data }) => {
+        if (active) setTopics(Array.isArray(data) ? data : [])
       })
-      const finalScore = Math.round((correct / selectedTopic.questions.length) * 100)
-      setScore(finalScore)
-      setIsFinished(true)
+      .catch((requestError: unknown) => {
+        if (active) setError(errorMessage(requestError))
+      })
+      .finally(() => {
+        if (active) setLoadingTopics(false)
+      })
+    return () => { active = false }
+  }, [isOpen])
 
-      if (finalScore >= 80) {
-        onBadgeAwarded({
-          topicId: selectedTopic.id,
-          title: selectedTopic.badgeTitle,
-          score: finalScore,
-          date: new Date().toLocaleDateString(),
-        })
+  useEffect(() => {
+    if (!attempt || result || expired) return
+    questionStartedAt.current = Date.now()
+  }, [questionIndex, attempt?.attempt_id, result, expired])
+
+  useEffect(() => {
+    if (!attempt || result || expired) return
+    const updateCountdown = () => {
+      const remaining = Math.max(0, Math.ceil((Date.parse(attempt.expires_at) - Date.now()) / 1000))
+      setSecondsLeft(remaining)
+      if (remaining === 0) {
+        setExpired(true)
+        setError('Time is up. Late submissions are not accepted.')
       }
+    }
+    updateCountdown()
+    const interval = window.setInterval(updateCountdown, 1000)
+    return () => window.clearInterval(interval)
+  }, [attempt, result, expired])
+
+  const startAssessment = async (topic: string) => {
+    setError('')
+    setSubmitting(true)
+    try {
+      const { data } = await api.post('/skills/assessments/start', { topic })
+      const startedAttempt = data as AssessmentAttempt
+      setSecondsLeft(Math.max(0, Math.ceil((Date.parse(startedAttempt.expires_at) - Date.now()) / 1000)))
+      setAttempt(startedAttempt)
+      setAnswers(startedAttempt.questions.map((question) => question.question_type === 'MULTI' ? [] : -1))
+      setQuestionTimes(Array(startedAttempt.questions.length).fill(0))
+      setQuestionIndex(0)
+      setResult(null)
+      setExpired(false)
+    } catch (requestError) {
+      setError(errorMessage(requestError))
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  const handleReset = () => {
-    setSelectedTopic(null)
-    setCurrentQuestionIndex(0)
-    setSelectedAnswers([])
-    setIsFinished(false)
-    setScore(0)
+  const submitAssessment = async () => {
+    if (!attempt || answers.some((answer) => !hasAnswer(answer))) return
+    setError('')
+    setSubmitting(true)
+    try {
+      const finalQuestionTimes = [...questionTimes]
+      finalQuestionTimes[questionIndex] = (finalQuestionTimes[questionIndex] || 0)
+        + Math.max(0, Math.floor((Date.now() - questionStartedAt.current) / 1000))
+      const { data } = await api.post(`/skills/assessments/${attempt.attempt_id}/submit`, {
+        answers,
+        question_time_seconds: finalQuestionTimes,
+      })
+      const assessmentResult = data as AssessmentResult
+      setResult(assessmentResult)
+      onBadgeAwarded?.(assessmentResult.badge)
+    } catch (requestError) {
+      const message = errorMessage(requestError)
+      setError(message)
+      if ((requestError as { response?: { status?: number } })?.response?.status === 410) {
+        setExpired(true)
+      }
+    } finally {
+      setSubmitting(false)
+    }
   }
+
+  const reset = () => {
+    setAttempt(null)
+    setResult(null)
+    setAnswers([])
+    setQuestionTimes([])
+    setQuestionIndex(0)
+    setSecondsLeft(0)
+    setError('')
+    setExpired(false)
+  }
+
+  const captureQuestionTime = () => {
+    const seconds = Math.max(0, Math.floor((Date.now() - questionStartedAt.current) / 1000))
+    setQuestionTimes((current) => current.map((value, index) => (
+      index === questionIndex ? value + seconds : value
+    )))
+  }
+
+  const setQuestionAnswer = (optionIndex: number) => {
+    if (!currentQuestion) return
+    setAnswers((current) => current.map((answer, index) => {
+      if (index !== questionIndex) return answer
+      if (currentQuestion.question_type !== 'MULTI') return optionIndex
+      const selected = Array.isArray(answer) ? answer : []
+      return selected.includes(optionIndex)
+        ? selected.filter((value) => value !== optionIndex)
+        : [...selected, optionIndex]
+    }))
+  }
+
+  const goToQuestion = (index: number) => {
+    captureQuestionTime()
+    setQuestionIndex(index)
+  }
+
+  const currentQuestion = attempt?.questions[questionIndex]
+  const progress = attempt ? ((questionIndex + 1) / attempt.questions.length) * 100 : 0
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
       title="Verified Skill Assessment"
-      description="Score 80% or higher to earn an official verified badge visible to recruiters."
+      description="Your answers are graded on the server. A score of 80% or higher earns a verified badge."
       maxWidth="2xl"
     >
-      {!selectedTopic ? (
+      {!attempt ? (
         <div className="space-y-4">
           <p className="text-xs text-slate-600 dark:text-slate-400">
-            Choose a technical domain below to take a timed 5-question knowledge quiz. Verified badges are displayed on your profile and increase application visibility.
+            Each assessment has 10 randomly selected questions (4 easy, 4 medium and 2 hard), with a 15-minute server-enforced time limit. Scores use weighted difficulty points. Retakes are available after 24 hours, with a maximum of three attempts per week.
           </p>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 max-h-[60vh] overflow-y-auto p-1">
-            {TOPICS.map((topic) => (
-              <button
-                key={topic.id}
-                onClick={() => handleStartTopic(topic)}
-                className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-500 dark:hover:border-indigo-500 bg-slate-50/50 dark:bg-slate-800/50 text-left transition-all hover:shadow-md cursor-pointer flex flex-col justify-between group"
-              >
-                <div>
-                  <span className="text-2xl mb-1.5 block">{topic.icon}</span>
-                  <h4 className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors line-clamp-2">
-                    {topic.name}
-                  </h4>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">5 Questions • 80% Pass</p>
-                </div>
-                <div className="mt-3 pt-2 border-t border-slate-200/80 dark:border-slate-700/60 flex items-center justify-between">
-                  <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400">Start Quiz →</span>
-                  <Award className="w-3.5 h-3.5 text-indigo-500" />
-                </div>
-              </button>
+          {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">{error}</p>}
+          {loadingTopics ? (
+            <p className="py-8 text-center text-sm text-slate-500">Loading assessments…</p>
+          ) : topics.length === 0 ? (
+            <p className="py-8 text-center text-sm text-slate-500">No assessment topics are available right now.</p>
+          ) : (
+            <div className="grid max-h-[60vh] grid-cols-1 gap-3 overflow-y-auto p-1 sm:grid-cols-2 lg:grid-cols-4">
+              {topics.map((topic) => (
+                <button
+                  key={topic.id}
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => void startAssessment(topic.id)}
+                  className={`group flex cursor-pointer flex-col justify-between rounded-xl border p-3.5 text-left transition-all hover:border-indigo-500 hover:shadow-md disabled:cursor-wait disabled:opacity-60 dark:bg-slate-800/50 dark:hover:border-indigo-500 ${initialTopic === topic.id ? 'border-indigo-500 bg-indigo-50/70 ring-1 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-800' : 'border-slate-200 bg-slate-50/50 dark:border-slate-800'}`}
+                >
+                  <div>
+                    <span className="mb-1.5 block text-2xl">{topic.icon}</span>
+                    <h4 className="line-clamp-2 text-xs font-bold text-slate-900 group-hover:text-indigo-600 dark:text-white dark:group-hover:text-indigo-400">{topic.name}</h4>
+                    <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">10 Questions • 80% Pass</p>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between border-t border-slate-200/80 pt-2 dark:border-slate-700/60">
+                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400">{submitting ? 'Starting…' : 'Start Assessment →'}</span>
+                    <Award className="h-3.5 w-3.5 text-indigo-500" />
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : result ? (
+        <div className="space-y-4">
+          <div className="space-y-2 py-3 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-indigo-100 text-indigo-600 dark:bg-indigo-900/60 dark:text-indigo-400">
+              {result.passed ? <Award className="h-7 w-7" /> : <AlertCircle className="h-7 w-7" />}
+            </div>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white">{result.passed ? 'Assessment passed' : 'Assessment completed'}</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-400">
+              Weighted score: <strong>{result.weighted_percentage}%</strong> · {result.level} · {result.raw_score}/10 raw points
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Time: {Math.floor(result.time_taken_seconds / 60)}m {result.time_taken_seconds % 60}s · Percentile: {result.percentile}
+            </p>
+            {result.badge && (
+              <p className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                <Sparkles className="h-4 w-4" /> {result.badge.level} badge earned: {result.badge.title}
+              </p>
+            )}
+          </div>
+          <div className="max-h-[45vh] space-y-2 overflow-y-auto">
+            {result.questions.map((question) => (
+              <div key={question.question_id} className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                <p className="text-xs font-semibold text-slate-900 dark:text-white">{question.prompt}</p>
+                <p className={`mt-1 text-xs ${question.is_correct ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>
+                  Your answer: {answerText(question.selected_answer)}
+                </p>
+                {!question.is_correct && <p className="mt-1 text-xs text-slate-700 dark:text-slate-300">Correct answer: {answerText(question.correct_answer)}</p>}
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{question.explanation}</p>
+                <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                  {question.earned_credit} credit · {question.time_seconds}s · {question.question_id}
+                </p>
+              </div>
             ))}
           </div>
-        </div>
-      ) : !isFinished ? (
-        <div className="space-y-4">
-          {/* Quiz Header */}
-          <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-            <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-              <span>{selectedTopic.icon}</span>
-              {selectedTopic.name}
-            </span>
-            <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              Question {currentQuestionIndex + 1} of {selectedTopic.questions.length}
-            </span>
-          </div>
-
-          {/* Question Text */}
-          <div className="p-3.5 bg-indigo-50/50 dark:bg-indigo-950/30 rounded-xl border border-indigo-100 dark:border-indigo-900/60">
-            <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">
-              {selectedTopic.questions[currentQuestionIndex].question}
-            </p>
-          </div>
-
-          {/* Options */}
-          <div className="space-y-2">
-            {selectedTopic.questions[currentQuestionIndex].options.map((opt, idx) => {
-              const isSelected = selectedAnswers[currentQuestionIndex] === idx
-              return (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleSelectAnswer(idx)}
-                  className={`w-full p-3 text-left text-xs rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
-                    isSelected
-                      ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-900 dark:text-indigo-200 font-medium'
-                      : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
-                  }`}
-                >
-                  <span>{opt}</span>
-                  {isSelected && <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0 ml-2" />}
-                </button>
-              )
-            })}
-          </div>
-
-          {/* Footer Controls */}
-          <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
-            <Button size="sm" variant="ghost" onClick={handleReset}>
-              Quit
-            </Button>
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={selectedAnswers[currentQuestionIndex] === undefined}
-              onClick={handleNextQuestion}
+          <div className="flex justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+            <Link
+              to={routes.skillResult(result.attempt_id)}
+              onClick={onClose}
+              className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
             >
-              {currentQuestionIndex < selectedTopic.questions.length - 1 ? 'Next Question →' : 'Finish & Submit'}
-            </Button>
+              Full report
+            </Link>
+            <Button size="sm" variant="outline" onClick={reset}>Choose another topic</Button>
+            <Button size="sm" variant="primary" onClick={onClose}>Done</Button>
           </div>
         </div>
       ) : (
-        /* Results View */
-        <div className="text-center py-6 space-y-4">
-          <div className="w-16 h-16 rounded-full mx-auto flex items-center justify-center bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400">
-            {score >= 80 ? <Award className="w-8 h-8" /> : <AlertCircle className="w-8 h-8" />}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-bold text-slate-900 dark:text-white">
+              {topics.find((topic) => topic.id === attempt.topic)?.name || attempt.topic}
+            </span>
+            <span className={`inline-flex items-center gap-1 text-xs font-semibold ${secondsLeft < 60 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-600 dark:text-slate-300'}`}>
+              <Clock3 className="h-4 w-4" aria-hidden="true" />
+              <span aria-label="Time remaining">{formatTime(secondsLeft)}</span>
+            </span>
           </div>
-
-          <div>
-            <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-              {score >= 80 ? 'Congratulations! Quiz Passed' : 'Assessment Completed'}
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              You scored <strong className="text-slate-900 dark:text-white">{score}%</strong> on {selectedTopic.name}.
-            </p>
-          </div>
-
-          {score >= 80 ? (
-            <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl max-w-sm mx-auto space-y-1">
-              <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-800 dark:text-emerald-300">
-                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                Badge Earned: {selectedTopic.badgeTitle}
-              </span>
-              <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
-                This verified credential is now permanently featured on your candidate profile.
-              </p>
+          <div className="space-y-1" aria-label="Assessment progress">
+            <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+              <div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${progress}%` }} />
             </div>
-          ) : (
-            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-              A passing score of 80% is required to earn the verified badge. You can review the concepts and retake the assessment anytime.
-            </p>
+            <div className="flex justify-between text-[11px] text-slate-500 dark:text-slate-400">
+              <span>Question {questionIndex + 1} of {attempt.questions.length}</span>
+              <span>{Math.round(progress)}% complete</span>
+            </div>
+          </div>
+          {currentQuestion && (
+            <>
+              <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                {currentQuestion.subtopic.replaceAll('-', ' ')} · {currentQuestion.difficulty.toLowerCase()} · {currentQuestion.question_type === 'MULTI' ? 'Select all that apply' : 'Select one'}
+              </p>
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3.5 dark:border-indigo-900/60 dark:bg-indigo-950/30">
+                <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">{currentQuestion.prompt}</p>
+              </div>
+              <div className="space-y-2">
+                {currentQuestion.options.map((option, index) => {
+                  const answer = answers[questionIndex]
+                  const selected = Array.isArray(answer) ? answer.includes(index) : answer === index
+                  return (
+                    <button
+                      key={`${currentQuestion.id}-${index}`}
+                      type="button"
+                      disabled={expired || submitting}
+                      onClick={() => setQuestionAnswer(index)}
+                      className={`flex w-full items-center justify-between rounded-xl border p-3 text-left text-xs transition-colors disabled:cursor-not-allowed ${
+                        selected
+                          ? 'border-indigo-600 bg-indigo-50 font-medium text-indigo-900 dark:bg-indigo-950/60 dark:text-indigo-200'
+                          : 'border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      <span>{option}</span>
+                      {selected && <CheckCircle2 className="ml-2 h-4 w-4 shrink-0 text-indigo-600" />}
+                    </button>
+                  )
+                })}
+              </div>
+            </>
           )}
-
-          <div className="pt-2 flex justify-center gap-2">
-            <Button size="sm" variant="outline" onClick={handleReset}>
-              Take Another Quiz
-            </Button>
-            <Button size="sm" variant="primary" onClick={onClose}>
-              Done
-            </Button>
+          {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">{error}</p>}
+          {expired && <p className="text-xs text-slate-600 dark:text-slate-400">Your attempt was not submitted. You can retake this topic after the cooldown.</p>}
+          <div className="flex items-center justify-between border-t border-slate-100 pt-3 dark:border-slate-800">
+            <Button size="sm" variant="ghost" onClick={reset}>Quit</Button>
+            <div className="flex gap-2">
+              {questionIndex > 0 && (
+                <Button size="sm" variant="outline" onClick={() => goToQuestion(questionIndex - 1)}>Previous</Button>
+              )}
+              {questionIndex < attempt.questions.length - 1 ? (
+                <Button size="sm" variant="primary" disabled={!hasAnswer(answers[questionIndex]) || expired} onClick={() => goToQuestion(questionIndex + 1)}>
+                  Next Question →
+                </Button>
+              ) : (
+                <Button size="sm" variant="primary" disabled={answers.some((answer) => !hasAnswer(answer)) || expired || submitting} isLoading={submitting} onClick={() => void submitAssessment()}>
+                  Submit Assessment
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}

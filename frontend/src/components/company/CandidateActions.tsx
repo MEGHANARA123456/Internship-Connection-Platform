@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { routes } from '../../lib/routes'
+import { confirmAction } from '../../lib/feedback'
 
 export interface CandidateActionItem {
   id: number
@@ -20,6 +22,7 @@ export interface CandidateActionItem {
   resume_id: number | null
   status?: string
   allowed_actions?: string[]
+  allowed_next?: string[]
 }
 
 interface CandidateActionsProps {
@@ -47,15 +50,21 @@ export function CandidateActions({
   disabled = false,
 }: CandidateActionsProps) {
   const [open, setOpen] = useState(false)
+  const [placement, setPlacement] = useState<'above' | 'below'>('below')
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({})
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const allowed = new Set(item.allowed_actions ?? [])
+  const allowed = new Set(item.allowed_next ?? [])
 
   useEffect(() => {
     if (!open) return
     const closeOutside = (event: MouseEvent) => {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false)
+      if (
+        event.target instanceof Node &&
+        !rootRef.current?.contains(event.target) &&
+        !menuRef.current?.contains(event.target)
+      ) setOpen(false)
     }
     const closeEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -65,10 +74,43 @@ export function CandidateActions({
     }
     document.addEventListener('mousedown', closeOutside)
     document.addEventListener('keydown', closeEscape)
-    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])')?.focus()
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
     return () => {
       document.removeEventListener('mousedown', closeOutside)
       document.removeEventListener('keydown', closeEscape)
+    }
+  }, [open])
+
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) return
+    const updatePosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const gap = 4
+      const viewportPadding = 8
+      const width = Math.min(256, window.innerWidth - viewportPadding * 2)
+      const belowSpace = window.innerHeight - rect.bottom - gap - viewportPadding
+      const aboveSpace = rect.top - gap - viewportPadding
+      const flipUp = belowSpace < Math.min(280, aboveSpace) && aboveSpace > belowSpace
+      const availableHeight = Math.max(120, flipUp ? aboveSpace : belowSpace)
+      const left = Math.max(viewportPadding, Math.min(rect.right - width, window.innerWidth - width - viewportPadding))
+      setPlacement(flipUp ? 'above' : 'below')
+      setMenuStyle({
+        position: 'fixed',
+        left,
+        width,
+        maxHeight: Math.min(448, availableHeight),
+        ...(flipUp
+          ? { bottom: window.innerHeight - rect.top + gap, top: 'auto' }
+          : { top: rect.bottom + gap, bottom: 'auto' }),
+      })
+    }
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
     }
   }, [open])
 
@@ -121,23 +163,24 @@ export function CandidateActions({
     </button>
   )
 
-  const reject = () => {
-    if (!window.confirm('Reject this applicant? They will be notified.')) return
+  const reject = async () => {
+    if (!await confirmAction({ title: 'Reject applicant?', message: 'They will be notified.', confirmLabel: 'Reject applicant', destructive: true })) return
     run(onReject)
   }
-  const select = () => {
-    if (!window.confirm('Confirm the offer for this candidate?')) return
+  const select = async () => {
+    if (!await confirmAction({ title: 'Confirm offer?', message: 'Confirm the offer for this candidate?', confirmLabel: 'Confirm offer' })) return
     run(onSelect)
   }
 
   const items = [
-    menuItem('View profile and resume', <UserRound className="h-4 w-4 shrink-0" />, onReview, true, '', 'normal'),
-    menuItem('Move to review', <ArrowRight className="h-4 w-4 shrink-0" />, onMoveToReview, allowed.has('MOVE_TO_REVIEW'), 'Move to review first'),
-    menuItem('Shortlist', <ClipboardCheck className="h-4 w-4 shrink-0" />, onShortlist, allowed.has('SHORTLIST'), 'Move to review first'),
-    menuItem('Schedule interview', <CalendarDays className="h-4 w-4 shrink-0" />, onSchedule, allowed.has('SCHEDULE_INTERVIEW'), 'Shortlist first'),
-    menuItem('Select candidate', <CheckCircle2 className="h-4 w-4 shrink-0" />, select, allowed.has('SELECT'), 'Complete interview first'),
-    menuItem('Reject', <XCircle className="h-4 w-4 shrink-0" />, reject, allowed.has('REJECT'), 'Move to review first', 'danger'),
-    menuItem('Notes', <StickyNote className="h-4 w-4 shrink-0" />, onNotes, true, ''),
+    menuItem('View profile and resume', <UserRound className="h-4 w-4 shrink-0" />, onReview, true, ''),
+    ...(allowed.has('UNDER_REVIEW') ? [menuItem('Move to review', <ArrowRight className="h-4 w-4 shrink-0" />, onMoveToReview, true, '')] : []),
+    ...(allowed.has('SHORTLISTED') ? [menuItem('Shortlist', <ClipboardCheck className="h-4 w-4 shrink-0" />, onShortlist, true, '')] : []),
+    ...(allowed.has('INTERVIEW_SCHEDULED') && ['SHORTLISTED', 'INTERVIEW_SCHEDULED'].includes(item.status ?? '')
+      ? [menuItem('Schedule interview', <CalendarDays className="h-4 w-4 shrink-0" />, onSchedule, true, '')]
+      : []),
+    ...(allowed.has('SELECTED') ? [menuItem('Select candidate', <CheckCircle2 className="h-4 w-4 shrink-0" />, select, true, '')] : []),
+    ...(allowed.has('REJECTED') ? [menuItem('Reject', <XCircle className="h-4 w-4 shrink-0" />, reject, true, '', 'danger')] : []),
     <Link
       key="Message"
       role="menuitem"
@@ -149,6 +192,7 @@ export function CandidateActions({
       <MessageSquare className="h-4 w-4 shrink-0" />
       <span>Message</span>
     </Link>,
+    menuItem('Notes', <StickyNote className="h-4 w-4 shrink-0" />, onNotes, true, ''),
   ]
 
   return (
@@ -165,20 +209,19 @@ export function CandidateActions({
       >
         Actions <ChevronDown className="h-3.5 w-3.5" />
       </Button>
-      {open && (
-        <>
-          <button type="button" aria-label="Close applicant actions" onClick={() => setOpen(false)} className="fixed inset-0 z-40 bg-slate-950/30 md:hidden" />
-          <div
-            ref={menuRef}
-            role="menu"
-            aria-label="Applicant actions"
-            onKeyDown={handleMenuKeyDown}
-            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80dvh] flex-col gap-1 overflow-y-auto rounded-t-2xl border border-slate-200 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl dark:border-slate-700 dark:bg-slate-900 md:absolute md:inset-x-auto md:bottom-auto md:right-0 md:top-full md:mt-1 md:max-h-[min(28rem,80vh)] md:w-64 md:rounded-xl"
-          >
-            <div className="mx-auto mb-1 h-1 w-10 rounded-full bg-slate-300 dark:bg-slate-600 md:hidden" />
-            {items}
-          </div>
-        </>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label="Applicant actions"
+          data-placement={placement}
+          onKeyDown={handleMenuKeyDown}
+          style={menuStyle}
+          className="z-[60] flex flex-col gap-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        >
+          {items}
+        </div>,
+        document.body,
       )}
     </div>
   )

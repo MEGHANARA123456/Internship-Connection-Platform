@@ -118,7 +118,11 @@ async def close_internship(
     )
     company_name = await db.scalar(
         select(CompanyProfile.company_name).where(CompanyProfile.user_id == locked.company_id)
-    ) or "the company"
+    )
+    if not company_name:
+        company_name = await db.scalar(select(User.email).where(User.id == locked.company_id))
+    company_name = company_name or f"Company {locked.company_id}"
+    display_title = locked.title.replace("_", " ").replace("-", " ").title()
     now = datetime.now(timezone.utc)
     locked.status = "CLOSED"
     locked.closed_at = now
@@ -167,17 +171,17 @@ async def close_internship(
             notification_title = "Application update"
             body = (
                 f"After a careful review, {company_name} has decided to move forward with other "
-                f"candidates for {locked.title}."
+                f"candidates for {display_title}."
             )
             clean_note = SIX_DIGIT_CODE.sub("[redacted]", (note or "").strip())
             if clean_note:
-                body = f"{body} Note from the company: {clean_note}"
+                body = f"{body} Note from {company_name}: {clean_note}"
             should_email_closure = False
         elif status_before_close in CLOSE_NOTIFICATION_STATUSES:
             notification_type = "INTERNSHIP_CLOSED"
             notification_title = "Internship closed"
             body = _close_notification_body(
-                locked.title,
+                display_title,
                 company_name,
                 status_before_close,
                 closed_by_platform=is_admin,
@@ -256,7 +260,8 @@ async def close_internship(
                 user_id=locked.company_id,
                 notification_type="INTERNSHIP_REVIEW",
                 title="Internship closed",
-                body=f"Your internship {locked.title} was closed by the platform.",
+                body=f'Your internship "{display_title}" was closed by the platform.'
+                + (f" Reason: {note.strip()}" if note and note.strip() else ""),
                 created_at=now,
             )
         )

@@ -172,7 +172,7 @@ api.interceptors.response.use(
  * Authenticated file download helper.
  * Fetches the resource with Authorization header and triggers browser file download.
  */
-export async function downloadAuthenticatedFile(url: string, defaultFilename: string = 'download') {
+export async function downloadAuthenticatedFile(url: string, defaultFilename: string = 'download'): Promise<string> {
   const response = await api.get(url, { responseType: 'blob' })
   const contentDisposition = response.headers['content-disposition']
   let filename = defaultFilename
@@ -191,6 +191,7 @@ export async function downloadAuthenticatedFile(url: string, defaultFilename: st
   link.click()
   link.remove()
   window.URL.revokeObjectURL(blobUrl)
+  return filename
 }
 
 export async function openAuthenticatedFile(url: string, defaultFilename: string = 'document') {

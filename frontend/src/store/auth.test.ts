@@ -35,11 +35,14 @@ afterEach(() => {
 describe('tab-scoped authentication storage', () => {
   it('clears legacy endorsement data once when the auth store starts', async () => {
     localStorage.setItem('student_recommendations', '[]')
+    localStorage.setItem('student_verified_badges', '[{"fake":true}]')
     vi.resetModules()
 
     await import('./auth')
 
     expect(localStorage.getItem('student_recommendations')).toBeNull()
+    expect(localStorage.getItem('student_verified_badges')).toBeNull()
+    expect(USER_SCOPED_KEYS).not.toContain('student_verified_badges')
   })
 
   it('stores the default session in sessionStorage, keeping student and company tabs independent', () => {
@@ -83,11 +86,13 @@ describe('tab-scoped authentication storage', () => {
   it('clears the active session and user-scoped data on logout', () => {
     useAuthStore.getState().setSession(student, 'session')
     USER_SCOPED_KEYS.forEach((key) => localStorage.setItem(key, 'user data'))
+    localStorage.setItem('verified_server_badges', 'server-owned')
 
     useAuthStore.getState().logout()
 
     expect(sessionStorage.getItem('session')).toBeNull()
     USER_SCOPED_KEYS.forEach((key) => expect(localStorage.getItem(key)).toBeNull())
+    expect(localStorage.getItem('verified_server_badges')).toBe('server-owned')
     expect(useAuthStore.getState().session).toBeNull()
   })
 })

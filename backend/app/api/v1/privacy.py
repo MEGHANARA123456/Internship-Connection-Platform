@@ -23,6 +23,8 @@ from app.models import (
     Message,
     Resume,
     SavedInternship,
+    SkillAttempt,
+    SkillBadge,
     StudentProfile,
     User,
     UserRole,
@@ -37,6 +39,7 @@ class PrivacyPreferencesUpdate(BaseModel):
     marketing_emails: bool = Field(default=False, description="Consent to marketing & product announcements")
     third_party_sharing_opt_out: bool = Field(default=True, description="CCPA: Do Not Sell or Share My Personal Information")
     profile_visibility: str = Field(default="COMMUNITY", pattern="^(PUBLIC|COMMUNITY|PRIVATE)$")
+    show_verified_badges: bool = Field(default=True, description="Allow companies to view verified skill badges on applications")
 
 
 class AccountDeletionRequest(BaseModel):
@@ -95,18 +98,29 @@ async def get_privacy_preferences(
         "marketing_emails": False,
         "third_party_sharing_opt_out": True,  # CCPA compliant opt-out by default
         "profile_visibility": "COMMUNITY",
+        "show_verified_badges": True,
         "last_updated": None,
     }
 
+    student_profile = await db.scalar(
+        select(StudentProfile).where(StudentProfile.user_id == user.id)
+    ) if user.role == UserRole.STUDENT else None
     if pref_log and pref_log.metadata_:
         return {
             "analytics_cookies": pref_log.metadata_.get("analytics_cookies", False),
             "marketing_emails": pref_log.metadata_.get("marketing_emails", False),
             "third_party_sharing_opt_out": pref_log.metadata_.get("third_party_sharing_opt_out", True),
             "profile_visibility": pref_log.metadata_.get("profile_visibility", "COMMUNITY"),
+            "show_verified_badges": (
+                student_profile.show_verified_badges
+                if student_profile is not None
+                else pref_log.metadata_.get("show_verified_badges", True)
+            ),
             "last_updated": pref_log.created_at.isoformat() if pref_log.created_at else None,
         }
 
+    if student_profile is not None:
+        defaults["show_verified_badges"] = student_profile.show_verified_badges
     return defaults
 
 @router.put("/preferences")
@@ -118,6 +132,13 @@ async def update_privacy_preferences(
     """Update GDPR consent choices and CCPA opt-out preferences with audit traceability."""
     pref_data = payload.model_dump()
     pref_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    if user.role == UserRole.STUDENT:
+        student_profile = await db.scalar(
+            select(StudentProfile).where(StudentProfile.user_id == user.id)
+        )
+        if student_profile is not None:
+            student_profile.show_verified_badges = payload.show_verified_badges
 
     audit_entry = AuditLog(
         actor_id=user.id,
@@ -203,6 +224,7 @@ async def export_user_data(
                 "skills": student.skills.split(",") if student.skills else [],
                 "institution_email": student.institution_email,
                 "avatar_url": student.avatar_url,
+                "show_verified_badges": student.show_verified_badges,
             }
     elif user.role == UserRole.COMPANY:
         company = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
@@ -308,6 +330,48 @@ async def export_user_data(
                 "file_size_bytes": resume.file_size,
             }
 
+    # 9. Verified skill assessments and badges belong to the student's portable account data.
+    skill_attempts_data = []
+    skill_badges_data = []
+    if user.role == UserRole.STUDENT:
+        attempts = await db.scalars(
+            select(SkillAttempt)
+            .where(SkillAttempt.student_id == user.id)
+            .order_by(SkillAttempt.started_at.desc())
+        )
+        skill_attempts_data = [
+            {
+                "attempt_id": attempt.id,
+                "topic": attempt.topic,
+                "question_ids": attempt.question_ids,
+                "answers": attempt.answers,
+                "score": attempt.score,
+                "passed": attempt.passed,
+                "started_at": attempt.started_at.isoformat() if attempt.started_at else None,
+                "expires_at": attempt.expires_at.isoformat() if attempt.expires_at else None,
+                "submitted_at": attempt.submitted_at.isoformat() if attempt.submitted_at else None,
+            }
+            for attempt in attempts
+        ]
+        badges = await db.scalars(
+            select(SkillBadge)
+            .where(SkillBadge.student_id == user.id)
+            .order_by(SkillBadge.earned_at.desc())
+        )
+        skill_badges_data = [
+            {
+                "badge_id": badge.id,
+                "topic": badge.topic,
+                "title": badge.title,
+                "level": badge.level,
+                "score": badge.score,
+                "attempt_id": badge.attempt_id,
+                "earned_at": badge.earned_at.isoformat(),
+                "expires_at": badge.expires_at.isoformat(),
+            }
+            for badge in badges
+        ]
+
     # 9. Audit History
     audit_query = await db.scalars(
         select(AuditLog).where(AuditLog.actor_id == user.id).order_by(desc(AuditLog.created_at)).limit(100)
@@ -344,6 +408,10 @@ async def export_user_data(
         "user_account": user_data,
         "profile": profile_data,
         "resume": resume_data,
+        "skill_assessments": {
+            "attempts": skill_attempts_data,
+            "badges": skill_badges_data,
+        },
         "applications": applications_data,
         "saved_internships": saved_data,
         "interviews": interviews_data,

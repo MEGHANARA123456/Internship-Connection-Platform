@@ -32,7 +32,7 @@ import { Card } from '../ui/Card'
 import { ChartSkeleton, KpiSkeleton, Spinner } from '../ui/LoadingSkeleton'
 import { useAuthStore } from '../../store/auth'
 import { ChartLegend } from '../charts/ChartLegend'
-import { chartColorFor } from '../charts/chartColors'
+import { assignColors } from '../charts/chartColors'
 
 const ResponsiveOverviewChart = lazy(async () => {
   const module = await import('./ResponsiveOverviewChart')
@@ -138,11 +138,11 @@ export function DesktopAnalysisVisuals({
   ]
   const fullViewGroups = variant === 'company' ? [
     { label: 'Funnel & conversion', items: [
-      { key: 'funnel', label: 'Pipeline funnel', icon: Filter },
+      { key: 'funnel', label: 'Pipeline Funnel', icon: Filter },
       { key: 'conversion_role', label: 'Conversion per role', icon: BarChart3 },
     ] },
     { label: 'Activity & velocity', items: [
-      { key: 'trends', label: 'Activity trends', icon: TrendingUp },
+      { key: 'trends', label: 'Activity Trends', icon: TrendingUp },
       { key: 'response_time', label: 'Time to first response', icon: Clock },
       { key: 'time_to_hire', label: 'Time to hire', icon: Clock },
     ] },
@@ -158,28 +158,35 @@ export function DesktopAnalysisVisuals({
       { key: 'applications_by_role', label: 'Applications by role', icon: BarChart3 },
     ] },
   ] : variant === 'student' ? [
-    { label: 'Funnel & conversion', items: [{ key: 'funnel', label: 'Pipeline funnel', icon: Filter }] },
+    { label: 'Funnel & conversion', items: [{ key: 'funnel', label: 'Pipeline Funnel', icon: Filter }] },
     { label: 'Activity & velocity', items: [
-      { key: 'trends', label: 'Activity trends', icon: TrendingUp },
+      { key: 'trends', label: 'Activity Trends', icon: TrendingUp },
       { key: 'applications_week', label: 'Applications per week', icon: BarChart3 },
       { key: 'response_time', label: 'Time to first response', icon: Clock },
     ] },
     { label: 'Status & quality', items: [
+      { key: 'domains', label: 'Role Domains', icon: PieChart },
       { key: 'status_mix', label: 'Status mix donut', icon: PieChart },
       { key: 'match_score', label: 'Average match score', icon: Award },
       { key: 'skills_gap', label: 'Skills to learn', icon: Briefcase },
     ] },
     { label: 'Outcomes', items: [{ key: 'response_rate', label: 'Response rate', icon: Activity }] },
   ] : [
-    { label: 'Funnel & conversion', items: [{ key: 'funnel', label: 'Pipeline funnel', icon: Filter }] },
+    { label: 'Funnel & conversion', items: [{ key: 'funnel', label: 'Pipeline Funnel', icon: Filter }] },
     { label: 'Activity & velocity', items: [
-      { key: 'trends', label: 'Activity trends', icon: TrendingUp },
+      { key: 'trends', label: 'Activity Trends', icon: TrendingUp },
       { key: 'user_growth', label: 'User growth', icon: Users },
       { key: 'admin_actions', label: 'Admin action volume by action', icon: Activity },
     ] },
   ]
   const viewOptions = fullAnalyticsMenu ? fullViewGroups.flatMap((group) => group.items) : legacyViewOptions
   const selectedStorageKey = useRef(userScopedStorageKey)
+  const currentChartHeading =
+    activeTab === 'funnel' ? 'Application funnel' :
+    activeTab === 'domains' ? 'Roles by domain' :
+    activeTab === 'user_growth' ? 'Signups over time' :
+    activeTab === 'admin_actions' ? 'Admin actions by type' :
+    activeTab === 'status_mix' ? 'Status Per Application' : null
 
   useEffect(() => {
     if (!fullAnalyticsMenu) return
@@ -412,6 +419,9 @@ export function DesktopAnalysisVisuals({
       bg: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
     },
   ]
+  const funnelStageColors = assignColors(funnelStages.map((stage) => stage.name))
+  const domainColors = assignColors(domainData.map((domain) => domain.name))
+  const trendSeriesColors = assignColors(['Applications', 'Offers'])
 
   // SVG dimensions for trend chart
   const svgWidth = 600
@@ -1016,6 +1026,12 @@ export function DesktopAnalysisVisuals({
         </div>
       </div>
 
+      {fullAnalyticsMenu && variant !== 'public' && currentChartHeading && (
+        <div className="mb-2">
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">{currentChartHeading}</h3>
+        </div>
+      )}
+
       {fullAnalyticsMenu && variant !== 'public' && (
         <Suspense fallback={<div className="space-y-4"><div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">{[0, 1, 2, 3, 4, 5].map((item) => <KpiSkeleton key={item} />)}</div><ChartSkeleton /></div>}>
           <RoleAnalyticsCharts
@@ -1045,7 +1061,7 @@ export function DesktopAnalysisVisuals({
       {activeTab === 'funnel' && fullAnalyticsMenu && analytics && !loading && !loadError && (
         <Card data-chart-panel className="min-w-0 space-y-3 bg-white p-4 dark:bg-slate-900 sm:p-5">
           <div className="flex items-center justify-between gap-3">
-            <h4 className="text-sm font-bold text-slate-900 dark:text-white">Pipeline funnel</h4>
+            <h4 className="text-sm font-bold text-slate-900 dark:text-white">Application funnel</h4>
             <span className="sr-only">Sample size: {appliedCount} applications · {timeRange === 'ALL' ? 'All time' : timeRange === '30D' ? 'Last 30 days' : 'Last 90 days'}</span>
           </div>
           {appliedCount === 0 ? (
@@ -1144,7 +1160,7 @@ export function DesktopAnalysisVisuals({
                   <div className="flex-1 h-3.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden relative">
                     <div
                       className="h-full rounded-full transition-all duration-700"
-                      style={{ width: `${Math.max(stage.pct, stage.count > 0 ? 4 : 0)}%`, backgroundColor: chartColorFor(stage.name), opacity: highlightedDashboardSeries === null || highlightedDashboardSeries === stage.name ? 1 : 0.25 }}
+                      style={{ width: `${Math.max(stage.pct, stage.count > 0 ? 4 : 0)}%`, backgroundColor: funnelStageColors[stage.name], opacity: highlightedDashboardSeries === null || highlightedDashboardSeries === stage.name ? 1 : 0.25 }}
                     />
                   </div>
                   <span className="w-14 text-right text-xs font-mono font-bold text-slate-800 dark:text-slate-200">
@@ -1154,7 +1170,7 @@ export function DesktopAnalysisVisuals({
               ))}
             </div>
             <ChartLegend
-              items={funnelStages.map((stage) => ({ id: stage.name, label: stage.name, color: chartColorFor(stage.name), value: stage.count }))}
+              items={funnelStages.map((stage) => ({ id: stage.name, label: stage.name, color: funnelStageColors[stage.name], value: stage.count }))}
               hiddenItems={hiddenFunnelStages}
               onToggle={(id) => setHiddenFunnelStages((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
               onHighlight={setHighlightedDashboardSeries}
@@ -1193,8 +1209,8 @@ export function DesktopAnalysisVisuals({
           <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
             <ChartLegend
               items={[
-                { id: 'Applications', label: 'Applications Filed', color: chartColorFor('Applications'), shape: 'line' },
-                { id: 'Offers', label: 'Final Offers Accepted', color: chartColorFor('Offers'), shape: 'line' },
+                { id: 'Applications', label: 'Applications Filed', color: trendSeriesColors.Applications, shape: 'line' },
+                { id: 'Offers', label: 'Final Offers Accepted', color: trendSeriesColors.Offers, shape: 'line' },
               ]}
               hiddenItems={hiddenTrendSeries}
               onToggle={(id) => setHiddenTrendSeries((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
@@ -1216,12 +1232,12 @@ export function DesktopAnalysisVisuals({
               <title>Monthly applications and offers</title>
               <defs>
                 <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={chartColorFor('Applications')} stopOpacity="0.35" />
-                  <stop offset="100%" stopColor={chartColorFor('Applications')} stopOpacity="0.0" />
+                  <stop offset="0%" stopColor={trendSeriesColors.Applications} stopOpacity="0.35" />
+                  <stop offset="100%" stopColor={trendSeriesColors.Applications} stopOpacity="0.0" />
                 </linearGradient>
                 <linearGradient id="emeraldGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={chartColorFor('Offers')} stopOpacity="0.3" />
-                  <stop offset="100%" stopColor={chartColorFor('Offers')} stopOpacity="0.0" />
+                  <stop offset="0%" stopColor={trendSeriesColors.Offers} stopOpacity="0.3" />
+                  <stop offset="100%" stopColor={trendSeriesColors.Offers} stopOpacity="0.0" />
                 </linearGradient>
               </defs>
 
@@ -1258,7 +1274,7 @@ export function DesktopAnalysisVisuals({
                 <path
                   d={linePath}
                   fill="none"
-                  stroke={chartColorFor('Applications')}
+                  stroke={trendSeriesColors.Applications}
                   opacity={highlightedDashboardSeries === null || highlightedDashboardSeries === 'Applications' ? 1 : 0.2}
                   strokeWidth="3"
                   strokeLinecap="round"
@@ -1271,7 +1287,7 @@ export function DesktopAnalysisVisuals({
                 <path
                   d={offerLinePath}
                   fill="none"
-                  stroke={chartColorFor('Offers')}
+                  stroke={trendSeriesColors.Offers}
                   opacity={highlightedDashboardSeries === null || highlightedDashboardSeries === 'Offers' ? 1 : 0.2}
                   strokeWidth="2.5"
                   strokeLinecap="round"
@@ -1286,7 +1302,7 @@ export function DesktopAnalysisVisuals({
                     cx={p.x}
                     cy={p.y}
                     r={hoveredMonth === idx ? 7 : 5}
-                    fill={chartColorFor('Applications')}
+                    fill={trendSeriesColors.Applications}
                     opacity={highlightedDashboardSeries === null || highlightedDashboardSeries === 'Applications' ? 1 : 0.2}
                     stroke="#ffffff"
                     strokeWidth="2"
@@ -1299,7 +1315,7 @@ export function DesktopAnalysisVisuals({
                       cx={offerPoints[idx].x}
                       cy={offerPoints[idx].y}
                       r={hoveredMonth === idx ? 6 : 4}
-                      fill={chartColorFor('Offers')}
+                      fill={trendSeriesColors.Offers}
                       opacity={highlightedDashboardSeries === null || highlightedDashboardSeries === 'Offers' ? 1 : 0.2}
                       stroke="#ffffff"
                       strokeWidth="2"
@@ -1400,14 +1416,14 @@ export function DesktopAnalysisVisuals({
                   <div className="mt-3 w-full h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
                     <div
                       className="h-full rounded-full transition-all duration-500"
-                      style={{ width: `${Math.max(visiblePct, 5)}%`, backgroundColor: chartColorFor(domain.name) }}
+                      style={{ width: `${Math.max(visiblePct, 5)}%`, backgroundColor: domainColors[domain.name] }}
                     />
                   </div>
                 </div>
               )})}
             </div>
             <ChartLegend
-              items={domainData.map((domain) => ({ id: domain.name, label: domain.name, color: chartColorFor(domain.name), value: domain.count }))}
+              items={domainData.map((domain) => ({ id: domain.name, label: domain.name, color: domainColors[domain.name], value: domain.count }))}
               hiddenItems={hiddenDomains}
               onToggle={(id) => setHiddenDomains((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
               onHighlight={setHighlightedDashboardSeries}

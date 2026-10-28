@@ -70,6 +70,30 @@ function renderCard(variant: 'student' | 'company' | 'admin' = 'student') {
 }
 
 describe('UnifiedAnalyticsCard', () => {
+  it('offers assessment links for known missing skills in the student skill-gap chart', async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: {
+        ...studentData,
+        charts: {
+          skill_gap: [
+            { name: 'Python', have: 0, missing: 2 },
+            { name: 'React', have: 1, missing: 0 },
+            { name: 'SQL', have: 0, missing: 1 },
+          ],
+        },
+      },
+    })
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: /Show: All charts/ }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Insights' }))
+
+    expect(await screen.findByRole('link', { name: 'Take assessment: Python' }))
+      .toHaveAttribute('href', '/profile/student?assessment=python')
+    expect(screen.getByRole('link', { name: 'Take assessment: SQL' }))
+      .toHaveAttribute('href', '/profile/student?assessment=sql')
+    expect(screen.queryByRole('link', { name: 'Take assessment: React' })).not.toBeInTheDocument()
+  })
+
   it('renders the active student KPI links with matching data routes and sample sizes', async () => {
     vi.mocked(api.get).mockResolvedValue({ data: studentData })
     renderCard()
@@ -90,7 +114,7 @@ describe('UnifiedAnalyticsCard', () => {
     vi.mocked(api.get).mockResolvedValue({ data: studentData })
     renderCard()
 
-    expect(await screen.findByRole('heading', { name: 'Application status funnel' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Application funnel' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Match score distribution' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Show: All charts/ }))
     const menu = screen.getByRole('menu', { name: 'Analytics chart focus' })

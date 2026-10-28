@@ -4,20 +4,23 @@
 
 from typing import Annotated
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
+from html import escape
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy import extract, func, select
+from sqlalchemy import extract, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
-from app.models import Application, ApplicationEvent, ApplicationStatusEvent, CompanyProfile, EmailMessage, Interview, Internship, Resume, StudentProfile, User, UserRole
-from app.services.ai import compute_match
+from app.models import Application, ApplicationEvent, ApplicationStatusEvent, CompanyProfile, EmailMessage, Interview, Internship, Resume, SkillBadge, StudentProfile, User, UserRole
+from app.services.ai import compute_explicit_eligibility_fit, compute_match, get_student_resume_text
 from app.services.application_events import record_event, record_status_event, transition_application
 from app.services.mail import visible_gmail_url
 from app.services.notify import dispatch_notification, notify
 from app.services.application_rules import check_eligibility
+from app.services.skill_badges import apply_verified_badge_boost, badge_response, get_valid_badges
 from app.schemas.application import (
     ApplicationCreate,
     ApplicationDashboard,
@@ -34,33 +37,24 @@ student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]# type: 
 company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]# type: ignore
 
 
-def _status_notification_text(status: str, company_name: str, internship_title: str) -> tuple[str, str, str]:
-    status_text = status.replace("_", " ").title()
-    if status == "SHORTLISTED":
-        title = "Application shortlisted"
-        body = f"You have been shortlisted for {internship_title} at {company_name}. The team wants to move forward with your application."
-    elif status == "INTERVIEW_SCHEDULED":
-        title = "Interview scheduled"
-        body = f"Your interview for {internship_title} at {company_name} has been scheduled. Check the Interviews page for the details and meeting link."
-    elif status == "SELECTED":
-        title = "Offer update"
-        body = f"Congratulations! {company_name} has selected you for {internship_title}. The next steps will be shared with you soon."
-    elif status == "REJECTED":
-        title = "Application update"
-        body = f"After a careful review, {company_name} has decided to move forward with other candidates for {internship_title}."
-    elif status == "UNDER_REVIEW":
-        title = "Application under review"
-        body = f"Your application for {internship_title} at {company_name} is still under review. We will update you once a decision is made."
-    else:
-        title = f"Application status: {status_text}"
-        body = f"Your application for {internship_title} at {company_name} is now marked as {status_text}."
+def _display_internship_title(title: str) -> str:
+    return title.replace("_", " ").replace("-", " ").title()
 
+
+def _status_notification_text(
+    status: str,
+    company_name: str,
+    internship_title: str,
+) -> tuple[str, str, str]:
+    status_text = status.replace("_", " ").title()
+    title = "Offer update" if status == "SELECTED" else "Application status update"
+    body = f"Your application for {internship_title} at {company_name} is now {status_text}."
     html = f"""
     <div style="font-family: Arial, sans-serif; max-width: 540px; margin: 0 auto; padding: 24px; background: #f8fafc; color: #0f172a;">
       <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
         <div style="font-size: 12px; letter-spacing: 1.4px; color: #4338ca; font-weight: 700; text-transform: uppercase; margin-bottom: 16px;">InternSphere</div>
-        <h2 style="margin: 0 0 12px; font-size: 22px;">{title}</h2>
-        <p style="margin: 0; color: #475569; line-height: 1.6;">{body}</p>
+        <h2 style="margin: 0 0 12px; font-size: 22px;">{escape(title)}</h2>
+        <p style="margin: 0; color: #475569; line-height: 1.6;">{escape(body)}</p>
       </div>
     </div>
     """
@@ -84,6 +78,19 @@ def _response_time_hours(applied_at: datetime, response_at: datetime) -> float:
     if response_at.tzinfo is None:
         response_at = response_at.replace(tzinfo=timezone.utc)
     return max(0.0, round((response_at - applied_at).total_seconds() / 3600, 1))
+
+
+def _application_search_filter(search: str | None):
+    tokens = re.findall(r"[a-z0-9]+", (search or "").casefold())
+    if not tokens:
+        return None
+    normalized_title = " " + func.replace(func.lower(Internship.title), "/", " ") + " "
+    title_matches = [normalized_title.contains(f" {token} ") for token in tokens]
+    company_match = select(CompanyProfile.user_id).where(
+        CompanyProfile.user_id == Internship.company_id,
+        CompanyProfile.company_name.ilike(f"%{search.strip()}%"),
+    ).exists()
+    return or_(*title_matches, company_match)
 
 
 def application_transition_allowed(current: str, target: str) -> bool:
@@ -147,7 +154,12 @@ def _is_application_unique_violation(exc: IntegrityError) -> bool:
     return columns == {"student_id", "internship_id"}
 
 
-async def serialize(application: Application, db: DbSession, include_match: bool = False) -> dict:
+async def serialize(
+    application: Application,
+    db: DbSession,
+    include_match: bool = False,
+    include_verified_badges: bool = False,
+) -> dict:
     student = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == application.student_id))
     resume = await db.scalar(select(Resume).where(Resume.student_id == application.student_id))
     internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id))
@@ -167,7 +179,7 @@ async def serialize(application: Application, db: DbSession, include_match: bool
     payload = {
         "id": application.id,
         "internship_id": application.internship_id,
-        "internship_title": internship.title if internship else None,
+        "internship_title": _display_internship_title(internship.title) if internship else None,
         "internship_location": internship.location if internship else None,
         "internship_posted_at": internship.created_at if internship else None,
         "internship_deadline": internship.deadline if internship else None,
@@ -190,15 +202,44 @@ async def serialize(application: Application, db: DbSession, include_match: bool
         "student_university": student.university if student else None,
         "student_skills": [skill for skill in (student.skills if student else "").split(",") if skill],
         "resume_id": resume.id if resume else None,
+        "has_resume": resume is not None,
+        "resume_filename": resume.original_filename if resume else None,
+        "resume_size": resume.file_size if resume else None,
     }
     if include_match:
-        payload["match_score"] = compute_match(
+        job_skills = [skill.strip() for skill in (internship.skills if internship else "").split(",") if skill.strip()]
+        match_info = compute_match(
             [skill.strip() for skill in (student.skills if student else "").split(",") if skill.strip()],
-            "",
+            await get_student_resume_text(db, application.student_id),
             internship.title if internship else "",
             internship.description if internship else "",
-            [skill.strip() for skill in (internship.skills if internship else "").split(",") if skill.strip()],
-        )["score"]
+            job_skills,
+            eligibility_data=compute_explicit_eligibility_fit(
+                internship.description if internship else "",
+                student.graduation_year if student else None,
+                f"{student.major} {student.university}" if student else "",
+            ),
+        )
+        badges = (
+            await get_valid_badges(db, application.student_id)
+            if student is not None and student.show_verified_badges
+            else []
+        )
+        match_info = apply_verified_badge_boost(match_info, job_skills, badges)
+        payload["match_score"] = match_info["score"]
+        payload["match_explanation"] = match_info["match_explanation"]
+        payload["match"] = {
+            key: match_info.get(key)
+            for key in ("score", "matched", "missing", "reason", "confidence", "score_breakdown", "base_match_score", "verified_skill_bonus", "verified_skills")
+            if key in match_info
+        }
+    if include_verified_badges:
+        badges = (
+            await get_valid_badges(db, application.student_id)
+            if student is not None and student.show_verified_badges
+            else []
+        )
+        payload["verified_badges"] = [badge_response(badge) for badge in badges]
     if latest_event is not None:
         payload["latest_event_type"] = latest_event.event_type
         payload["latest_event_at"] = latest_event.created_at
@@ -276,14 +317,14 @@ async def apply(internship_id: int, data: ApplicationCreate, user: student_only,
         student_profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
         student_name = student_profile.full_name if student_profile else user.email
         company_title = (
-            f"{student_name} re-applied to {internship.title}"
+            f"{student_name} re-applied to {_display_internship_title(internship.title)}"
             if is_reapplication
-            else f"New application: {student_name} applied to {internship.title}"
+            else f"New application: {student_name} applied to {_display_internship_title(internship.title)}"
         )
         company_body = (
-            f"{student_name} re-applied to {internship.title}."
+            f"{student_name} re-applied to {_display_internship_title(internship.title)}."
             if is_reapplication
-            else f"{student_name} applied to {internship.title}."
+            else f"{student_name} applied to {_display_internship_title(internship.title)}."
         )
         company_notification = await notify(
             db,
@@ -298,8 +339,8 @@ async def apply(internship_id: int, data: ApplicationCreate, user: student_only,
             db,
             user.id,
             "APPLICATION_SUBMITTED",
-            f"Application submitted for {internship.title}",
-            f"Your application for {internship.title} was submitted successfully.",
+            f"Application submitted for {_display_internship_title(internship.title)}",
+            f"Your application for {_display_internship_title(internship.title)} was submitted successfully.",
             application_id=application.id,
             defer_delivery=True,
         )
@@ -542,10 +583,20 @@ async def get_application_timeline(
 
 @router.get("/mine", response_model=ApplicationDashboard)
 @router.get("/student", response_model=ApplicationDashboard)
-async def student_dashboard(user: student_only, db: DbSession, status: str | None = Query(default=None)) -> dict:
+async def student_dashboard(
+    user: student_only,
+    db: DbSession,
+    status: str | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=100),
+) -> dict:
     applications_query = select(Application).where(Application.student_id == user.id)
     if status and status.upper() != "ALL":
         applications_query = applications_query.where(Application.status == status.upper())
+    search_filter = _application_search_filter(search)
+    if search_filter is not None:
+        applications_query = applications_query.where(
+            Application.internship_id.in_(select(Internship.id).where(search_filter))
+        )
     applications = list(await db.scalars(applications_query.order_by(Application.created_at.desc())))
     counts = {name: count for name, count in (await db.execute(select(Application.status, func.count()).where(Application.student_id == user.id).group_by(Application.status))).all()}
     response_rows = (await db.execute(
@@ -574,7 +625,7 @@ async def student_dashboard(user: student_only, db: DbSession, status: str | Non
         item["has_company_response"] = application.id in response_times
         item["response_time_hours"] = response_times.get(application.id)
         items.append(item)
-    return {"counts": counts, "applications": items}
+    return {"counts": counts, "applications": items, "total": len(items)}
 
 
 @router.get("/company", response_model=list[ApplicationResponse])
@@ -585,7 +636,10 @@ async def list_all_company_applications(user: company_only, db: DbSession) -> li
         .where(Internship.company_id == user.id)
         .order_by(Application.created_at.desc())
     )
-    return [await serialize(application, db, include_match=True) for application in applications]
+    return [
+        await serialize(application, db, include_match=True, include_verified_badges=True)
+        for application in applications
+    ]
 
 
 @router.get("/company/search")
@@ -600,6 +654,7 @@ async def search_company_applications(
     created: str | None = None,
     skills: str | None = None,
     education: str | None = None,
+    verified_skill: bool = False,
     sort: str = "newest",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -628,6 +683,18 @@ async def search_company_applications(
         query = query.where(
             (StudentProfile.university.ilike(f"%{education.strip()}%"))
             | (StudentProfile.major.ilike(f"%{education.strip()}%"))
+        )
+    if verified_skill:
+        now = datetime.now(timezone.utc)
+        query = query.where(
+            Application.student_id.in_(
+                select(SkillBadge.student_id)
+                .join(StudentProfile, StudentProfile.user_id == SkillBadge.student_id)
+                .where(
+                    SkillBadge.expires_at > now,
+                    StudentProfile.show_verified_badges.is_(True),
+                )
+            )
         )
     count_query = select(func.count()).select_from(query.order_by(None).subquery())
     total = int(await db.scalar(count_query) or 0)
@@ -671,7 +738,10 @@ async def search_company_applications(
         ).all()
     )
     return {
-        "items": [await serialize(application, db, include_match=True) for application in applications],
+        "items": [
+            await serialize(application, db, include_match=True, include_verified_badges=True)
+            for application in applications
+        ],
         "total": total,
         "status_counts": status_counts,
         "page": page,
@@ -684,7 +754,10 @@ async def company_applications(internship_id: int, user: company_only, db: DbSes
     internship = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id))
     if internship is None: raise HTTPException(404, "Internship not found")
     applications = await db.scalars(select(Application).where(Application.internship_id == internship_id).order_by(Application.created_at.desc()))
-    return [await serialize(application, db) for application in applications]
+    return [
+        await serialize(application, db, include_match=True, include_verified_badges=True)
+        for application in applications
+    ]
 
 
 @router.post("/{application_id}/viewed")
@@ -759,7 +832,19 @@ async def get_application_tracking(application_id: int, user: student_only, db: 
 
     student_skills = [skill.strip() for skill in (student_profile.skills if student_profile else "").split(",") if skill.strip()]
     job_skills = [skill.strip() for skill in internship.skills.split(",") if skill.strip()] or [skill.strip() for skill in internship.title.split() if skill.strip()]
-    match_summary = compute_match(student_skills, resume.original_filename if resume else "", internship.title, internship.description, job_skills) if resume else {"matched_skills": [], "missing_skills": []}
+    resume_text = await get_student_resume_text(db, application.student_id)
+    match_summary = compute_match(
+        student_skills,
+        resume_text,
+        internship.title,
+        internship.description,
+        job_skills,
+        eligibility_data=compute_explicit_eligibility_fit(
+            internship.description,
+            student_profile.graduation_year if student_profile else None,
+            f"{student_profile.major} {student_profile.university}" if student_profile else "",
+        ),
+    )
     required_skill_total = max(len(job_skills), 1)
     matched_skill_total = len(match_summary.get("matched_skills", []))
     early_threshold = max(1, min(10, int(__import__('math').ceil(total_applications * 0.25))) if total_applications else 1)
@@ -850,8 +935,10 @@ async def bulk_update_status(
         await transition_application(db, app, target_status, user.id)
         success_ids.append(app_id)
 
-        company_name = internship.company_name if hasattr(internship, "company_name") else "the company"# type: ignore
-        title, body, html = _status_notification_text(target_status, company_name or "the company", internship.title or "the internship")
+        company_profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == internship.company_id))
+        company_user = await db.scalar(select(User).where(User.id == internship.company_id))
+        company_name = (company_profile.company_name if company_profile else None) or (company_user.email if company_user else f"Company {internship.company_id}")
+        title, body, html = _status_notification_text(target_status, company_name, _display_internship_title(internship.title))
         await notify(
             db, app.student_id, "APPLICATION_STATUS", title, body,
             email=True, html=html, application_id=app.id,
@@ -893,32 +980,54 @@ async def update_status(application_id: int, data: ApplicationStatusUpdate, back
         if internship.company_id != user.id or data.status not in {"UNDER_REVIEW", "SHORTLISTED", "INTERVIEW_SCHEDULED", "SELECTED", "REJECTED"}: raise HTTPException(403, "Company cannot update this application")
     else: raise HTTPException(403, "Insufficient permissions")
     if not application_transition_allowed(application.status, data.status): raise HTTPException(409, f"Cannot move {application.status} to {data.status}")
-    await transition_application(db, application, data.status, user.id)
-    recipient_id = application.student_id if user.role == UserRole.COMPANY else internship.company_id
-    recipient = await db.scalar(select(User).where(User.id == recipient_id))
-    if recipient:
-        company_name = internship.company_name if hasattr(internship, "company_name") else "the company"# type: ignore
-        title, body, html = _status_notification_text(data.status, company_name or "the company", internship.title or "the internship")
+    await transition_application(
+        db,
+        application,
+        data.status,
+        user.id,
+        note=data.reason.strip() if user.role == UserRole.STUDENT and data.reason and data.reason.strip() else None,
+    )
+    company_profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == internship.company_id))
+    company_user = await db.scalar(select(User).where(User.id == internship.company_id))
+    company_name = (company_profile.company_name if company_profile else None) or (company_user.email if company_user else f"Company {internship.company_id}")
+    student_profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == application.student_id))
+    student_name = student_profile.full_name if student_profile and student_profile.full_name else "A student"
+    if user.role == UserRole.STUDENT:
+        company_title = "Application withdrawn"
+        company_body = f"{student_name} withdrew their application for {_display_internship_title(internship.title)}"
         await notify(
-            db, recipient.id, "APPLICATION_STATUS", title, body,
+            db, internship.company_id, "APPLICATION_WITHDRAWN", company_title, company_body,
+            email=True, application_id=application.id,
+        )
+        await notify(
+            db, application.student_id, "APPLICATION_WITHDRAWN",
+            "Application withdrawn",
+            f"You withdrew your application for {_display_internship_title(internship.title)} at {company_name}",
+            application_id=application.id,
+        )
+    else:
+        title, body, html = _status_notification_text(data.status, company_name, _display_internship_title(internship.title))
+        await notify(
+            db, application.student_id, "APPLICATION_STATUS", title, body,
             email=True, html=html, application_id=application.id,
         )
-        try:
-            from app.api.v1.ws import manager
-            await manager.send_personal_message(
-                recipient.id,
-                {
-                    "type": "application_status_updated",
-                    "application_id": application.id,
-                    "status": data.status,
-                    "internship_id": application.internship_id,
-                    "title": title,
-                    "body": body,
-                },
-            )
-        except Exception as exc:
-            logger.warning("Could not send application status notification for application %s: %s", application.id, exc)
-            pass
+        recipient = await db.scalar(select(User).where(User.id == application.student_id))
+        if recipient:
+            try:
+                from app.api.v1.ws import manager
+                await manager.send_personal_message(
+                    recipient.id,
+                    {
+                        "type": "application_status_updated",
+                        "application_id": application.id,
+                        "status": data.status,
+                        "internship_id": application.internship_id,
+                        "title": title,
+                        "body": body,
+                    },
+                )
+            except Exception as exc:
+                logger.warning("Could not send application status notification for application %s: %s", application.id, exc)
     await db.commit(); await db.refresh(application)
     return await serialize(application, db)
 
@@ -959,10 +1068,12 @@ async def accept_offer(application_id: int, data: OfferAcceptance, user: student
         raise HTTPException(409, f"Cannot accept an offer while application is {application.status}")
 
     internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id))
+    if internship is None:
+        raise HTTPException(404, "Internship not found")
     student_profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
-    company = await db.scalar(select(User).where(User.id == internship.company_id)) if internship else None
+    company = await db.scalar(select(User).where(User.id == internship.company_id))
     student_name = student_profile.full_name if student_profile else user.email
-    internship_title = internship.title if internship else "the internship"
+    internship_title = _display_internship_title(internship.title)
     notification_title = "Offer accepted"
     notification_body = f"{student_name} accepted the offer for {internship_title}"
 
@@ -970,16 +1081,15 @@ async def accept_offer(application_id: int, data: OfferAcceptance, user: student
     application.offer_signed_name = data.signature_name.strip()
     application.offer_signature_mode = data.signature_mode
     application.offer_accepted_at = datetime.now(timezone.utc)
-    if internship:
-        await notify(
-            db,
-            internship.company_id,
-            "APPLICATION_STATUS",
-            notification_title,
-            notification_body,
-            email=True,
-            application_id=application.id,
-        )
+    await notify(
+        db,
+        internship.company_id,
+        "APPLICATION_STATUS",
+        notification_title,
+        notification_body,
+        email=True,
+        application_id=application.id,
+    )
     await db.commit()
     await db.refresh(application)
 

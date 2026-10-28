@@ -29,6 +29,7 @@ class ApplicationCreate(BaseModel):
 
 class ApplicationStatusUpdate(BaseModel):
     status: ApplicationStatus
+    reason: str | None = Field(default=None, max_length=300)
 
 
 class BulkApplicationStatusUpdate(BaseModel):
@@ -60,6 +61,9 @@ class ApplicationResponse(BaseModel):
     student_university: str | None = None
     student_skills: list[str] = []
     resume_id: int | None = None
+    has_resume: bool = False
+    resume_filename: str | None = None
+    resume_size: int | None = None
     internship_title: str | None = None
     internship_location: str | None = None
     internship_posted_at: datetime | None = None
@@ -72,6 +76,9 @@ class ApplicationResponse(BaseModel):
     has_company_response: bool = False
     response_time_hours: float | None = None
     match_score: float | None = None
+    match_explanation: str | None = None
+    match: dict | None = None
+    verified_badges: list[dict] = Field(default_factory=list)
 
 
 class ApplicationDashboard(BaseModel):

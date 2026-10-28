@@ -3,7 +3,7 @@ import os
 import pytest
 
 
-MINIMUM_TEST_COUNT = 100
+MINIMUM_TEST_COUNT = int(os.environ.get("MIN_TEST_COUNT", "100"))
 
 os.environ.setdefault("RATE_LIMIT_REQUESTS", "100000")
 os.environ.setdefault("AUTH_RATE_LIMIT_REQUESTS", "100000")

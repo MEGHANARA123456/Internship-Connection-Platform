@@ -29,6 +29,8 @@ import { CardActionButton, CardActions } from '../components/ui/CardActions'
 import { StatusFilterMenu } from '../components/applications/StatusFilterMenu'
 import { GmailActionLink } from '../components/mail/GmailActionLink'
 import { routes } from '../lib/routes'
+import { confirmAction, showToast } from '../lib/feedback'
+import { parseGithubHandle, parseLeetCodeHandle } from '../lib/handles'
 import {
   Search,
   MapPin,
@@ -60,6 +62,46 @@ import {
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 
+const VERIFIED_BADGE_SKILL_TERMS: Record<string, string[]> = {
+  python: ['python', 'fastapi', 'django', 'flask', 'backend architecture'],
+  react: ['react', 'react.js', 'reactjs', 'frontend', 'front-end'],
+  sql: ['sql', 'postgresql', 'mysql', 'database design', 'database'],
+  dsa: ['dsa', 'data structures', 'algorithms'],
+  ai: ['machine learning', 'deep learning', 'artificial intelligence', 'ai', 'ml'],
+  devops: ['devops', 'docker', 'kubernetes', 'cloud', 'aws', 'azure'],
+  security: ['security', 'cybersecurity', 'web security', 'system design'],
+  typescript: ['typescript', 'javascript'],
+}
+
+function verifiedBadgeForProfileSkill(skill: string, badges: Array<{ topic: string; title: string; level: string }>) {
+  const normalized = skill.toLowerCase().replaceAll('_', ' ').replaceAll('-', ' ')
+  return badges.find((badge) => {
+    const terms = VERIFIED_BADGE_SKILL_TERMS[badge.topic] ?? [badge.topic.replaceAll('_', ' ').replaceAll('-', ' ')]
+    return terms.some((term) => term.length <= 3
+      ? new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(normalized)
+      : normalized.includes(term))
+  })
+}
+
+function assessmentTopicForSkill(skill: string): string | null {
+  const normalized = skill.toLowerCase().replaceAll('_', ' ').replaceAll('-', ' ')
+  return Object.entries(VERIFIED_BADGE_SKILL_TERMS).find(([, terms]) => terms.some((term) => (
+    term.length <= 3
+      ? new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(normalized)
+      : normalized.includes(term)
+  )))?.[0] ?? null
+}
+
+function readNormalizedHandle(key: string, parse: (value: string) => string | null): string {
+  const stored = localStorage.getItem(key) || ''
+  const normalized = stored ? parse(stored) : null
+  if (stored !== (normalized || '')) {
+    if (normalized) localStorage.setItem(key, normalized)
+    else localStorage.removeItem(key)
+  }
+  return normalized || ''
+}
+
 // --- 1. Opportunities Page (Browse Internships) ---
 
 export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' | 'saved' }) {
@@ -70,6 +112,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
 
   // Filters state with initial query params from URL
   const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || searchParams.get('search') || '')
+  const [debouncedSearch, setDebouncedSearch] = useState(searchTerm)
   const [location, setLocation] = useState(searchParams.get('location') || '')
   const [industry, setIndustry] = useState(searchParams.get('industry') || '')
   const [workMode, setWorkMode] = useState(searchParams.get('work_mode') || '')
@@ -105,7 +148,6 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
   const [total, setTotal] = useState(0)
   const [applications, setApplications] = useState<any[]>([])
   const [applicationsLoaded, setApplicationsLoaded] = useState(false)
-  const applicationsRequestInFlight = useRef(false)
   const [applicationsLoading, setApplicationsLoading] = useState(false)
   const [applicationsError, setApplicationsError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -129,22 +171,31 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
     }
   }, [selectedJob?.company_id])
 
+  const parseInternshipsPayload = (payload: unknown): any[] => {
+    if (Array.isArray(payload)) return payload
+    if (payload && typeof payload === 'object' && Array.isArray((payload as { items?: unknown }).items)) {
+      return (payload as { items: any[] }).items
+    }
+    return []
+  }
+
   const fetchInternships = async () => {
     if (activeTab === 'applied') {
-      if (applicationsLoaded || applicationsRequestInFlight.current) return
-      applicationsRequestInFlight.current = true
       setApplicationsLoading(true)
       setApplicationsError(null)
       try {
-        const res = await api.get('/applications/student')
+        const params = new URLSearchParams()
+        if (debouncedSearch.trim()) params.set('search', debouncedSearch.trim())
+        const query = params.toString()
+        const res = await api.get(query ? `/applications/student?${query}` : '/applications/student')
         const items = Array.isArray(res.data?.applications) ? res.data.applications : []
         setApplications(items)
+        setTotal(res.data?.total ?? items.length)
         setApplicationsLoaded(true)
       } catch (err) {
         console.error('Failed to fetch applications:', err)
         setApplicationsError('Unable to load your applications. Please try again.')
       } finally {
-        applicationsRequestInFlight.current = false
         setApplicationsLoading(false)
       }
       return
@@ -155,7 +206,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
     try {
       if (activeTab === 'saved') {
         const res = await api.get('/internships/saved')
-        const items = res.data || []
+        const items = parseInternshipsPayload(res.data)
         setInternships(items)
         setTotal(items.length)
       } else {
@@ -165,13 +216,16 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
         if (workMode) params.append('work_mode', workMode)
         if (minStipend) params.append('min_stipend', minStipend)
         if (skills) params.append('skills', skills)
+        if (debouncedSearch.trim()) params.append('search', debouncedSearch.trim())
         if (sortBy === 'match') params.append('sort_by', 'match')
         params.append('page', page.toString())
         params.append('page_size', '10')
 
         const res = await api.get(`/internships?${params.toString()}`)
-        setInternships(res.data.items || [])
-        setTotal(res.data.total || 0)
+        const items = parseInternshipsPayload(res.data)
+        const total = Number((res.data && typeof res.data === 'object' && 'total' in res.data ? (res.data as { total?: number }).total : 0) ?? 0)
+        setInternships(items)
+        setTotal(total || items.length)
       }
     } catch (err) {
       console.error('Failed to fetch internships:', err)
@@ -182,8 +236,86 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
   }
 
   useEffect(() => {
-    fetchInternships()
-  }, [page, location, industry, workMode, minStipend, skills, activeTab, sortBy])
+    const timeout = window.setTimeout(() => setDebouncedSearch(searchTerm.trim()), 300)
+    return () => window.clearTimeout(timeout)
+  }, [searchTerm])
+
+  const requestIdRef = useRef(0)
+
+  useEffect(() => {
+    const requestId = ++requestIdRef.current
+    const run = async () => {
+      if (activeTab === 'applied') {
+        setApplicationsLoading(true)
+        setApplicationsError(null)
+        try {
+          const params = new URLSearchParams()
+          if (debouncedSearch) params.set('search', debouncedSearch)
+          const query = params.toString()
+          const res = await api.get(query ? `/applications/student?${query}` : '/applications/student')
+          if (requestId !== requestIdRef.current) return
+          const items = Array.isArray(res.data?.applications) ? res.data.applications : []
+          setApplications(items)
+          setTotal(res.data?.total ?? items.length)
+          setApplicationsLoaded(true)
+        } catch (err) {
+          if (requestId !== requestIdRef.current) return
+          console.error('Failed to fetch applications:', err)
+          setApplicationsError('Unable to load your applications. Please try again.')
+        } finally {
+          if (requestId === requestIdRef.current) setApplicationsLoading(false)
+        }
+        return
+      }
+
+      setLoading(true)
+      setError(null)
+      try {
+        if (activeTab === 'saved') {
+          const params = new URLSearchParams()
+          if (debouncedSearch) params.set('search', debouncedSearch)
+          if (location) params.set('location', location)
+          if (industry) params.set('industry', industry)
+          if (workMode) params.set('work_mode', workMode)
+          if (minStipend) params.set('min_stipend', minStipend)
+          if (skills) params.set('skills', skills)
+          const query = params.toString()
+          const res = await api.get(query ? `/internships/saved?${query}` : '/internships/saved')
+          if (requestId !== requestIdRef.current) return
+          const items = parseInternshipsPayload(res.data)
+          setInternships(items)
+          setTotal(items.length)
+        } else {
+          const params = new URLSearchParams()
+          if (location) params.append('location', location)
+          if (industry) params.append('industry', industry)
+          if (workMode) params.append('work_mode', workMode)
+          if (minStipend) params.append('min_stipend', minStipend)
+          if (skills) params.append('skills', skills)
+          if (debouncedSearch) params.append('search', debouncedSearch)
+          if (sortBy === 'match') params.append('sort_by', 'match')
+          params.append('page', page.toString())
+          params.append('page_size', '10')
+          const res = await api.get(`/internships?${params.toString()}`)
+          if (requestId !== requestIdRef.current) return
+          const items = parseInternshipsPayload(res.data)
+          const total = Number((res.data && typeof res.data === 'object' && 'total' in res.data ? (res.data as { total?: number }).total : 0) ?? 0)
+          setInternships(items)
+          setTotal(total || items.length)
+        }
+      } catch (err) {
+        if (requestId !== requestIdRef.current) return
+        console.error('Failed to fetch internships:', err)
+        setError('Failed to fetch internships. Please check your connection and try again.')
+      } finally {
+        if (requestId === requestIdRef.current) setLoading(false)
+      }
+    }
+    void run()
+    return () => {
+      requestIdRef.current += 1
+    }
+  }, [page, location, industry, workMode, minStipend, skills, activeTab, sortBy, debouncedSearch])
 
   const chooseOpportunityTab = (tab: 'all' | 'saved' | 'applied') => {
     setActiveTab(tab)
@@ -200,7 +332,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
       return
     }
     if (session.role !== 'STUDENT') {
-      alert('Only students can bookmark internships.')
+      showToast('Only students can bookmark internships.', 'error')
       return
     }
 
@@ -251,10 +383,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
     }
   }, [id, internships])
 
-  // Filter client-side by keyword search if user typed in title
-  const displayedJobs = internships.filter((job) =>
-    searchTerm ? job.title.toLowerCase().includes(searchTerm.toLowerCase()) : true
-  )
+  const displayedJobs = Array.isArray(internships) ? internships : []
 
   const handleApplyClick = (job: any) => {
     if (!session) {
@@ -262,7 +391,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
       return
     }
     if (session.role !== 'STUDENT') {
-      alert('Only student accounts can apply for internships.')
+      showToast('Only student accounts can apply for internships.', 'error')
       return
     }
     setApplyModalJob(job)
@@ -416,8 +545,21 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
 
       {/* Filter Toolbar */}
       {activeTab === 'applied' ? (
-        <div className="mb-6 text-xs text-slate-500 dark:text-slate-400">
-          You have applied to <strong className="text-slate-900 dark:text-white">{applications.length}</strong> internships.
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <label className="relative block w-full sm:max-w-sm">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+            <input
+              type="search"
+              aria-label="Search applied internships"
+              placeholder="Search by title or company..."
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              className="h-10 w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+            />
+          </label>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Found <strong className="text-slate-900 dark:text-white">{total}</strong> {total === 1 ? 'opportunity' : 'opportunities'}
+          </p>
         </div>
       ) : (
       <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200/90 dark:border-slate-800 shadow-2xs mb-6 space-y-3">
@@ -427,10 +569,10 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
             <input
               type="text"
-              placeholder="Search by title..."
+              placeholder="Search by title or company..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              onChange={(e) => { setSearchTerm(e.target.value); setPage(1) }}
+              className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />
           </div>
 
@@ -474,7 +616,9 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
 
         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs text-slate-500">
           <span>
-            Found <strong className="text-slate-900">{total}</strong> opportunities
+            {activeTab === 'all' && total > internships.length
+              ? <>Showing <strong className="text-slate-900 dark:text-white">{internships.length}</strong> of <strong className="text-slate-900 dark:text-white">{total}</strong> opportunities</>
+              : <>Found <strong className="text-slate-900 dark:text-white">{total}</strong> {total === 1 ? 'opportunity' : 'opportunities'}</>}
           </span>
           {(location || industry || workMode || minStipend || skills || searchTerm || sortBy !== 'newest') && (
             <button
@@ -604,18 +748,32 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                     <Badge status={job.work_mode}>{job.work_mode}</Badge>
                     <Badge variant="slate">{job.industry}</Badge>
                     {job.match_score !== null && job.match_score !== undefined && (
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[11px] font-bold inline-flex items-center gap-1 ${
+                      <span title={[
+                        `Matched skills: ${(job.match?.matched ?? job.matched_skills ?? []).join(', ') || 'None'}`,
+                        `Missing skills: ${(job.match?.missing ?? []).join(', ') || 'None'}`,
+                        `Confidence: ${job.match?.confidence ?? 'unknown'}`,
+                        job.match_explanation,
+                      ].filter(Boolean).join('\n')} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${
                           job.match_score >= 80
-                            ? 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                            ? 'border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300'
                             : job.match_score >= 60
-                            ? 'bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
-                            : 'bg-indigo-100 dark:bg-indigo-950/70 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
-                        }`}
-                      >
+                              ? 'border-indigo-200 bg-indigo-100 text-indigo-800 dark:border-indigo-800 dark:bg-indigo-950/70 dark:text-indigo-300'
+                              : job.match_score >= 30
+                                ? 'border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950/70 dark:text-amber-300'
+                                : 'border-rose-200 bg-rose-100 text-rose-800 dark:border-rose-800 dark:bg-rose-950/70 dark:text-rose-300'
+                        }`}>
                         <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
                         {job.match_score}% Match
                       </span>
+                    )}
+                    {job.match?.reason === 'no_profile_data' && session?.role === 'STUDENT' && (
+                      <Link
+                        to={routes.studentProfile}
+                        onClick={(event) => event.stopPropagation()}
+                        className="text-xs font-medium text-indigo-700 underline underline-offset-2 dark:text-indigo-300"
+                      >
+                        Add skills or upload a resume to see your match
+                      </Link>
                     )}
                   </div>
 
@@ -627,6 +785,27 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                   <p className="text-xs text-slate-500 line-clamp-2 max-w-3xl leading-relaxed">
                     {job.description}
                   </p>
+                  {job.match_score != null && Array.isArray(job.skills) && (
+                    <div className="flex flex-wrap gap-2">
+                      {job.skills
+                        .filter((skill: string) => !(job.matched_skills || []).some((matched: string) => matched.toLowerCase() === skill.toLowerCase()))
+                        .flatMap((skill: string) => {
+                          const topic = assessmentTopicForSkill(skill)
+                          return topic ? [{ skill, topic }] : []
+                        })
+                        .slice(0, 3)
+                        .map(({ skill, topic }: { skill: string; topic: string }) => (
+                          <Link
+                            key={`${topic}-${skill}`}
+                            to={`${routes.studentProfile}?assessment=${encodeURIComponent(topic)}`}
+                            onClick={(event) => event.stopPropagation()}
+                            className="rounded-lg border border-indigo-200 px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-indigo-800 dark:text-indigo-300 dark:hover:bg-indigo-950/50"
+                          >
+                            Take assessment: {skill}
+                          </Link>
+                        ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="sm:text-right shrink-0 space-y-2">
@@ -1001,12 +1180,69 @@ function MiniApplicationTracker({ status, lastReachedStatus }: { status: string;
   )
 }
 
+function WithdrawApplicationDialog({
+  application,
+  loading,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  application: any | null
+  loading: boolean
+  error: string | null
+  onClose: () => void
+  onConfirm: (reason: string) => void
+}) {
+  const [reason, setReason] = useState('')
+  useEffect(() => { setReason('') }, [application?.id])
+  const title = application?.internship_title || application?.title || `Internship #${application?.internship_id}`
+  const company = application?.company_name || 'the employer'
+  return (
+    <Modal
+      isOpen={application !== null}
+      onClose={onClose}
+      title={`Withdraw your application for ${title} at ${company}?`}
+      description="This changes your application status immediately."
+    >
+      {application && (
+        <div className="space-y-4">
+          <div className="rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800">
+            <p className="text-slate-600 dark:text-slate-300">
+              Applied {application.created_at || application.applied_at ? new Date(application.created_at || application.applied_at).toLocaleDateString() : 'date unavailable'}
+            </p>
+            <p className="mt-1 text-slate-600 dark:text-slate-300">Current status: <strong>{String(application.status).replaceAll('_', ' ')}</strong></p>
+          </div>
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            You can apply to this role again after withdrawing because the unique-application rule allows a withdrawn application to be reused. The role must still be open and you must meet its eligibility requirements.
+          </p>
+          <Textarea
+            label="Optional reason"
+            value={reason}
+            onChange={(event) => setReason(event.target.value.slice(0, 300))}
+            maxLength={300}
+            rows={3}
+            placeholder="Share a brief reason (optional)"
+          />
+          <p className="text-right text-xs text-slate-500">{reason.length}/300</p>
+          {error && <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">{error}</p>}
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end dark:border-slate-700">
+            <Button variant="outline" disabled={loading} onClick={onClose}>Cancel</Button>
+            <Button variant="danger" isLoading={loading} onClick={() => onConfirm(reason.trim())}>Withdraw application</Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
 export function ApplicationsPage() {
   const navigate = useNavigate()
   const [applications, setApplications] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [withdrawingId, setWithdrawingId] = useState<number | null>(null)
+  const [withdrawTarget, setWithdrawTarget] = useState<any | null>(null)
+  const [withdrawError, setWithdrawError] = useState<string | null>(null)
   const [selectedOfferApp, setSelectedOfferApp] = useState<any | null>(null)
   const [selectedReviewApp, setSelectedReviewApp] = useState<any | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
@@ -1129,14 +1365,20 @@ export function ApplicationsPage() {
     requestedSort === 'match' ? 'Highest match score' : requestedSort === 'response_time' ? 'Response time' : null,
   ].filter(Boolean)
 
-  const handleWithdraw = async (appId: number) => {
-    if (!confirm('Are you sure you want to withdraw this application? This cannot be undone.')) return
-    setWithdrawingId(appId)
+  const handleWithdraw = async (reason: string) => {
+    const application = withdrawTarget
+    if (!application) return
+    setWithdrawingId(application.id)
+    setWithdrawError(null)
     try {
-      await api.patch(`/applications/${appId}/withdraw`)
-      fetchApplications()
-    } catch {
-      alert('Failed to withdraw application.')
+      await api.patch(`/applications/${application.id}/withdraw`, { reason })
+      setApplications((current) => current.map((item) => item.id === application.id
+        ? { ...item, status: 'WITHDRAWN' }
+        : item))
+      setWithdrawTarget(null)
+      showToast(`Your application for ${application.internship_title || `Internship #${application.internship_id}`} at ${application.company_name} has been withdrawn`, 'success')
+    } catch (requestError: any) {
+      setWithdrawError(requestError.response?.data?.detail || 'Unable to withdraw this application. Please try again.')
     } finally {
       setWithdrawingId(null)
     }
@@ -1302,7 +1544,7 @@ export function ApplicationsPage() {
                       title={canWithdraw ? 'Withdraw this application' : `Withdrawal is unavailable for ${app.status.toLowerCase().replaceAll('_', ' ')} applications`}
                       disabled={!canWithdraw}
                       isLoading={withdrawingId === app.id}
-                      onClick={() => handleWithdraw(app.id)}
+                      onClick={() => { setWithdrawError(null); setWithdrawTarget(app) }}
                     >
                       Withdraw
                     </CardActionButton>
@@ -1317,6 +1559,14 @@ export function ApplicationsPage() {
       {!loading && !error && (
         <PaginationControls currentPage={page} totalPages={totalPages} onPageChange={setPage} />
       )}
+
+      <WithdrawApplicationDialog
+        application={withdrawTarget}
+        loading={withdrawingId !== null}
+        error={withdrawError}
+        onClose={() => { if (withdrawingId === null) setWithdrawTarget(null) }}
+        onConfirm={(reason) => void handleWithdraw(reason)}
+      />
 
       {/* Offer Letter & Digital E-Signature Modal */}
       {selectedOfferApp && (
@@ -1357,6 +1607,8 @@ export function ApplicationTimelinePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [withdrawing, setWithdrawing] = useState(false)
+  const [withdrawTarget, setWithdrawTarget] = useState<any | null>(null)
+  const [withdrawError, setWithdrawError] = useState<string | null>(null)
   const [offerApp, setOfferApp] = useState<any | null>(null)
 
   const fetchTimeline = useCallback(async () => {
@@ -1380,14 +1632,25 @@ export function ApplicationTimelinePage() {
   const summary = timeline?.summary || timeline?.application || {}
   const status = summary.status || ''
   const canWithdraw = ['APPLIED', 'UNDER_REVIEW', 'SHORTLISTED'].includes(status)
-  const handleWithdraw = async () => {
-    if (!id || !canWithdraw || !confirm('Are you sure you want to withdraw this application? This cannot be undone.')) return
+  const handleWithdraw = async (reason: string) => {
+    if (!id || !canWithdraw) return
     setWithdrawing(true)
+    setWithdrawError(null)
     try {
-      await api.patch(`/applications/${id}/withdraw`)
-      await fetchTimeline()
-    } catch {
-      alert('Failed to withdraw application.')
+      await api.patch(`/applications/${id}/withdraw`, { reason })
+      const withdrawnAt = new Date().toISOString()
+      setTimeline((current: any) => current ? {
+        ...current,
+        summary: { ...current.summary, status: 'WITHDRAWN' },
+        steps: [
+          ...(current.steps || []).filter((step: any) => step.key !== 'WITHDRAWN'),
+          { key: 'WITHDRAWN', label: 'Withdrawn', state: 'failed', timestamp: withdrawnAt, description: 'You withdrew this application.' },
+        ],
+      } : current)
+      setWithdrawTarget(null)
+      showToast(`Your application for ${summary.title || summary.internship_title} at ${summary.company_name} has been withdrawn`, 'success')
+    } catch (requestError: any) {
+      setWithdrawError(requestError.response?.data?.detail || 'Unable to withdraw this application. Please try again.')
     } finally {
       setWithdrawing(false)
     }
@@ -1417,7 +1680,7 @@ export function ApplicationTimelinePage() {
             </div>
             <div className="mt-5 flex flex-wrap gap-2">
               <Link to={routes.messages()}><Button variant="outline" size="sm" leftIcon={<MessageSquare className="h-4 w-4" />}>Message Recruiter</Button></Link>
-              <Button variant="danger" size="sm" disabled={!canWithdraw || withdrawing} isLoading={withdrawing} onClick={() => void handleWithdraw()} title={!canWithdraw ? `Withdrawal is unavailable for ${status.toLowerCase().replaceAll('_', ' ')} applications` : 'Withdraw this application'}>
+              <Button variant="danger" size="sm" disabled={!canWithdraw || withdrawing} onClick={() => { setWithdrawError(null); setWithdrawTarget(summary) }} title={!canWithdraw ? `Withdrawal is unavailable for ${status.toLowerCase().replaceAll('_', ' ')} applications` : 'Withdraw this application'}>
                 Withdraw
               </Button>
               {['SELECTED', 'ACCEPTED'].includes(status) && (
@@ -1427,6 +1690,13 @@ export function ApplicationTimelinePage() {
               )}
             </div>
           </Card>
+          <WithdrawApplicationDialog
+            application={withdrawTarget}
+            loading={withdrawing}
+            error={withdrawError}
+            onClose={() => { if (!withdrawing) setWithdrawTarget(null) }}
+            onConfirm={(reason) => void handleWithdraw(reason)}
+          />
 
           {summary.internship_status === 'CLOSED' && !['REJECTED', 'WITHDRAWN', 'ACCEPTED'].includes(status) && (
             <div role="status" className="rounded-xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
@@ -1522,6 +1792,8 @@ const profileSchema = z.object({
 
 export function StudentProfilePage() {
   const session = useAuthStore((state) => state.session)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedAssessmentTopic = searchParams.get('assessment')
   const identityKey = `${session?.userId ?? ''}:${session?.email?.trim().toLowerCase() ?? ''}`
   const previousIdentityRef = useRef(identityKey)
   const [profileLoading, setProfileLoading] = useState(true)
@@ -1550,15 +1822,15 @@ export function StudentProfilePage() {
         setTimeout(() => setParseSuccessMsg(''), 5000)
       }
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Unable to parse resume. Please ensure a valid PDF is uploaded.')
+      showToast(err.response?.data?.detail || 'Unable to parse resume. Please ensure a valid PDF is uploaded.', 'error')
     } finally {
       setIsParsingResume(false)
     }
   }
 
   // Developer Social Proof & Badges State
-  const [githubHandle, setGithubHandle] = useState(() => localStorage.getItem('student_github_handle') || '')
-  const [leetcodeHandle, setLeetcodeHandle] = useState(() => localStorage.getItem('student_leetcode_handle') || '')
+  const [githubHandle, setGithubHandle] = useState(() => readNormalizedHandle('student_github_handle', parseGithubHandle))
+  const [leetcodeHandle, setLeetcodeHandle] = useState(() => readNormalizedHandle('student_leetcode_handle', parseLeetCodeHandle))
 
   const [editingHandles, setEditingHandles] = useState(false)
   const [tempGithub, setTempGithub] = useState(githubHandle)
@@ -1573,63 +1845,112 @@ export function StudentProfilePage() {
     bio: string
     html_url: string
   } | null>(null)
+  const [githubDataHandle, setGithubDataHandle] = useState('')
   const [githubLoading, setGithubLoading] = useState(false)
-  const [githubError, setGithubError] = useState<string | null>(null)
+  const [githubError, setGithubError] = useState<'not-found' | 'rate-limited' | 'network' | null>(null)
+  const [githubRetry, setGithubRetry] = useState(0)
 
   useEffect(() => {
-    if (!githubHandle.trim()) {
+    const handle = parseGithubHandle(githubHandle)
+    if (!handle) {
       setGithubData(null)
+      setGithubDataHandle('')
       setGithubError(null)
+      setGithubLoading(false)
       return
     }
-    let isMounted = true
+    const controller = new AbortController()
+    const cacheKey = `student-github-profile:${session?.userId ?? session?.email?.trim().toLowerCase() ?? 'anonymous'}:${handle.toLowerCase()}`
+    let cached: string | null = null
+    try {
+      cached = sessionStorage.getItem(cacheKey)
+    } catch (error) {
+      console.error('Unable to read cached GitHub profile data.', error)
+    }
+    if (cached) {
+      try {
+        const entry = JSON.parse(cached) as { expiresAt: number; data: typeof githubData }
+        if (entry.expiresAt > Date.now() && entry.data) {
+          setGithubData(entry.data)
+          setGithubDataHandle(handle)
+          setGithubError(null)
+          setGithubLoading(false)
+          return () => controller.abort()
+        }
+        sessionStorage.removeItem(cacheKey)
+      } catch {
+        sessionStorage.removeItem(cacheKey)
+      }
+    }
     setGithubLoading(true)
     setGithubError(null)
+    setGithubData(null)
+    setGithubDataHandle('')
 
-    fetch(`https://api.github.com/users/${encodeURIComponent(githubHandle.trim())}`)
+    fetch(`https://api.github.com/users/${encodeURIComponent(handle)}`, { signal: controller.signal })
       .then(async (res) => {
-        if (!res.ok) throw new Error('User not found')
+        if (!res.ok) {
+          const error = new Error(String(res.status))
+          throw error
+        }
         return res.json()
       })
       .then((data) => {
-        if (isMounted) {
-          setGithubData({
-            public_repos: data.public_repos ?? 0,
-            followers: data.followers ?? 0,
-            avatar_url: data.avatar_url,
-            name: data.name || data.login,
-            bio: data.bio || '',
-            html_url: data.html_url,
-          })
+        const profile = {
+          public_repos: data.public_repos ?? 0,
+          followers: data.followers ?? 0,
+          avatar_url: data.avatar_url,
+          name: data.name || data.login,
+          bio: data.bio || '',
+          html_url: data.html_url,
         }
+        try {
+          sessionStorage.setItem(cacheKey, JSON.stringify({ expiresAt: Date.now() + 10 * 60 * 1000, data: profile }))
+        } catch (error) {
+          console.error('Unable to cache GitHub profile data.', error)
+        }
+        setGithubData(profile)
+        setGithubDataHandle(handle)
       })
-      .catch(() => {
-        if (isMounted) {
-          setGithubError('GitHub profile not found')
-          setGithubData(null)
-        }
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return
+        const status = error instanceof Error ? Number(error.message) : 0
+        setGithubError(status === 404 ? 'not-found' : status === 403 || status === 429 ? 'rate-limited' : 'network')
+        setGithubData(null)
+        setGithubDataHandle('')
       })
       .finally(() => {
-        if (isMounted) setGithubLoading(false)
+        if (!controller.signal.aborted) setGithubLoading(false)
       })
 
-    return () => {
-      isMounted = false
-    }
-  }, [githubHandle])
+    return () => controller.abort()
+  }, [githubHandle, githubRetry, session?.userId, session?.email])
 
-  const [verifiedBadges, setVerifiedBadges] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem('student_verified_badges')
-      return saved ? JSON.parse(saved) : []
-    } catch {
-      return []
-    }
+  const [verifiedBadges, setVerifiedBadges] = useState<any[]>([])
+  const [skillAttempts, setSkillAttempts] = useState<any[]>([])
+  const [skillError, setSkillError] = useState('')
+  const [showLegacyBadgesNotice] = useState(() => {
+    const noticeKey = 'student_skill_badge_migration_notice_v1'
+    if (typeof window === 'undefined' || localStorage.getItem(noticeKey) === 'shown') return false
+    if (localStorage.getItem('student_skill_badges_migrated_v1') !== 'true') return false
+    localStorage.setItem(noticeKey, 'shown')
+    return true
   })
 
   const [isQuizModalOpen, setIsQuizModalOpen] = useState(false)
+  const [quizInitialTopic, setQuizInitialTopic] = useState<string | null>(requestedAssessmentTopic)
   const [isResumeEditorOpen, setIsResumeEditorOpen] = useState(false)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(session?.avatar_url || null)
+
+  useEffect(() => {
+    if (!requestedAssessmentTopic) return
+    setQuizInitialTopic(requestedAssessmentTopic)
+    setIsQuizModalOpen(true)
+    setSearchParams((current) => {
+      current.delete('assessment')
+      return current
+    }, { replace: true })
+  }, [requestedAssessmentTopic, setSearchParams])
 
   const {
     register,
@@ -1722,6 +2043,32 @@ export function StudentProfilePage() {
     if (session?.userId != null) {
       loadProfile()
       loadResume()
+      const requestedIdentity = identityKey
+      void api.get('/skills/badges')
+        .then(({ data }) => {
+          const currentSession = useAuthStore.getState().session
+          const currentIdentity = `${currentSession?.userId ?? ''}:${currentSession?.email?.trim().toLowerCase() ?? ''}`
+          if (currentIdentity === requestedIdentity) {
+            setVerifiedBadges(Array.isArray(data) ? data.filter((badge: any) => badge.valid) : [])
+            setSkillError('')
+          }
+        })
+        .catch((error: unknown) => {
+          console.error('Unable to load verified skill badges.', error)
+          setSkillError('Verified skill badges could not be loaded.')
+        })
+      void api.get('/skills/attempts')
+        .then(({ data }) => {
+          const currentSession = useAuthStore.getState().session
+          const currentIdentity = `${currentSession?.userId ?? ''}:${currentSession?.email?.trim().toLowerCase() ?? ''}`
+          if (currentIdentity === requestedIdentity) {
+            setSkillAttempts(Array.isArray(data) ? data : [])
+          }
+        })
+        .catch((error: unknown) => {
+          console.error('Unable to load assessment history.', error)
+          setSkillError('Assessment history could not be loaded.')
+        })
     }
   }, [identityKey, loadProfile, loadResume, session?.userId, setValue])
 
@@ -1743,11 +2090,11 @@ export function StudentProfilePage() {
     const validExts = ['.pdf', '.doc', '.docx']
     const ext = '.' + file.name.split('.').pop()?.toLowerCase()
     if (!validExts.includes(ext)) {
-      alert('Unsupported file format. Please upload PDF, DOC, or DOCX.')
+      showToast('Unsupported file format. Please upload PDF, DOC, or DOCX.', 'error')
       return
     }
     if (file.size > 5 * 1024 * 1024) {
-      alert('File exceeds 5MB limit.')
+      showToast('File exceeds 5MB limit.', 'error')
       return
     }
 
@@ -1760,7 +2107,7 @@ export function StudentProfilePage() {
       })
       setResume(res.data)
     } catch {
-      alert('Failed to upload resume. Please try again.')
+      showToast('Failed to upload resume. Please try again.', 'error')
     } finally {
       setUploading(false)
     }
@@ -1768,39 +2115,74 @@ export function StudentProfilePage() {
 
   const handleDeleteResume = async () => {
     if (!resume) return
-    if (!confirm('Are you sure you want to delete your uploaded resume?')) return
+    if (!await confirmAction({
+      title: 'Delete uploaded resume?',
+      message: 'Are you sure you want to delete your uploaded resume?',
+      confirmLabel: 'Delete resume',
+      destructive: true,
+    })) return
     try {
       await api.delete(`/profiles/student/resume/${resume.id}`)
       setResume(null)
     } catch {
-      alert('Failed to delete resume.')
+      showToast('Failed to delete resume.', 'error')
     }
   }
 
   const handleDownloadResume = async () => {
     if (!resume) return
     try {
-      await downloadAuthenticatedFile(`/profiles/resume/${resume.id}/download`, resume.original_filename || 'resume.pdf')
-    } catch {
-      alert('Failed to download resume.')
+      const filename = await downloadAuthenticatedFile(`/profiles/resume/${resume.id}/download`, resume.original_filename || 'resume.pdf')
+      showToast(`Resume downloaded: ${filename}`, 'success')
+    } catch (requestError: any) {
+      const status = requestError.response?.status
+      showToast(status === 404
+        ? 'Resume not uploaded by the student'
+        : status === 403
+          ? "You don't have access to this resume"
+          : "Couldn't download the resume, please try again", 'error')
     }
   }
 
   const handleSaveHandles = () => {
-    setGithubHandle(tempGithub.trim())
-    setLeetcodeHandle(tempLeetcode.trim())
-    localStorage.setItem('student_github_handle', tempGithub.trim())
-    localStorage.setItem('student_leetcode_handle', tempLeetcode.trim())
+    const normalizedGithub = tempGithub.trim() ? parseGithubHandle(tempGithub) : ''
+    const normalizedLeetcode = tempLeetcode.trim() ? parseLeetCodeHandle(tempLeetcode) : ''
+    if ((tempGithub.trim() && !normalizedGithub) || (tempLeetcode.trim() && !normalizedLeetcode)) return
+    setGithubHandle(normalizedGithub || '')
+    setLeetcodeHandle(normalizedLeetcode || '')
+    if (normalizedGithub) localStorage.setItem('student_github_handle', normalizedGithub)
+    else localStorage.removeItem('student_github_handle')
+    if (normalizedLeetcode) localStorage.setItem('student_leetcode_handle', normalizedLeetcode)
+    else localStorage.removeItem('student_leetcode_handle')
     setEditingHandles(false)
   }
 
-  const handleBadgeAwarded = (badge: any) => {
-    setVerifiedBadges((prev) => {
-      const filtered = prev.filter((b) => b.topicId !== badge.topicId)
-      const updated = [...filtered, badge]
-      localStorage.setItem('student_verified_badges', JSON.stringify(updated))
-      return updated
-    })
+  const githubInputError = tempGithub.trim() && !parseGithubHandle(tempGithub)
+    ? 'Enter a valid GitHub username or profile link.'
+    : undefined
+  const leetcodeInputError = tempLeetcode.trim() && !parseLeetCodeHandle(tempLeetcode)
+    ? 'Enter a valid LeetCode username or profile link.'
+    : undefined
+  const githubProfileUrl = githubHandle ? `https://github.com/${encodeURIComponent(githubHandle)}` : ''
+  const githubProfileLoading = githubLoading || (
+    Boolean(parseGithubHandle(githubHandle)) &&
+    !githubError &&
+    githubDataHandle !== githubHandle
+  )
+
+  const handleBadgeAwarded = () => {
+    void api.get('/skills/badges')
+      .then(({ data }) => setVerifiedBadges(Array.isArray(data) ? data.filter((badge: any) => badge.valid) : []))
+      .catch((error: unknown) => {
+        console.error('Unable to refresh verified skill badges after an assessment.', error)
+        setSkillError('Your badge was earned, but the profile could not refresh it. Reload the page to retry.')
+      })
+    void api.get('/skills/attempts')
+      .then(({ data }) => setSkillAttempts(Array.isArray(data) ? data : []))
+      .catch((error: unknown) => {
+        console.error('Unable to refresh assessment history after an assessment.', error)
+        setSkillError('Your assessment history could not be refreshed.')
+      })
   }
 
   return (
@@ -1895,6 +2277,19 @@ export function StudentProfilePage() {
                     error={errors.skills?.message}
                     {...register('skills')}
                   />
+                  {(watch('skills') || '').split(',').map((skill) => skill.trim()).filter(Boolean).length > 0 && (
+                    <div aria-label="Profile skills and verified badges" className="flex flex-wrap gap-2">
+                      {(watch('skills') || '').split(',').map((skill) => skill.trim()).filter(Boolean).map((skill) => {
+                        const badge = verifiedBadgeForProfileSkill(skill, verifiedBadges)
+                        return (
+                          <span key={skill.toLowerCase()} className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                            {skill}
+                            {badge && <span title={badge.title} className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">{badge.level} verified</span>}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  )}
 
                   <Textarea
                     label="Bio / Career Objective"
@@ -1937,20 +2332,28 @@ export function StudentProfilePage() {
             <CardContent className="space-y-4">
               {editingHandles ? (
                 <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl space-y-3 border border-slate-200 dark:border-slate-700">
-                  <Input
-                    label="GitHub Username"
-                    placeholder="e.g. torvalds"
-                    value={tempGithub}
-                    onChange={(e) => setTempGithub(e.target.value)}
-                  />
-                  <Input
-                    label="LeetCode Username"
-                    placeholder="e.g. neetcode"
-                    value={tempLeetcode}
-                    onChange={(e) => setTempLeetcode(e.target.value)}
-                  />
+                  <div>
+                    <Input
+                      label="GitHub Username"
+                      placeholder="e.g. torvalds"
+                      value={tempGithub}
+                      onChange={(e) => setTempGithub(e.target.value)}
+                      error={githubInputError}
+                    />
+                    <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Paste your username or profile link</p>
+                  </div>
+                  <div>
+                    <Input
+                      label="LeetCode Username"
+                      placeholder="e.g. neetcode"
+                      value={tempLeetcode}
+                      onChange={(e) => setTempLeetcode(e.target.value)}
+                      error={leetcodeInputError}
+                    />
+                    <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Paste your username or profile link</p>
+                  </div>
                   <div className="flex justify-end gap-2 pt-1">
-                    <Button size="sm" variant="primary" onClick={handleSaveHandles}>
+                    <Button size="sm" variant="primary" onClick={handleSaveHandles} disabled={Boolean(githubInputError || leetcodeInputError)}>
                       Save Handles
                     </Button>
                   </div>
@@ -1969,19 +2372,36 @@ export function StudentProfilePage() {
                         Connect GitHub
                       </Button>
                     </div>
-                  ) : githubLoading ? (
-                    <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 animate-pulse space-y-3">
-                      <div className="h-6 bg-slate-200 dark:bg-slate-700 rounded w-2/3" />
-                      <div className="h-8 bg-slate-200 dark:bg-slate-700 rounded" />
+                  ) : githubProfileLoading ? (
+                    <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-3">
+                      <div className="animate-pulse space-y-3">
+                        <div className="h-6 bg-slate-200 dark:bg-slate-700 rounded w-2/3" />
+                        <div className="h-8 bg-slate-200 dark:bg-slate-700 rounded" />
+                      </div>
+                      <a href={githubProfileUrl} target="_blank" rel="noopener noreferrer" className="inline-flex text-[11px] font-semibold text-indigo-600 hover:underline dark:text-indigo-400">
+                        Open GitHub profile
+                      </a>
                     </div>
                   ) : githubError ? (
                     <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/40 dark:bg-rose-950/20 space-y-2 text-center flex flex-col justify-center items-center">
-                      <p className="text-xs text-rose-600 dark:text-rose-400">GitHub handle @{githubHandle} not found.</p>
-                      <Button size="sm" variant="outline" onClick={() => setEditingHandles(true)}>
-                        Edit Handle
-                      </Button>
+                      <p className="text-xs text-rose-600 dark:text-rose-400">
+                        {githubError === 'not-found'
+                          ? `GitHub user '${githubHandle}' not found`
+                          : githubError === 'rate-limited'
+                            ? 'GitHub is limiting requests right now. Try again in a few minutes.'
+                            : "Couldn't reach GitHub"}
+                      </p>
+                      {githubError === 'not-found' && (
+                        <Button size="sm" variant="outline" onClick={() => setEditingHandles(true)}>Edit handle</Button>
+                      )}
+                      {githubError === 'network' && (
+                        <Button size="sm" variant="outline" onClick={() => setGithubRetry((retry) => retry + 1)}>Retry</Button>
+                      )}
+                      <a href={githubProfileUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] font-semibold text-indigo-600 hover:underline dark:text-indigo-400">
+                        Open GitHub profile
+                      </a>
                     </div>
-                  ) : githubData ? (
+                  ) : githubData && githubDataHandle === githubHandle ? (
                     <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 min-w-0">
@@ -1994,19 +2414,23 @@ export function StudentProfilePage() {
                           )}
                           <div className="min-w-0">
                             <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">{githubData.name || 'GitHub'}</h4>
-                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">@{githubHandle}</p>
+                            <a href={githubProfileUrl} target="_blank" rel="noopener noreferrer" className="block truncate text-[11px] text-slate-500 hover:underline dark:text-slate-400">@{githubHandle}</a>
                           </div>
                         </div>
                         <a
-                          href={githubData.html_url || `https://github.com/${githubHandle}`}
+                          href={githubProfileUrl}
                           target="_blank"
-                          rel="noreferrer"
+                          rel="noopener noreferrer"
                           className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0"
-                          title="View on GitHub"
+                          title="Open GitHub profile"
+                          aria-label="Open GitHub profile"
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
                         </a>
                       </div>
+                      <a href={githubProfileUrl} target="_blank" rel="noopener noreferrer" className="inline-flex text-[11px] font-semibold text-indigo-600 hover:underline dark:text-indigo-400">
+                        Open GitHub profile
+                      </a>
 
                       <div className="grid grid-cols-2 gap-1 pt-1 border-t border-slate-200/60 dark:border-slate-700/60 text-center">
                         <div className="p-1.5">
@@ -2044,15 +2468,16 @@ export function StudentProfilePage() {
                           </div>
                           <div className="min-w-0">
                             <h4 className="text-xs font-bold text-slate-900 dark:text-white">LeetCode</h4>
-                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">@{leetcodeHandle}</p>
+                            <a href={`https://leetcode.com/u/${encodeURIComponent(leetcodeHandle)}/`} target="_blank" rel="noopener noreferrer" className="block truncate text-[11px] text-slate-500 hover:underline dark:text-slate-400">@{leetcodeHandle}</a>
                           </div>
                         </div>
                         <a
-                          href={`https://leetcode.com/${leetcodeHandle}`}
+                          href={`https://leetcode.com/u/${encodeURIComponent(leetcodeHandle)}/`}
                           target="_blank"
-                          rel="noreferrer"
+                          rel="noopener noreferrer"
                           className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0"
-                          title="View on LeetCode"
+                          title="Open LeetCode profile"
+                          aria-label="Open LeetCode profile"
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
                         </a>
@@ -2061,12 +2486,12 @@ export function StudentProfilePage() {
                       <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between text-xs px-1">
                         <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">Public Profile</span>
                         <a
-                          href={`https://leetcode.com/${leetcodeHandle}`}
+                          href={`https://leetcode.com/u/${encodeURIComponent(leetcodeHandle)}/`}
                           target="_blank"
-                          rel="noreferrer"
+                          rel="noopener noreferrer"
                           className="text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline"
                         >
-                          View Solved Problems &rarr;
+                          Open LeetCode profile &rarr;
                         </a>
                       </div>
                     </div>
@@ -2098,31 +2523,61 @@ export function StudentProfilePage() {
               </span>
             </CardHeader>
             <CardContent className="space-y-3">
+              <Link to={routes.skillHistory} className="inline-flex text-xs font-semibold text-indigo-700 hover:underline dark:text-indigo-300">
+                View score trends and full assessment history
+              </Link>
               {verifiedBadges.length === 0 ? (
                 <div className="text-center py-5 space-y-2">
                   <Award className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto" />
                   <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">No skill badges earned yet</p>
                   <p className="text-[11px] text-slate-400">
-                    Complete a timed technical assessment to verify competencies and earn gold badges on your profile.
+                    Pass a server-graded technical assessment to earn a verified badge. Badges expire after 12 months.
                   </p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {verifiedBadges.map((badge, idx) => (
+                  {verifiedBadges.map((badge) => (
                     <div
-                      key={idx}
+                      key={badge.id}
                       className="p-2.5 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-linear-to-r from-amber-50/60 to-indigo-50/60 dark:from-amber-950/30 dark:to-indigo-950/30 flex items-center justify-between"
                     >
                       <div className="flex items-center gap-2">
                         <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
                         <div>
                           <h5 className="text-xs font-bold text-slate-900 dark:text-white">{badge.title}</h5>
-                          <p className="text-[10px] text-slate-500 dark:text-slate-400">Score: {badge.score}% • {badge.date}</p>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                            {badge.level} • Score: {badge.score}% • Expires {new Date(badge.expires_at).toLocaleDateString()}
+                          </p>
                         </div>
                       </div>
                       <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300">
-                        PASS
+                        VERIFIED
                       </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {showLegacyBadgesNotice && (
+                <p role="status" className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                  Retake the assessment to earn a verified badge.
+                </p>
+              )}
+              {skillError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{skillError}</p>}
+
+              {skillAttempts.length > 0 && (
+                <div className="space-y-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+                  <h4 className="text-xs font-semibold text-slate-800 dark:text-slate-200">Assessment history</h4>
+                  {skillAttempts.map((attempt) => (
+                    <div key={attempt.id} className="flex items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400">
+                      {attempt.submitted_at ? (
+                        <Link to={routes.skillResult(attempt.id)} className="font-medium text-indigo-700 hover:underline dark:text-indigo-300">
+                          {attempt.topic} · {new Date(attempt.started_at).toLocaleDateString()}
+                        </Link>
+                      ) : (
+                        <span>{attempt.topic} · {new Date(attempt.started_at).toLocaleDateString()}</span>
+                      )}
+                      <span>{attempt.score == null ? 'Expired' : `${attempt.weighted_percentage ?? attempt.score}%${attempt.passed ? ' · Passed' : ' · Not passed'}`}</span>
                     </div>
                   ))}
                 </div>
@@ -2257,8 +2712,12 @@ export function StudentProfilePage() {
       {/* Skill Quiz Modal */}
       <SkillQuizModal
         isOpen={isQuizModalOpen}
-        onClose={() => setIsQuizModalOpen(false)}
+        onClose={() => {
+          setIsQuizModalOpen(false)
+          setQuizInitialTopic(null)
+        }}
         onBadgeAwarded={handleBadgeAwarded}
+        initialTopic={quizInitialTopic}
       />
 
       {/* In-App Resume Builder & Editor Modal */}

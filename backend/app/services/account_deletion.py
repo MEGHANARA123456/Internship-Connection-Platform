@@ -25,6 +25,8 @@ from app.models import (
     Report,
     Resume,
     SavedInternship,
+    SkillAttempt,
+    SkillBadge,
     StudentProfile,
     User,
     UserRole,
@@ -190,6 +192,8 @@ async def erase_user(
         )
         await db.execute(delete(EmailMessage).where(EmailMessage.user_id == target.id))
         await db.execute(delete(Notification).where(Notification.user_id == target.id))
+        await db.execute(delete(SkillBadge).where(SkillBadge.student_id == target.id))
+        await db.execute(delete(SkillAttempt).where(SkillAttempt.student_id == target.id))
         await db.execute(
             delete(CompanyDocument).where(CompanyDocument.company_id == target.id)
         )
@@ -204,8 +208,8 @@ async def erase_user(
                 AuditLog(
                     actor_id=actor.id if actor else None,
                     actor_email=actor.email if actor else None,
-                    action="ADMIN_USER_DELETED",
-                    target_type="USER",
+                    action="admin_user_deleted",
+                    target_type="user",
                     target_id=target.id,
                     metadata_={
                         "reason": audit_reason,

@@ -3,6 +3,7 @@
 # -----------------------------------------------------------------------------
 
 from datetime import datetime, timezone
+from html import escape
 import logging
 import re
 from typing import Annotated
@@ -336,6 +337,10 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
     student_profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == application.student_id))
     internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id))
     company_profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
+    company_user = await db.scalar(select(User).where(User.id == user.id))
+    company_name = (company_profile.company_name if company_profile else None) or (company_user.email if company_user else f"Company {user.id}")
+    internship_title = internship.title.replace("_", " ").replace("-", " ").title() if internship else "Internship"
+    interview_type = (data.interview_type or "Interview").replace("_", " ").title()
 
     if student:
         scheduled_at = data.scheduled_at
@@ -343,14 +348,14 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
         has_external_link = _is_external_url(data.meeting_link)
         meeting_details = f"Meeting link: {data.meeting_link}" if has_external_link else "Join via the InternSphere video room"
         meeting_link_html = (
-            f'<p style="margin: 4px 0; color: #1e293b;"><strong>Meeting link:</strong> <a href="{data.meeting_link}" style="color: #4338ca;">{data.meeting_link}</a></p>'
+            f'<p style="margin: 4px 0; color: #1e293b;"><strong>Meeting link:</strong> <a href="{escape(data.meeting_link or "", quote=True)}" style="color: #4338ca;">{escape(data.meeting_link or "")}</a></p>'
             if has_external_link
             else '<p style="margin: 4px 0; color: #1e293b;">Join via the InternSphere video room.</p>'
         )
         notification_title = "Interview invitation"
         notification_body = (
-            f"You have been invited to a {data.interview_type or 'Interview'} for {internship.title if internship else 'the role'} with "
-            f"{company_profile.company_name if company_profile else 'the hiring team'} on {formatted_time}. "
+            f"You have been invited to a {interview_type} for {internship_title} with "
+            f"{company_name} on {formatted_time}. "
             f"{meeting_details}."
         )
         html_body = f"""
@@ -359,14 +364,14 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
                         <div style="font-size: 12px; letter-spacing: 1.5px; color: #4338ca; font-weight: 700; text-transform: uppercase; margin-bottom: 16px;">InternSphere</div>
                         <h2 style="margin: 0 0 12px; font-size: 24px; color: #0f172a;">Interview Invitation</h2>
                         <p style="margin: 0 0 12px; color: #475569; line-height: 1.6;">
-                            You have been shortlisted for <strong>{internship.title if internship else 'the internship'}</strong> with <strong>{company_profile.company_name if company_profile else 'the hiring team'}</strong>.
+                            You have been shortlisted for <strong>{escape(internship_title)}</strong> with <strong>{escape(company_name)}</strong>.
                         </p>
                         <div style="background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 10px; padding: 16px; margin: 18px 0;">
                             <p style="margin: 0 0 8px; font-size: 13px; color: #4338ca; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">Details</p>
-                            <p style="margin: 4px 0; color: #1e293b;"><strong>Interview type:</strong> {data.interview_type or 'Interview'}</p>
-                            <p style="margin: 4px 0; color: #1e293b;"><strong>Scheduled:</strong> {formatted_time}</p>
+                            <p style="margin: 4px 0; color: #1e293b;"><strong>Interview type:</strong> {escape(interview_type)}</p>
+                            <p style="margin: 4px 0; color: #1e293b;"><strong>Scheduled:</strong> {escape(formatted_time)}</p>
                             {meeting_link_html}
-                            {data.notes and f"<p style='margin: 4px 0; color: #1e293b;'><strong>Notes:</strong> {data.notes}</p>"}
+                            {data.notes and f"<p style='margin: 4px 0; color: #1e293b;'><strong>Notes:</strong> {escape(data.notes)}</p>"}
                         </div>
                         <p style="margin: 0; color: #475569; line-height: 1.6;">Please join a few minutes early and have your resume and project notes ready for discussion.</p>
                     </div>
@@ -564,6 +569,8 @@ async def update_interview(interview_id: int, data: InterviewUpdate, user: parti
     if interview is None: raise HTTPException(404, "Interview not found")
     application = await db.scalar(select(Application).where(Application.id == interview.application_id))
     internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id)) if application else None
+    company_profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == internship.company_id)) if internship else None
+    company_user = await db.scalar(select(User).where(User.id == internship.company_id)) if internship else None
     if application is None or (user.id != application.student_id and user.id != internship.company_id): raise HTTPException(403, "Interview access denied")# type: ignore
     previous_status = interview.status
     is_cancelled_reschedule = previous_status == "CANCELLED" and data.status == "RESCHEDULED"
@@ -631,14 +638,15 @@ async def update_interview(interview_id: int, data: InterviewUpdate, user: parti
     if should_notify_change:
         title = "Interview rescheduled" if data.status == "RESCHEDULED" else "Interview cancelled"
         action = "rescheduled" if data.status == "RESCHEDULED" else "cancelled"
-        internship_title = internship.title if internship else "your internship"
+        internship_title = internship.title.replace("_", " ").replace("-", " ").title() if internship else "your internship"
+        company_name = (company_profile.company_name if company_profile else None) or (company_user.email if company_user else "Company")
         reason = data.change_reason.strip() if data.change_reason else ""
         await notify(
             db,
             application.student_id,
             f"INTERVIEW_{data.status}",
             title,
-            f"Your interview for {internship_title} has been {action}."
+            f"Your interview for {internship_title} at {company_name} has been {action}."
             + (f" Reason: {reason}" if reason else ""),
             application_id=application.id,
         )

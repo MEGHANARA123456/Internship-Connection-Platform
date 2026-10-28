@@ -23,9 +23,10 @@ export function useWebSocketChat(userId?: number) {
       authRefreshAttemptedRef.current = { userId, attempted: false }
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.hostname || 'localhost'
-    const wsUrl = `${protocol}//${host}:8010/api/v1/ws/chat/${userId}?token=${encodeURIComponent(accessToken)}`
+    const apiUrl = new URL(api.defaults.baseURL ?? window.location.origin)
+    const protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+    const apiPath = apiUrl.pathname.replace(/\/+$/, '')
+    const wsUrl = `${protocol}//${apiUrl.host}${apiPath}/ws/chat/${userId}?token=${encodeURIComponent(accessToken)}`
 
     let socket: WebSocket | null = null
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null

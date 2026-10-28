@@ -3,12 +3,12 @@
 services:
   # PostgreSQL database for the internship platform.
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-internship_platform}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-    ports: ["${DB_PORT:-5432}:5432"]
+    ports: ["${DB_PORT:-55432}:5432"]
     volumes: ["postgres_data:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-internship_platform}"]
@@ -19,11 +19,13 @@ services:
   # FastAPI backend service.
   # The backend Dockerfile runs Alembic migrations before the app starts.
   backend:
-    build: ./backend
+    build:
+      context: ..
+      dockerfile: doc/Dockerfile
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/internship_platform}
       SECRET_KEY: ${SECRET_KEY:-change-me-in-development}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5174}
       RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-300}
       RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
       AUTH_RATE_LIMIT_REQUESTS: ${AUTH_RATE_LIMIT_REQUESTS:-10}
@@ -34,7 +36,31 @@ services:
       MAX_RESUME_SIZE_MB: ${MAX_RESUME_SIZE_MB:-5}
       NOTIFY_EMAIL_ON_ROLE_CLOSE: ${NOTIFY_EMAIL_ON_ROLE_CLOSE:-false}
       RESUME_STORAGE_PATH: ${RESUME_STORAGE_PATH:-/var/lib/internship-platform/resumes}
-    ports: ["${BACKEND_PORT:-8000}:8000"]
+      CHATBOT_ENABLED: ${CHATBOT_ENABLED:-true}
+      CHATBOT_MODE: ${CHATBOT_MODE:-retrieval}
+      CHATBOT_PROVIDER: ${CHATBOT_PROVIDER:-anthropic}
+      CHATBOT_BASE_URL: ${CHATBOT_BASE_URL:-}
+      CHATBOT_API_KEY: ${CHATBOT_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CHATBOT_MODEL: ${CHATBOT_MODEL:-claude-haiku-5-5}
+      CHATBOT_ROUTER_MODEL: ${CHATBOT_ROUTER_MODEL:-claude-haiku-5-5}
+      CHATBOT_MAX_TOKENS: ${CHATBOT_MAX_TOKENS:-600}
+      CHATBOT_TEMPERATURE: ${CHATBOT_TEMPERATURE:-0.1}
+      CHATBOT_RETRIES: ${CHATBOT_RETRIES:-1}
+      CHATBOT_TOP_K: ${CHATBOT_TOP_K:-3}
+      CHATBOT_MIN_SCORE: ${CHATBOT_MIN_SCORE:-0.5}
+      CHATBOT_TIMEOUT_SECONDS: ${CHATBOT_TIMEOUT_SECONDS:-8}
+      CHATBOT_USER_PER_MINUTE: ${CHATBOT_USER_PER_MINUTE:-20}
+      CHATBOT_USER_PER_DAY: ${CHATBOT_USER_PER_DAY:-200}
+      CHATBOT_GUEST_PER_MINUTE: ${CHATBOT_GUEST_PER_MINUTE:-5}
+      RAG_ENABLED: ${RAG_ENABLED:-true}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-384}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      RAG_MIN_SCORE: ${RAG_MIN_SCORE:-0.55}
+      RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      KB_PATH: ${KB_PATH:-kb}
+    ports: ["${BACKEND_PORT:-8011}:8000"]
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')\""]
       interval: 10s
@@ -44,27 +70,33 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - ./backend:/app
+      - ../backend:/app
       - resume_storage:/var/lib/internship-platform/resumes
 
   # Mailpit is used to inspect outbound emails during development.
   mailpit:
     image: axllent/mailpit:latest
     ports:
-      - "8025:8025"
-      - "1025:1025"
+      - "${MAILPIT_WEB_PORT:-18025}:8025"
+      - "${MAILPIT_SMTP_PORT:-11025}:1025"
 
   # React frontend application.
   frontend:
     image: node:22-alpine
     working_dir: /app
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
     environment:
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8010/api/v1}
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8011/api/v1}
     volumes:
-      - ./frontend:/app
+      - ../frontend:/app
       - frontend_node_modules:/app/node_modules
-    ports: ["${FRONTEND_PORT:-5173}:5173"]
+    ports: ["${FRONTEND_PORT:-5174}:5173"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       backend:
         condition: service_healthy

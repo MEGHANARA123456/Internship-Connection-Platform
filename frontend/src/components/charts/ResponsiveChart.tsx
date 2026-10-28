@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChartLegend, type ChartLegendItem } from './ChartLegend'
-import { chartColorFor } from './chartColors'
+import { assignColors } from './chartColors'
 import { auditActionLabel } from '../../lib/auditActionLabels'
 
 interface ResponsiveChartProps {
@@ -84,6 +84,7 @@ export function ResponsiveBars({
 }) {
   const [active, setActive] = useState<number | null>(null)
   const visibleItems = items
+  const itemColors = assignColors(visibleItems.map((item) => item.label))
   const shortLabels = uniqueLabels(visibleItems, 22)
   const summary = items.map((item) => `${item.label}: ${item.value}${item.detail ? `, ${item.detail}` : ''}`).join('; ')
   const horizontal = orientation === 'horizontal'
@@ -104,7 +105,7 @@ export function ResponsiveBars({
         return (
           <g>
             {visibleItems.map((item, index) => {
-              const itemColor = chartColorFor(label)
+              const itemColor = itemColors[item.label]
               const intensity = 0.4 + 0.6 * item.value / max
               const isHighlighted = active === null || active === index
               const title = `${item.label}: ${item.value}${item.detail ? ` · ${item.detail}` : ''}`
@@ -164,12 +165,13 @@ export function ResponsiveDonut({
   const [hidden, setHidden] = useState<string[]>([])
   const [highlighted, setHighlighted] = useState<string | null>(null)
   const visibleItems = items.filter((item) => !hidden.includes(item.label))
+  const itemColors = assignColors(items.map((item) => item.label))
   const total = items.reduce((sum, item) => sum + item.value, 0)
   const summary = items.map((item) => `${item.label}: ${item.value}`).join('; ')
   const legendItems: ChartLegendItem[] = items.map((item) => ({
     id: item.label,
     label: item.label,
-    color: chartColorFor(item.label),
+    color: itemColors[item.label],
     value: item.value,
     percentage: total ? Math.round(item.value / total * 100) : 0,
     shape: 'circle',
@@ -191,11 +193,14 @@ export function ResponsiveDonut({
                 const length = (item.value / total) * ring
                 const dashOffset = offset
                 offset += length
-                const itemColor = chartColorFor(item.label)
+                const itemColor = itemColors[item.label]
                 return (
-                  <circle key={item.label} r={radius} fill="none" stroke={itemColor} opacity={highlighted === null || highlighted === item.label ? 1 : 0.25} strokeWidth="13" strokeDasharray={`${length} ${ring - length}`} strokeDashoffset={-dashOffset} transform="rotate(-90)" tabIndex={0} onMouseEnter={() => { setActive(index); setHighlighted(item.label) }} onMouseLeave={() => { setActive(null); setHighlighted(null) }} onFocus={() => { setActive(index); setHighlighted(item.label) }} onBlur={() => { setActive(null); setHighlighted(null) }} onClick={() => setActive(active === index ? null : index)}>
-                    <title>{`${item.label}: ${item.value}`}</title>
-                  </circle>
+                  <g key={item.label} opacity={highlighted === null || highlighted === item.label ? 1 : 0.25}>
+                    <circle r={radius} fill="none" stroke="#ffffff" className="dark:stroke-slate-900" strokeWidth="15" strokeDasharray={`${length} ${ring - length}`} strokeDashoffset={-dashOffset} transform="rotate(-90)" />
+                    <circle r={radius} fill="none" stroke={itemColor} strokeWidth="13" strokeDasharray={`${length} ${ring - length}`} strokeDashoffset={-dashOffset} transform="rotate(-90)" tabIndex={0} onMouseEnter={() => { setActive(index); setHighlighted(item.label) }} onMouseLeave={() => { setActive(null); setHighlighted(null) }} onFocus={() => { setActive(index); setHighlighted(item.label) }} onBlur={() => { setActive(null); setHighlighted(null) }} onClick={() => setActive(active === index ? null : index)}>
+                      <title>{`${item.label}: ${item.value}`}</title>
+                    </circle>
+                  </g>
                 )
               })}
               <text y="-1" textAnchor="middle" fontSize={Math.max(13, width * 0.08)} fontWeight="700" fill="currentColor" className="fill-slate-900 dark:fill-white">{active === null ? total : visibleItems[active]?.value}</text>
@@ -226,11 +231,12 @@ export function ResponsiveStackedBars({
   const [highlighted, setHighlighted] = useState<string | null>(null)
   const [activeRow, setActiveRow] = useState<number | null>(null)
   const visibleSeries = series.filter((item) => !hidden.includes(item.label))
+  const seriesColors = assignColors(series.map((item) => item.label))
   const seriesTotals = series.map((_, index) => items.reduce((sum, item) => sum + (item.values[index] ?? 0), 0))
   const legendItems: ChartLegendItem[] = series.map((item, index) => ({
     id: item.label,
     label: item.label,
-    color: chartColorFor(item.label),
+    color: seriesColors[item.label],
     value: seriesTotals[index],
     shape: 'square',
   }))
@@ -260,7 +266,7 @@ export function ResponsiveStackedBars({
                 const segmentWidth = (value / total) * plotWidth
                 const segmentX = x
                 x += segmentWidth
-                return segmentWidth > 0 ? <rect key={current.label} x={segmentX} y={y} width={segmentWidth} height={barHeight} fill={chartColorFor(current.label)} opacity={highlighted === null || highlighted === current.label ? 1 : 0.25}><title>{`${item.label} · ${current.label}: ${value}`}</title></rect> : null
+                return segmentWidth > 0 ? <rect key={current.label} x={segmentX} y={y} width={segmentWidth} height={barHeight} fill={seriesColors[current.label]} opacity={highlighted === null || highlighted === current.label ? 1 : 0.25}><title>{`${item.label} · ${current.label}: ${value}`}</title></rect> : null
               })}
             </g>
           })}</g>
@@ -287,10 +293,11 @@ export function ResponsiveLineChart({
   const [hidden, setHidden] = useState<string[]>([])
   const [highlighted, setHighlighted] = useState<string | null>(null)
   const visibleSeries = series.filter((line) => !hidden.includes(line.label))
+  const seriesColors = assignColors(series.map((line) => line.label))
   const legendItems: ChartLegendItem[] = series.map((line) => ({
     id: line.label,
     label: line.label,
-    color: chartColorFor(line.label),
+    color: seriesColors[line.label],
     shape: 'line',
   }))
   const summary = series.map((line) => `${line.label}: ${line.values.map((item) => `${item.label} ${item.value}`).join(', ')}`).join('; ')
@@ -318,7 +325,7 @@ export function ResponsiveLineChart({
               return <line key={index} x1={left} x2={width - right} y1={y} y2={y} stroke="#cbd5e1" strokeDasharray="3 4" className="dark:stroke-slate-700" />
             })}
             {visibleSeries.map((line, lineIndex) => {
-              const lineColor = chartColorFor(line.label)
+              const lineColor = seriesColors[line.label]
               const points = pointsFor(line.values)
               const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
               return <g key={line.label}>

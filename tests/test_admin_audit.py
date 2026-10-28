@@ -7,12 +7,15 @@ pattern used throughout the rest of the test suite.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.api.v1.dependencies import get_current_user, get_db
+from app.api.v1.dependencies import get_current_user, get_current_user_optional, get_db
+from app.chatbot.chatbot_config import ChatbotConfig
 from app.main import app
 from app.models import (
     Application,
@@ -25,6 +28,7 @@ from app.models import (
     UserRole,
 )
 from app.models.base import Base
+from app.services.chatbot_service import ChatbotService
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -400,3 +404,193 @@ async def test_get_company_postings(db_setup) -> None:
     assert by_id[300]["applicant_count"] == 2
     assert by_id[301]["applicant_count"] == 0
     assert by_id[300]["title"] == "Data Intern"
+
+
+@pytest.mark.anyio
+async def test_admin_insights_groups_every_audit_action_with_fallback_label(db_setup) -> None:
+    _, sessions = db_setup
+    admin = _make_admin()
+    async with sessions() as session:
+        session.add(admin)
+        await session.flush()
+        session.add_all([
+            AuditLog(
+                actor_id=admin.id, action="posting_approved",
+                target_type="posting", target_id=11,
+            ),
+            AuditLog(
+                actor_id=admin.id, action="company_verified",
+                target_type="company", target_id=22,
+            ),
+            AuditLog(
+                actor_id=admin.id, action="future_admin_action",
+                target_type="user", target_id=33,
+            ),
+        ])
+        await session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: admin
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/admin/insights?range=all")
+        volume_response = await client.get("/api/v1/analytics/admin/admin-action-volume?days=14")
+
+    assert response.status_code == 200
+    assert volume_response.status_code == 200
+    actions = response.json()["charts"]["admin_actions_by_type"]
+    expected_actions = {
+        "posting_approved": 1,
+        "company_verified": 1,
+        "future_admin_action": 1,
+    }
+    assert {row["action"]: row["count"] for row in actions} == expected_actions
+    assert {row["action"]: row["name"] for row in actions} == {
+        "posting_approved": "Postings approved",
+        "company_verified": "Companies verified",
+        "future_admin_action": "Future Admin Action",
+    }
+    assert {row["action"]: row["count"] for row in volume_response.json()} == expected_actions
+
+
+@pytest.mark.anyio
+async def test_admin_insights_action_categories_follow_selected_date_range(db_setup) -> None:
+    _, sessions = db_setup
+    admin = _make_admin()
+    async with sessions() as session:
+        session.add(admin)
+        await session.flush()
+        session.add(AuditLog(
+            actor_id=admin.id,
+            action="historical_company_verification",
+            target_type="company",
+            target_id=44,
+            created_at=datetime.now(timezone.utc) - timedelta(days=40),
+        ))
+        await session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: admin
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        all_time = await client.get("/api/v1/admin/insights?range=all")
+        recent = await client.get("/api/v1/admin/insights?range=30")
+
+    assert all_time.status_code == 200
+    assert recent.status_code == 200
+    assert {
+        row["action"]
+        for row in all_time.json()["charts"]["admin_actions_by_type"]
+    } == {"historical_company_verification"}
+    assert recent.json()["charts"]["admin_actions_by_type"] == []
+
+
+@pytest.mark.anyio
+async def test_admin_chatbot_reads_audit_records_but_student_cannot(db_setup, monkeypatch) -> None:
+    _, sessions = db_setup
+    admin = _make_admin()
+    student = _make_student()
+    async with sessions() as session:
+        session.add_all([admin, student])
+        await session.flush()
+        session.add(AuditLog(
+            actor_id=admin.id,
+            action="posting_approved",
+            target_type="posting",
+            target_id=77,
+            created_at=datetime(2026, 10, 28, 8, 15, tzinfo=timezone.utc),
+        ))
+        await session.commit()
+
+    import app.chatbot.router as chatbot_router
+
+    monkeypatch.setattr(
+        chatbot_router, "_service",
+        ChatbotService(config=ChatbotConfig(enabled=True)),
+    )
+    app.dependency_overrides[get_current_user_optional] = lambda: admin
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        admin_response = await client.post(
+            "/api/v1/chatbot/ask",
+            json={"message": "Explain recent audit events."},
+        )
+        app.dependency_overrides[get_current_user_optional] = lambda: student
+        student_response = await client.post(
+            "/api/v1/chatbot/ask",
+            json={"message": "Explain recent audit events."},
+        )
+
+    assert admin_response.status_code == 200
+    assert "Admin #1 recorded postings approved for posting #77" in admin_response.json()["answer"]
+    assert "Oct 28, 2026" in admin_response.json()["answer"]
+    assert student_response.status_code == 200
+    assert student_response.json()["refused"] is True
+    assert "posting #77" not in student_response.json()["answer"]
+
+
+@pytest.mark.anyio
+async def test_report_investigation_transition_is_audited(db_setup) -> None:
+    _, sessions = db_setup
+    admin = _make_admin()
+    student = _make_student()
+    report = Report(reporter_id=student.id, reason="Review this report", status="OPEN")
+    async with sessions() as session:
+        session.add_all([admin, student, report])
+        await session.commit()
+        report_id = report.id
+
+    app.dependency_overrides[get_current_user] = lambda: admin
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.patch(
+            f"/api/v1/admin/reports/{report_id}",
+            json={"status": "INVESTIGATING"},
+        )
+
+    assert response.status_code == 200
+    async with sessions() as session:
+        audit = await session.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "report_status_updated",
+                AuditLog.target_id == report_id,
+            )
+        )
+    assert audit is not None
+    assert audit.target_type == "report"
+
+
+@pytest.mark.anyio
+async def test_legacy_admin_review_route_writes_audit_record(db_setup) -> None:
+    _, sessions = db_setup
+    admin = _make_admin()
+    company = _make_company_user()
+    from datetime import date
+
+    internship = Internship(
+        id=120,
+        company_id=company.id,
+        title="Legacy Review Role",
+        description="Review route test",
+        location="Remote",
+        industry="Technology",
+        duration_months=3,
+        work_mode="REMOTE",
+        skills="Python",
+        deadline=date(2027, 1, 1),
+        status="PENDING_APPROVAL",
+    )
+    async with sessions() as session:
+        session.add_all([admin, company, internship])
+        await session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: admin
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/internships/{internship.id}/review?target=REJECTED&reason=Needs+changes"
+        )
+
+    assert response.status_code == 200
+    async with sessions() as session:
+        audit = await session.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "posting_rejected",
+                AuditLog.target_type == "posting",
+                AuditLog.target_id == internship.id,
+            )
+        )
+    assert audit is not None

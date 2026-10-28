@@ -1,3 +1,5 @@
+import asyncio
+import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -17,12 +19,33 @@ from app.models import RefreshToken, User, UserRole
 
 @pytest.mark.anyio
 async def test_real_postgres_login_roles_and_failure_paths() -> None:
-    get_settings.cache_clear()
-    settings = get_settings()
-    if make_url(settings.database_url).get_backend_name() != "postgresql":
+    database_url = (
+        os.getenv("TEST_POSTGRES_URL")
+        or os.getenv("DATABASE_URL")
+        or get_settings().database_url
+    )
+    if make_url(database_url).get_backend_name() != "postgresql":
         pytest.skip("This login regression test requires PostgreSQL, not SQLite.")
 
-    engine = create_async_engine(settings.database_url)
+    engine = create_async_engine(database_url)
+    connected = False
+
+    async def check_connection() -> None:
+        async with engine.connect():
+            pass
+
+    try:
+        await asyncio.wait_for(check_connection(), timeout=2)
+        connected = True
+    except Exception as exc:
+        await engine.dispose()
+        parsed_url = make_url(database_url)
+        pytest.skip(
+            f"PostgreSQL test database at {parsed_url.host}:{parsed_url.port or 5432} "
+            f"is unreachable within 2 seconds "
+            f"({type(exc).__name__}: {exc})."
+        )
+
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     suffix = uuid4().hex
     password = "Test-Login-Only-Password-42!"
@@ -135,11 +158,12 @@ async def test_real_postgres_login_roles_and_failure_paths() -> None:
             assert student_user is not None and student_user.first_login_at is not None
             assert company_user.first_login_at <= datetime.now(timezone.utc)
     finally:
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(previous_overrides)
-        async with sessions() as session:
-            ids = select(User.id).where(User.email.in_(emails.values()))
-            await session.execute(delete(RefreshToken).where(RefreshToken.user_id.in_(ids)))
-            await session.execute(delete(User).where(User.email.in_(emails.values())))
-            await session.commit()
-        await engine.dispose()
+        if connected:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(previous_overrides)
+            async with sessions() as session:
+                ids = select(User.id).where(User.email.in_(emails.values()))
+                await session.execute(delete(RefreshToken).where(RefreshToken.user_id.in_(ids)))
+                await session.execute(delete(User).where(User.email.in_(emails.values())))
+                await session.commit()
+            await engine.dispose()

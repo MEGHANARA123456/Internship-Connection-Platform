@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type DragEvent } from 'react'
+import { useCallback, useEffect, useState, type DragEvent, type KeyboardEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   BriefcaseBusiness,
@@ -20,6 +20,8 @@ import { Modal } from '../components/ui/Modal'
 import { TableSkeleton } from '../components/ui/LoadingSkeleton'
 import { Textarea } from '../components/ui/Textarea'
 import { DropdownSelect } from '../components/ui/DropdownSelect'
+import { showToast } from '../lib/feedback'
+import { confirmAction } from '../lib/feedback'
 
 interface CompanyApplicant {
   id: number
@@ -34,13 +36,143 @@ interface CompanyApplicant {
   allowed_actions: string[]
   created_at: string
   resume_id: number | null
+  has_resume?: boolean
+  resume_filename?: string | null
+  resume_size?: number | null
   match_score: number | null
+  match_explanation?: string | null
+  verified_badges?: Array<{ id: number; topic: string; title: string; level: string; score: number; expires_at: string }>
   cover_note?: string | null
 }
 
 interface CompanyInternship {
   id: number
   title: string
+}
+
+interface CandidateFiltersProps {
+  search: string
+  setSearch: (value: string) => void
+  internshipId: string
+  skills: string
+  setSkills: (value: string) => void
+  education: string
+  setEducation: (value: string) => void
+  verifiedSkill: string
+  setVerifiedSkill: (value: string) => void
+  sort: string
+  setSort: (value: string) => void
+  internships: CompanyInternship[]
+  updateFilter: (key: string, value: string) => void
+  applyFilters: () => void
+  resetFilters: () => void
+}
+
+function CandidateFilters({
+  search,
+  setSearch,
+  internshipId,
+  skills,
+  setSkills,
+  education,
+  setEducation,
+  verifiedSkill,
+  setVerifiedSkill,
+  sort,
+  setSort,
+  internships,
+  updateFilter,
+  applyFilters,
+  resetFilters,
+}: CandidateFiltersProps) {
+  const submitOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') applyFilters()
+  }
+
+  return (
+    <div
+      role="group"
+      aria-label="Candidate filters"
+      className="grid grid-cols-1 items-end gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-[repeat(5,minmax(0,1fr))_minmax(160px,1fr)_auto]"
+    >
+      <label className="relative min-w-0">
+        <span className="sr-only">Search candidate</span>
+        <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
+        <input
+          aria-label="Search candidate"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          onKeyDown={submitOnEnter}
+          placeholder="Search candidate"
+          className="h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm dark:border-slate-700 dark:bg-slate-800"
+        />
+      </label>
+      <div className="min-w-0">
+        <DropdownSelect
+          aria-label="Filter by internship"
+          value={internshipId}
+          onChange={(value) => updateFilter('internship', value)}
+          options={[
+            { label: 'All internships', value: '' },
+            ...internships.map((internship) => ({ label: internship.title, value: String(internship.id) })),
+          ]}
+        />
+      </div>
+      <label className="min-w-0">
+        <span className="sr-only">Filter by skills</span>
+        <input
+          aria-label="Filter by skills"
+          value={skills}
+          onChange={(event) => setSkills(event.target.value)}
+          onKeyDown={submitOnEnter}
+          placeholder="Skills"
+          className="h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800"
+        />
+      </label>
+      <label className="min-w-0">
+        <span className="sr-only">Filter by education</span>
+        <input
+          aria-label="Filter by education"
+          value={education}
+          onChange={(event) => setEducation(event.target.value)}
+          onKeyDown={submitOnEnter}
+          placeholder="Education"
+          className="h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800"
+        />
+      </label>
+      <div className="min-w-0">
+        <DropdownSelect
+          aria-label="Filter by verified skill"
+          value={verifiedSkill}
+          onChange={(value) => {
+            setVerifiedSkill(value)
+            updateFilter('verified_skill', value)
+          }}
+          options={[
+            { label: 'All applicants', value: '' },
+            { label: 'Verified skill', value: 'true' },
+          ]}
+        />
+      </div>
+      <div className="min-w-0 xl:min-w-[160px]">
+        <span className="mb-1.5 block text-xs font-semibold text-slate-700 dark:text-slate-300">Sort by</span>
+        <DropdownSelect
+          aria-label="Sort candidates"
+          value={sort}
+          onChange={setSort}
+          options={[
+            { label: 'Newest', value: 'newest' },
+            { label: 'Oldest', value: 'oldest' },
+            { label: 'Best match', value: 'best_match' },
+          ]}
+        />
+      </div>
+      <div className="flex h-10 min-w-0 items-center gap-2 lg:col-span-2 2xl:col-span-1">
+        <Button size="md" variant="primary" className="h-10 min-w-0 flex-1" onClick={applyFilters}>Apply</Button>
+        <Button size="md" variant="ghost" className="h-10 min-w-0 flex-1" onClick={resetFilters}>Reset</Button>
+      </div>
+    </div>
+  )
 }
 
 const stages = [
@@ -116,13 +248,22 @@ function ApplicantCard({
         </div>
       </div>
       <div className="mt-2 flex items-center justify-between gap-2">
-        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${matchTone(item.match_score)}`}>{item.match_score == null ? 'No match score' : `${Math.round(item.match_score)}% match`}</span>
+        <span title={item.match_explanation || undefined} className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${matchTone(item.match_score)}`}>{item.match_score == null ? 'No match score' : `${Math.round(item.match_score)}% match`}</span>
         <span className="text-[10px] text-slate-500 dark:text-slate-400">Applied {relativeAppliedTime(item.created_at)}</span>
       </div>
       {item.student_skills.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {item.student_skills.slice(0, 5).map((skill) => <span key={skill} className="max-w-24 truncate rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300" title={skill}>{skill}</span>)}
           {item.student_skills.length > 5 && <span title={item.student_skills.join(', ')} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">+{item.student_skills.length - 5} more</span>}
+        </div>
+      )}
+      {item.verified_badges && item.verified_badges.length > 0 && (
+        <div aria-label="Verified skills" className="mt-2 flex flex-wrap gap-1">
+          {item.verified_badges.map((badge) => (
+            <span key={badge.id} title={`${badge.title} · ${badge.level} · expires ${new Date(badge.expires_at).toLocaleDateString()}`} className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300">
+              Verified skill: {badge.topic}
+            </span>
+          ))}
         </div>
       )}
       <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 dark:border-slate-800">
@@ -143,7 +284,13 @@ function ApplicantCard({
   )
 }
 
-export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
+export function CompanyApplicantsRedesign({
+  pipeline,
+  view = 'shortlisted',
+}: {
+  pipeline: boolean
+  view?: 'applicants' | 'shortlisted'
+}) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [items, setItems] = useState<CompanyApplicant[]>([])
   const [total, setTotal] = useState(0)
@@ -152,6 +299,7 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState('')
   const [processingId, setProcessingId] = useState<number | null>(null)
+  const [downloadingResumeId, setDownloadingResumeId] = useState<number | null>(null)
   const [draggedId, setDraggedId] = useState<number | null>(null)
   const [activeInterview, setActiveInterview] = useState<CompanyApplicant | null>(null)
   const [notesApplicant, setNotesApplicant] = useState<CompanyApplicant | null>(null)
@@ -163,6 +311,7 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
   const [search, setSearch] = useState(searchParams.get('search') ?? '')
   const [skills, setSkills] = useState(searchParams.get('skills') ?? '')
   const [education, setEducation] = useState(searchParams.get('education') ?? '')
+  const [verifiedSkill, setVerifiedSkill] = useState(searchParams.get('verified_skill') ?? '')
   const [sort, setSort] = useState(searchParams.get('sort') ?? 'newest')
   const [mobileStage, setMobileStage] = useState('APPLIED')
   const [rejectedExpanded, setRejectedExpanded] = useState(false)
@@ -184,7 +333,8 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
         params.page = '1'
         params.page_size = '100'
       } else {
-        params.status = 'SHORTLISTED'
+        if (view === 'shortlisted') params.status = 'SHORTLISTED'
+        else delete params.status
         params.page = String(page)
         params.page_size = '20'
       }
@@ -205,7 +355,7 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
     } finally {
       setLoading(false)
     }
-  }, [page, pipeline, queryString])
+  }, [page, pipeline, queryString, view])
 
   useEffect(() => { void load() }, [load])
   useEffect(() => {
@@ -213,6 +363,7 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
     setSearch(params.get('search') ?? '')
     setSkills(params.get('skills') ?? '')
     setEducation(params.get('education') ?? '')
+    setVerifiedSkill(params.get('verified_skill') ?? '')
     setSort(params.get('sort') ?? 'newest')
   }, [queryString])
   useEffect(() => {
@@ -234,7 +385,7 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
 
   const applyFilters = () => {
     const next = new URLSearchParams(searchParams)
-    for (const [key, value] of [['search', search], ['skills', skills], ['education', education], ['sort', sort]]) {
+    for (const [key, value] of [['search', search], ['skills', skills], ['education', education], ['sort', sort], ['verified_skill', verifiedSkill]]) {
       if (value.trim()) next.set(key, value.trim())
       else next.delete(key)
     }
@@ -246,19 +397,24 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
     setSearch('')
     setSkills('')
     setEducation('')
+    setVerifiedSkill('')
     setSort('newest')
-    setSearchParams(pipeline ? new URLSearchParams() : new URLSearchParams({ status: 'SHORTLISTED' }))
-  }
-
-  const confirmMove = (item: CompanyApplicant, nextStatus: string) => {
-    if (nextStatus === 'REJECTED' && !window.confirm(`Reject ${item.student_name || 'Candidate'}? They will be notified.`)) return false
-    if (nextStatus === 'SELECTED' && !window.confirm(`Confirm the offer for ${item.student_name || 'Candidate'}?`)) return false
-    return true
+    setSearchParams(pipeline || view === 'applicants' ? new URLSearchParams() : new URLSearchParams({ status: 'SHORTLISTED' }))
   }
 
   const moveApplicant = async (item: CompanyApplicant, nextStatus: string, skipConfirmation = false) => {
     if (!item.allowed_next.includes(nextStatus) || item.status === nextStatus) return
-    if (!skipConfirmation && !confirmMove(item, nextStatus)) return
+    if (!skipConfirmation && nextStatus === 'REJECTED' && !await confirmAction({
+      title: 'Reject applicant?',
+      message: `Reject ${item.student_name || 'Candidate'}? They will be notified.`,
+      confirmLabel: 'Reject applicant',
+      destructive: true,
+    })) return
+    if (!skipConfirmation && nextStatus === 'SELECTED' && !await confirmAction({
+      title: 'Confirm offer?',
+      message: `Confirm the offer for ${item.student_name || 'Candidate'}?`,
+      confirmLabel: 'Confirm offer',
+    })) return
     setProcessingId(item.id)
     const originalItems = items
     setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, status: nextStatus } : entry))
@@ -275,12 +431,24 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
   }
 
   const downloadResume = async (item: CompanyApplicant) => {
-    if (!item.resume_id) return
+    if (!item.has_resume && !item.resume_id || !item.resume_id) {
+      showToast('Resume not uploaded by the student', 'error')
+      return
+    }
+    setDownloadingResumeId(item.id)
     try {
-      await downloadAuthenticatedFile(`/profiles/resume/${item.resume_id}/download`, `resume_candidate_${item.student_id}.pdf`)
+      const filename = await downloadAuthenticatedFile(`/profiles/resume/${item.resume_id}/download`, item.resume_filename || `resume_candidate_${item.student_id}.pdf`)
+      showToast(`Resume downloaded: ${filename}`, 'success')
     } catch (requestError) {
       console.error(`Unable to download resume for applicant ${item.id}.`, requestError)
-      notify('Resume download failed. Please try again.')
+      const status = (requestError as any)?.response?.status
+      showToast(status === 404
+        ? 'Resume not uploaded by the student'
+        : status === 403
+          ? "You don't have access to this resume"
+          : "Couldn't download the resume, please try again", 'error')
+    } finally {
+      setDownloadingResumeId(null)
     }
   }
 
@@ -351,34 +519,38 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
     <div className="mx-auto w-full max-w-[1600px] space-y-4 px-1 py-2 sm:px-2">
       <header className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{pipeline ? 'Hiring pipeline' : 'Shortlisted candidates'}</h1>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{pipeline ? 'Hiring pipeline' : view === 'shortlisted' ? 'Shortlisted candidates' : 'Applicants'}</h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{total.toLocaleString()} candidates across your internships</p>
         </div>
         {pipeline ? (
-          <Card className="grid w-full gap-2 bg-white p-3 dark:bg-slate-900 sm:grid-cols-3 xl:max-w-3xl">
+          <Card className="grid w-full gap-2 bg-white p-3 dark:bg-slate-900 sm:grid-cols-4 xl:max-w-4xl">
             <label className="relative">
               <span className="sr-only">Search candidate name</span>
               <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
               <input aria-label="Search candidate" value={search} onChange={(event) => { setSearch(event.target.value); updateFilter('search', event.target.value) }} placeholder="Search candidates" className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
             </label>
             <DropdownSelect aria-label="Filter by internship" value={searchParams.get('internship') ?? ''} onChange={(value) => updateFilter('internship', value)} options={[{ label: 'All internships', value: '' }, ...internships.map((internship) => ({ label: internship.title, value: String(internship.id) }))]} />
+            <DropdownSelect aria-label="Filter by verified skill" value={verifiedSkill} onChange={(value) => { setVerifiedSkill(value); updateFilter('verified_skill', value) }} options={[{ label: 'All applicants', value: '' }, { label: 'Verified skill', value: 'true' }]} />
             <DropdownSelect aria-label="Sort candidates" value={sort} onChange={(value) => { setSort(value); updateFilter('sort', value) }} options={[{ label: 'Best match', value: 'best_match' }, { label: 'Newest', value: 'newest' }, { label: 'Oldest', value: 'oldest' }]} />
           </Card>
         ) : (
-          <div className="grid w-full gap-2 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900 sm:grid-cols-2 xl:grid-cols-5">
-            <label className="relative sm:col-span-2 xl:col-span-1">
-              <span className="sr-only">Search candidate</span><Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
-              <input aria-label="Search candidate" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') applyFilters() }} placeholder="Search candidate" className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
-            </label>
-            <DropdownSelect aria-label="Filter by internship" value={searchParams.get('internship') ?? ''} onChange={(value) => updateFilter('internship', value)} options={[{ label: 'All internships', value: '' }, ...internships.map((internship) => ({ label: internship.title, value: String(internship.id) }))]} />
-            <label><span className="sr-only">Filter by skills</span><input aria-label="Filter by skills" value={skills} onChange={(event) => setSkills(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') applyFilters() }} placeholder="Skills" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
-            <label><span className="sr-only">Filter by education</span><input aria-label="Filter by education" value={education} onChange={(event) => setEducation(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') applyFilters() }} placeholder="Education" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
-            <div className="flex gap-2">
-              <DropdownSelect className="min-w-0 flex-1" aria-label="Sort candidates" value={sort} onChange={setSort} options={[{ label: 'Newest', value: 'newest' }, { label: 'Oldest', value: 'oldest' }, { label: 'Best match', value: 'best_match' }]} />
-              <Button size="sm" variant="outline" onClick={applyFilters}>Apply</Button>
-              <Button size="sm" variant="ghost" onClick={resetFilters}>Reset</Button>
-            </div>
-          </div>
+          <CandidateFilters
+            search={search}
+            setSearch={setSearch}
+            internshipId={searchParams.get('internship') ?? ''}
+            skills={skills}
+            setSkills={setSkills}
+            education={education}
+            setEducation={setEducation}
+            verifiedSkill={verifiedSkill}
+            setVerifiedSkill={setVerifiedSkill}
+            sort={sort}
+            setSort={setSort}
+            internships={internships}
+            updateFilter={updateFilter}
+            applyFilters={applyFilters}
+            resetFilters={resetFilters}
+          />
         )}
       </header>
 
@@ -435,7 +607,7 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
           {error ? <ErrorState message={error} onRetry={() => void load()} /> : loading ? <TableSkeleton rows={6} /> : items.length === 0 ? (
             <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-700 dark:bg-slate-900">
               <BriefcaseBusiness className="mx-auto h-8 w-8 text-slate-400" />
-              <h2 className="mt-3 font-semibold text-slate-900 dark:text-white">No shortlisted candidates</h2>
+              <h2 className="mt-3 font-semibold text-slate-900 dark:text-white">{view === 'shortlisted' ? 'No shortlisted candidates' : 'No applicants'}</h2>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">No candidates match the current filters.</p>
             </div>
           ) : (
@@ -480,7 +652,7 @@ export function CompanyApplicantsRedesign({ pipeline }: { pipeline: boolean }) {
         </div>
       </Modal>
       <Modal isOpen={reviewApplicant !== null} onClose={() => setReviewApplicant(null)} title="Candidate review" description={reviewApplicant?.internship_title || undefined}>
-        {reviewApplicant && <div className="space-y-3 text-sm"><div className="flex items-center gap-3"><CandidateAvatar name={reviewApplicant.student_name} /><div><p className="font-semibold">{reviewApplicant.student_name || 'Candidate'}</p><p className="text-xs text-slate-500">{reviewApplicant.student_university || 'Education not provided'}</p></div></div><p><span className="font-semibold">Skills:</span> {reviewApplicant.student_skills.join(', ') || 'Not provided'}</p><p className="whitespace-pre-wrap"><span className="font-semibold">Cover note:</span> {reviewApplicant.cover_note || 'No cover note provided.'}</p><Button type="button" variant="outline" disabled={!reviewApplicant.resume_id} onClick={() => void downloadResume(reviewApplicant)} leftIcon={<FileText className="h-4 w-4" />}>View resume</Button></div>}
+        {reviewApplicant && <div className="space-y-3 text-sm"><div className="flex items-center gap-3"><CandidateAvatar name={reviewApplicant.student_name} /><div><p className="font-semibold">{reviewApplicant.student_name || 'Candidate'}</p><p className="text-xs text-slate-500">{reviewApplicant.student_university || 'Education not provided'}</p></div></div><p><span className="font-semibold">Skills:</span> {reviewApplicant.student_skills.join(', ') || 'Not provided'}</p><p className="whitespace-pre-wrap"><span className="font-semibold">Cover note:</span> {reviewApplicant.cover_note || 'No cover note provided.'}</p><Button type="button" variant="outline" isLoading={downloadingResumeId === reviewApplicant.id} title={reviewApplicant.has_resume || reviewApplicant.resume_id ? `Download ${reviewApplicant.resume_filename || 'resume'}` : 'Resume not uploaded by the student'} className={!reviewApplicant.has_resume && !reviewApplicant.resume_id ? 'text-slate-400 dark:text-slate-500' : ''} onClick={() => void downloadResume(reviewApplicant)} leftIcon={<FileText className="h-4 w-4" />}>View resume</Button></div>}
       </Modal>
     </div>
   )

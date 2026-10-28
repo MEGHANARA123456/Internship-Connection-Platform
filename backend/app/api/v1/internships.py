@@ -5,15 +5,18 @@
 from datetime import date, datetime, timezone
 from typing import Annotated
 import logging
+import re
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
 from app.models import Application, CompanyProfile, Interview, Internship, SavedInternship, StudentProfile, User, UserRole
 from app.schemas.internship import InternshipCloseRequest, InternshipInput, InternshipPage, InternshipResponse
-from app.services.ai import compute_match_score_fast, get_student_resume_text
+from app.services.ai import compute_explicit_eligibility_fit, compute_match_score_fast, get_student_resume_text
+from app.services.audit import write_audit
+from app.services.skill_badges import apply_verified_badge_boost, get_valid_badges
 from app.services.mail import send_dev_email
 from app.services.notify import notify
 from app.services.internship_closing import close_internship as close_internship_service, send_closure_emails
@@ -32,6 +35,8 @@ def output(
     is_saved: bool | None = None,
     match_score: int | None = None,
     matched_skills: list[str] | None = None,
+    match_explanation: str | None = None,
+    match: dict | None = None,
 ) -> dict:
     data = {key: getattr(item, key) for key in ("id", "company_id", "title", "description", "location", "industry", "duration_months", "stipend", "work_mode", "deadline", "status", "created_at", "closed_at")}
     data["skills"] = [skill for skill in (item.skills or "").split(",") if skill]
@@ -39,12 +44,34 @@ def output(
     data["is_saved"] = is_saved
     data["match_score"] = match_score
     data["matched_skills"] = matched_skills
+    data["match_explanation"] = match_explanation
+    if match is not None:
+        data["match"] = {
+            key: match.get(key)
+            for key in ("score", "matched", "missing", "reason", "confidence", "score_breakdown", "base_match_score", "verified_skill_bonus", "verified_skills")
+            if key in match
+        }
+    else:
+        data["match"] = None
     return data
 
 
 async def get_company_name(company_id: int, db: DbSession) -> str:
     profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == company_id))
     return profile.company_name if (profile and profile.company_name) else "Enterprise Partner"
+
+
+def _search_filter(search: str | None):
+    tokens = re.findall(r"[a-z0-9]+", (search or "").casefold())
+    if not tokens:
+        return None
+    title = (" " + func.replace(func.lower(Internship.title), "/", " ") + " ")
+    title_matches = [title.contains(f" {token} ") for token in tokens]
+    company_matches = select(CompanyProfile.user_id).where(
+        CompanyProfile.user_id == Internship.company_id,
+        CompanyProfile.company_name.ilike(f"%{search.strip()}%"),
+    ).exists()
+    return or_(*title_matches, company_matches)
 
 
 def transition_allowed(current: str, target: str) -> bool:
@@ -99,13 +126,47 @@ async def list_company_internships(user: company_only, db: DbSession) -> list[di
 
 
 @router.get("/saved", response_model=list[InternshipResponse])
-async def list_saved_internships(user: student_only, db: DbSession) -> list[dict]:
+async def list_saved_internships(
+    user: student_only,
+    db: DbSession,
+    search: str | None = Query(default=None, max_length=100),
+    location: str | None = None,
+    industry: str | None = None,
+    work_mode: str | None = None,
+    min_stipend: Annotated[int | None, Query(ge=0)] = None,
+    skills: str | None = None,
+) -> list[dict]:
     query = (
         select(Internship)
         .join(SavedInternship, SavedInternship.internship_id == Internship.id)
-        .where(SavedInternship.student_id == user.id)
+        .where(
+            SavedInternship.student_id == user.id,
+            Internship.status == "PUBLISHED",
+            Internship.deadline >= date.today(),
+            ~select(Application.id).where(
+                Application.internship_id == Internship.id,
+                Application.student_id == user.id,
+                Application.status != "WITHDRAWN",
+            ).exists(),
+        )
         .order_by(SavedInternship.created_at.desc())
     )
+    filters = []
+    if location:
+        filters.append(Internship.location.ilike(f"%{location}%"))
+    if industry:
+        filters.append(Internship.industry.ilike(f"%{industry}%"))
+    if work_mode:
+        filters.append(Internship.work_mode == work_mode.upper())
+    if min_stipend is not None:
+        filters.append(Internship.stipend >= min_stipend)
+    if skills:
+        filters.extend(Internship.skills.ilike(f"%{skill.strip()}%") for skill in skills.split(",") if skill.strip())
+    search_filter = _search_filter(search)
+    if search_filter is not None:
+        filters.append(search_filter)
+    if filters:
+        query = query.where(*filters)
     items = list(await db.scalars(query))
     if not items:
         return []
@@ -117,11 +178,24 @@ async def list_saved_internships(user: student_only, db: DbSession) -> list[dict
     student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
     student_skills = [s.strip() for s in (student_prof.skills if student_prof else "").split(",") if s.strip()]
     resume_text = await get_student_resume_text(db, user.id)
+    badges = await get_valid_badges(db, user.id)
 
     results = []
     for item in items:
         job_skills = [s.strip() for s in (item.skills or "").split(",") if s.strip()]
-        match_info = compute_match_score_fast(student_skills, job_skills, item.title, resume_text, item.description)
+        match_info = compute_match_score_fast(
+            student_skills,
+            job_skills,
+            item.title,
+            resume_text,
+            item.description,
+            eligibility_data=compute_explicit_eligibility_fit(
+                item.description,
+                student_prof.graduation_year if student_prof else None,
+                f"{student_prof.major} {student_prof.university}" if student_prof else "",
+            ),
+        )
+        match_info = apply_verified_badge_boost(match_info, job_skills, badges)
         results.append(
             output(
                 item,
@@ -129,6 +203,8 @@ async def list_saved_internships(user: student_only, db: DbSession) -> list[dict
                 is_saved=True,
                 match_score=match_info["score"],
                 matched_skills=match_info["matched_skills"],
+                match_explanation=match_info["match_explanation"],
+                match=match_info,
             )
         )
     return results
@@ -189,6 +265,7 @@ async def browse_internships(
     min_stipend: Annotated[int | None, Query(ge=0)] = None,
     max_stipend: Annotated[int | None, Query(ge=0)] = None,
     work_mode: str | None = None,
+    search: str | None = Query(default=None, max_length=100),
     skills: str | None = None,
     posted_after: date | None = None,
     deadline_before: date | None = None,
@@ -196,7 +273,10 @@ async def browse_internships(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> InternshipPage:
-    query = select(Internship).where(Internship.status == "PUBLISHED")
+    query = select(Internship).where(
+        Internship.status == "PUBLISHED",
+        Internship.deadline >= date.today(),
+    )
     filters = []
     if location: filters.append(Internship.location.ilike(f"%{location}%"))
     if industry: filters.append(Internship.industry.ilike(f"%{industry}%"))
@@ -204,6 +284,8 @@ async def browse_internships(
     if min_stipend is not None: filters.append(Internship.stipend >= min_stipend)
     if max_stipend is not None: filters.append(Internship.stipend <= max_stipend)
     if work_mode: filters.append(Internship.work_mode == work_mode.upper())
+    search_filter = _search_filter(search)
+    if search_filter is not None: filters.append(search_filter)
     if skills: filters.extend(Internship.skills.ilike(f"%{skill.strip()}%") for skill in skills.split(","))
     if posted_after: filters.append(Internship.created_at >= datetime.combine(posted_after, datetime.min.time(), timezone.utc))
     if deadline_before: filters.append(Internship.deadline <= deadline_before)
@@ -231,6 +313,9 @@ async def browse_internships(
         if student_prof and student_prof.skills:
             student_skills = [s.strip() for s in student_prof.skills.split(",") if s.strip()]
         resume_text = await get_student_resume_text(db, user.id)
+        badges = await get_valid_badges(db, user.id)
+    else:
+        badges = []
 
     output_items = []
     for item in items:
@@ -242,7 +327,14 @@ async def browse_internships(
             item.title,
             resume_text,
             item.description,
+            eligibility_data=compute_explicit_eligibility_fit(
+                item.description,
+                student_prof.graduation_year if student_prof else None,
+                f"{student_prof.major} {student_prof.university}" if student_prof else "",
+            ) if user and user.role == UserRole.STUDENT else None,
         ) if (user and user.role == UserRole.STUDENT) else {"score": None, "matched_skills": None}
+        if user and user.role == UserRole.STUDENT:
+            match_info = apply_verified_badge_boost(match_info, job_skills, badges)
         output_items.append(
             output(
                 item,
@@ -250,6 +342,8 @@ async def browse_internships(
                 is_saved=is_saved,
                 match_score=match_info["score"],
                 matched_skills=match_info["matched_skills"],
+                match_explanation=match_info.get("match_explanation"),
+                match=match_info,
             )
         )
 
@@ -278,6 +372,8 @@ async def get_internship(internship_id: int, db: DbSession, user: optional_user)
     is_saved = None
     match_score = None
     matched_skills = None
+    match_explanation = None
+    match_details = None
     if user and user.role == UserRole.STUDENT:
         saved = await db.scalar(select(SavedInternship.id).where(SavedInternship.student_id == user.id, SavedInternship.internship_id == item.id))
         is_saved = saved is not None
@@ -291,11 +387,31 @@ async def get_internship(internship_id: int, db: DbSession, user: optional_user)
             item.title,
             resume_text,
             item.description,
+            eligibility_data=compute_explicit_eligibility_fit(
+                item.description,
+                student_prof.graduation_year if student_prof else None,
+                f"{student_prof.major} {student_prof.university}" if student_prof else "",
+            ),
+        )
+        match_info = apply_verified_badge_boost(
+            match_info,
+            job_skills,
+            await get_valid_badges(db, user.id),
         )
         match_score = match_info["score"]
         matched_skills = match_info["matched_skills"]
+        match_explanation = match_info["match_explanation"]
+        match_details = match_info
 
-    return output(item, cname, is_saved=is_saved, match_score=match_score, matched_skills=matched_skills)
+    return output(
+        item,
+        cname,
+        is_saved=is_saved,
+        match_score=match_score,
+        matched_skills=matched_skills,
+        match_explanation=match_explanation,
+        match=match_details,
+    )
 
 
 
@@ -380,13 +496,14 @@ async def change_status(internship_id: int, target: str, user: company_only, db:
         )
     cname = await get_company_name(item.company_id, db)
     admins = await db.scalars(select(User).where(User.role == UserRole.ADMIN))
+    display_title = item.title.replace("_", " ").replace("-", " ").title()
     for admin in admins:
         await notify(
             db,
             admin.id,
             "INTERNSHIP_PENDING_APPROVAL",
-            f"Internship pending approval: {item.title}",
-            f"A company submitted {item.title} for approval.",
+            f"Internship pending approval: {display_title}",
+            f"{cname} submitted \"{display_title}\" for approval.",
         )
     item.status = target
     await db.commit()
@@ -460,14 +577,31 @@ async def close_internship_endpoint(
 
 
 @router.post("/{internship_id}/review", response_model=InternshipResponse)
-async def review_internship(internship_id: int, target: str, user: admin_only, db: DbSession) -> dict:
+async def review_internship(
+    internship_id: int,
+    target: str,
+    user: admin_only,
+    db: DbSession,
+    reason: str | None = Query(default=None, max_length=300),
+) -> dict:
     item = await db.scalar(select(Internship).where(Internship.id == internship_id))
     if item is None: raise HTTPException(404, "Internship not found")
     if item.status != "PENDING_APPROVAL" or target not in {"PUBLISHED", "REJECTED"}:
         raise HTTPException(409, f"Cannot review {item.status} as {target}")
     item.status = target
     title = "Internship approved" if target == "PUBLISHED" else "Internship rejected"
-    body = f"Your internship {item.title} was {target.lower()}."
+    display_title = item.title.replace("_", " ").replace("-", " ").title()
+    body = f'Your internship "{display_title}" was {target.lower()}.'
+    if target == "REJECTED" and reason and reason.strip():
+        body += f" Reason: {reason.strip()}"
+    await write_audit(
+        db,
+        actor=user,
+        action="posting_approved" if target == "PUBLISHED" else "posting_rejected",
+        target_type="posting",
+        target_id=item.id,
+        metadata={"title": display_title, "reason": reason.strip() if reason else None},
+    )
     await notify(db, item.company_id, "INTERNSHIP_REVIEW", title, body)
     await db.commit(); await db.refresh(item)
     cname = await get_company_name(item.company_id, db)

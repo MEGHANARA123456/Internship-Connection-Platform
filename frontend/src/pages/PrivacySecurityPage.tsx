@@ -20,6 +20,7 @@ import { Card } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge'
 import { AccountSecurityCard } from '../components/security/AccountSecurityCard'
 import { routes } from '../lib/routes'
+import { showToast } from '../lib/feedback'
 
 export function PrivacySecurityPage() {
   const { session, logout } = useAuthStore()
@@ -31,6 +32,7 @@ export function PrivacySecurityPage() {
     marketing_emails: false,
     third_party_sharing_opt_out: true,
     profile_visibility: 'COMMUNITY',
+    show_verified_badges: true,
   })
   const [, setLoadingPrefs] = useState(false)
   const [savingPrefs, setSavingPrefs] = useState(false)
@@ -59,6 +61,7 @@ export function PrivacySecurityPage() {
           marketing_emails: res.data.marketing_emails ?? false,
           third_party_sharing_opt_out: res.data.third_party_sharing_opt_out ?? true,
           profile_visibility: res.data.profile_visibility ?? 'COMMUNITY',
+          show_verified_badges: res.data.show_verified_badges ?? true,
         })
       })
       .catch(() => {
@@ -76,7 +79,7 @@ export function PrivacySecurityPage() {
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 4000)
     } catch {
-      alert('Failed to save privacy preferences. Please try again.')
+      showToast('Failed to save privacy preferences. Please try again.', 'error')
     } finally {
       setSavingPrefs(false)
     }
@@ -87,9 +90,9 @@ export function PrivacySecurityPage() {
     try {
       await api.post('/privacy/ccpa-opt-out')
       setPreferences((prev) => ({ ...prev, third_party_sharing_opt_out: true }))
-      alert('CCPA Do Not Sell/Share request registered successfully.')
+      showToast('CCPA Do Not Sell/Share request registered successfully.', 'success')
     } catch {
-      alert('Could not submit opt-out request.')
+      showToast('Could not submit opt-out request.', 'error')
     }
   }
 
@@ -108,7 +111,7 @@ export function PrivacySecurityPage() {
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
     } catch {
-      alert('Failed to generate your data export archive. Please verify you are logged in.')
+      showToast('Failed to generate your data export archive. Please verify you are logged in.', 'error')
     } finally {
       setExporting(false)
     }
@@ -131,7 +134,7 @@ export function PrivacySecurityPage() {
         confirmation_phrase: deleteConfirmation,
         reason: deleteReason || undefined,
       })
-      alert('Your account and all associated personal records have been permanently erased.')
+      showToast('Your account and all associated personal records have been permanently erased.', 'success')
       logout()
       navigate(routes.login())
     } catch (err: any) {
@@ -190,6 +193,13 @@ export function PrivacySecurityPage() {
           </div>
         </div>
       </div>
+
+      <section aria-label="Help chatbot privacy" className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 dark:border-indigo-900 dark:bg-indigo-950/30">
+        <h2 className="text-sm font-bold text-slate-900 dark:text-white">Help chatbot privacy</h2>
+        <p className="mt-1 text-xs leading-relaxed text-slate-700 dark:text-slate-300">
+          Chats are not saved and clear on sign-out, account switch, or page reload. The assistant only helps with InternSphere workflows and cannot access your account data. In retrieval mode, no language model receives your question. If optional language-model mode is enabled, the configured provider receives only in-scope text after redaction plus relevant help passages; passwords, codes, tokens, and personal data are blocked.
+        </p>
+      </section>
 
       {/* Grid: 2 Columns */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -378,6 +388,27 @@ export function PrivacySecurityPage() {
                       California
                     </span>
                   </div>
+
+                  {session?.role === 'STUDENT' && (
+                    <div className="flex items-start justify-between gap-4 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/40">
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white">Show badges to recruiters</span>
+                        <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                          When enabled, a company can see your valid verified badges only on applications you submit to its internships.
+                        </p>
+                      </div>
+                      <label className="relative mt-1 inline-flex shrink-0 cursor-pointer items-center">
+                        <input
+                          type="checkbox"
+                          aria-label="Show badges to recruiters"
+                          checked={preferences.show_verified_badges}
+                          onChange={(event) => setPreferences((current) => ({ ...current, show_verified_badges: event.target.checked }))}
+                          className="peer sr-only"
+                        />
+                        <div className="h-5 w-9 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-slate-300 after:bg-white after:transition-all peer-checked:bg-indigo-600 peer-checked:after:translate-x-full peer-checked:after:border-white dark:bg-slate-700" />
+                      </label>
+                    </div>
+                  )}
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                     InternSphere never sells candidate data. Enabling this enforces strict restriction on any external analytics or cross-context disclosure.
                   </p>

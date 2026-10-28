@@ -70,36 +70,44 @@ def is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
+async def _cancel_task(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 # Application startup and shutdown lifecycle.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await run_database_migrations()
-    mailpit_task = None
+    from app.chatbot.chatbot_config import load_config
+    from app.chatbot.rag.ingest import ingest_knowledge
+
+    chatbot_config = load_config()
+    if chatbot_config.rag_enabled:
+        await ingest_knowledge(chatbot_config)
+    mailpit_task: asyncio.Task | None = None
     reminder_task = asyncio.create_task(_interview_reminder_worker())
     expiry_task = asyncio.create_task(_interview_expiry_worker())
-    if not is_port_in_use(8025):
-        try:
-            import uvicorn
-            from app.services.mailpit_server import mailpit_app
-            config = uvicorn.Config(mailpit_app, host="0.0.0.0", port=8025, log_level="warning")
-            server = uvicorn.Server(config)
-            mailpit_task = asyncio.create_task(server.serve())
-        except Exception as exc:
-            logger.warning("Could not start embedded Mailpit server: %s", exc)
-            pass
-    yield
-    reminder_task.cancel()
     try:
-        await reminder_task
-    except asyncio.CancelledError:
-        pass
-    expiry_task.cancel()
-    try:
-        await expiry_task
-    except asyncio.CancelledError:
-        pass
-    if mailpit_task:
-        mailpit_task.cancel()
+        if not is_port_in_use(8025):
+            try:
+                import uvicorn
+                from app.services.mailpit_server import mailpit_app
+                config = uvicorn.Config(mailpit_app, host="0.0.0.0", port=8025, log_level="warning")
+                server = uvicorn.Server(config)
+                mailpit_task = asyncio.create_task(server.serve())
+            except Exception as exc:
+                logger.warning("Could not start embedded Mailpit server: %s", exc)
+        yield
+    finally:
+        await _cancel_task(reminder_task)
+        await _cancel_task(expiry_task)
+        await _cancel_task(mailpit_task)
 
 # Set up app logging before creating the FastAPI instance.
 configure_logging()

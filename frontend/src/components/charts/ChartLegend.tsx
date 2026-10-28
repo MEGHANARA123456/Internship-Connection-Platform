@@ -63,7 +63,7 @@ export function ChartLegend({
           >
             <span
               aria-hidden="true"
-              className={`shrink-0 ${shape === 'line' || shape === 'dashed' ? 'h-0 w-4 border-t-2' : shape === 'circle' ? 'h-2.5 w-2.5 rounded-full' : 'h-2.5 w-2.5 rounded-sm'} ${shape === 'dashed' ? 'border-dashed' : ''}`}
+              className={`shrink-0 ${shape === 'line' || shape === 'dashed' ? 'h-0 w-4 border-t-2' : shape === 'circle' ? 'h-2.5 w-2.5 rounded-full ring-1 ring-slate-500 dark:ring-slate-400' : 'h-2.5 w-2.5 rounded-sm ring-1 ring-slate-500 dark:ring-slate-400'} ${shape === 'dashed' ? 'border-dashed' : ''}`}
               style={shape === 'line' || shape === 'dashed' ? { borderColor: item.color } : { backgroundColor: item.color }}
             />
             <span className="whitespace-normal">{readable(item.label)}</span>
@@ -110,7 +110,7 @@ export function ChartLegend({
                       onBlur={() => onHighlight?.(null)}
                       className={`inline-flex max-w-full items-center gap-2 rounded-sm text-left text-slate-700 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-slate-200 dark:hover:text-white ${isVisible ? '' : 'opacity-50'}`}
                     >
-                      <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: item.color }} />
+                      <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-sm ring-1 ring-slate-500 dark:ring-slate-400" style={{ backgroundColor: item.color }} />
                       <span className="whitespace-normal">{readable(item.label)}</span>
                       {item.value !== undefined && <span className="font-semibold tabular-nums text-slate-900 dark:text-white">{item.value.toLocaleString()}</span>}
                       {(item.percentage !== undefined || (item.value !== undefined && total > 0)) && (
