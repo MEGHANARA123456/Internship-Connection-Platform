@@ -56,7 +56,10 @@ def validate_questions(questions: list[Any]) -> list[str]:
         if not isinstance(options, list) or len(options) < 2:
             problems.append(f"{location}: options must contain at least two entries")
             options = options if isinstance(options, list) else []
-        normalized_options = [str(option).strip().casefold() for option in options]
+        normalized_options = [
+            re.sub(r"\s+", " ", str(option)).strip()
+            for option in options
+        ]
         seen_options: set[str] = set()
         for option_index, option in enumerate(normalized_options):
             if option in seen_options:
