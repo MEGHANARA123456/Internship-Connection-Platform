@@ -5,12 +5,12 @@ import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..chatbot.chatbot_config import ChatbotConfig, load_config
-from ..chatbot.guardrails import output_is_safe
+from ..chatbot.guardrails import is_role_capability_question, output_is_safe
 from ..chatbot.providers import create_answer_provider
 from ..chatbot.providers.base import AnswerProvider, ChatbotRouterProvider, Passage, ProviderPayload
 from ..chatbot.providers.retrieval_only import RetrievalOnlyProvider
@@ -163,6 +163,38 @@ def _sources_for(passages: list[Passage], role: str) -> tuple[tuple[str, str, st
     return tuple(sources[:5])
 
 
+def _dedupe_links(links: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+    unique = []
+    seen_routes: set[str] = set()
+    for link in links:
+        if link[1] not in seen_routes:
+            seen_routes.add(link[1])
+            unique.append(link)
+    return tuple(unique)
+
+
+def _role_capabilities(role: str) -> tuple[str, str]:
+    if role == "student":
+        return (
+            "Your role is Student. You can discover internships, apply and track applications, save opportunities, update your profile, and review interviews.",
+            "/opportunities",
+        )
+    if role == "company":
+        return (
+            "Your role is Company. You can manage internship postings, review and shortlist applicants, schedule interviews, and track your hiring pipeline.",
+            "/company",
+        )
+    if role == "admin":
+        return (
+            "Your role is Admin. You can review platform moderation, verify companies, manage users, and inspect platform reports and audit events.",
+            "/admin",
+        )
+    return (
+        "You are browsing as a guest. You can explore public internships or register; sign in to use student or company features.",
+        "/opportunities",
+    )
+
+
 def _suggested_followups(role: str, message: str) -> tuple[str, ...]:
     text = message.casefold()
     if role == "student":
@@ -306,10 +338,7 @@ class ChatbotService:
         try:
             return await self.provider.classify_intent(redact(message), role)
         except RuntimeError:
-            logger.warning(
-                "chatbot_router_fallback",
-                extra={"chatbot_meta": {"role": role, "operation": "intent_classification"}},
-            )
+            logger.warning("chatbot_router_fallback")
             return None
 
     def check_rate_limit(self, key: str, *, authenticated: bool) -> int | None:
@@ -348,7 +377,6 @@ class ChatbotService:
         live_answer: str | None = None,
         live_route: str | None = None,
         live_links: tuple[tuple[str, str], ...] = (),
-        correlation_id: str | None = None,
     ) -> ChatResult:
         started = time.monotonic()
         normalized_message = " ".join(message.split())
@@ -392,12 +420,17 @@ class ChatbotService:
         links: tuple[tuple[str, str], ...] = ()
         sources: tuple[tuple[str, str, str], ...] = ()
         source_type = "docs"
+        answer_path = "retrieval"
         if decision.refused:
             answer = fixed_reply(decision, role_name)
+            answer_path = "refusal"
+        elif is_role_capability_question(normalized_message):
+            answer, role_route = _role_capabilities(role_name)
+            links = (("Your InternSphere role", role_route),)
         elif live_answer is not None:
             source_type = "live data"
             if self.config.mode == "llm":
-                answer, sources, links = await self._answer_with_provider(
+                answer, sources, links, provider_fallback = await self._answer_with_provider(
                     normalized_message,
                     history,
                     role_name,
@@ -405,12 +438,12 @@ class ChatbotService:
                     passages if include_docs else [],
                     live_data=live_answer,
                 )
-                if not answer:
-                    answer = live_answer
+                answer_path = "fallback" if provider_fallback else "model"
                 if include_docs and passages:
                     source_type = "docs + live data"
             else:
                 answer = live_answer
+                answer_path = "tool"
                 if include_docs and passages:
                     docs_answer, sources, doc_links = (
                         _render_retrieval_answer(passages),
@@ -435,6 +468,7 @@ class ChatbotService:
             answer = _admin_audit_summary(audit_events or [])
             links = (("Recent audit events", PAGE_ROUTES["admin-audit-logs"]),)
             source_type = "live data"
+            answer_path = "tool"
         elif decision.account_specific:
             if role_name == "guest":
                 answer = "Sign in to InternSphere to request live information for your own account. I can explain the steps, but account data requires an authenticated session."
@@ -461,13 +495,14 @@ class ChatbotService:
         elif not passages:
             answer = "I couldn’t find that in the help guide. Try asking about a platform page or feature."
         elif self.config.mode == "llm":
-            answer, sources, links = await self._answer_with_provider(
+            answer, sources, links, provider_fallback = await self._answer_with_provider(
                 normalized_message,
                 history,
                 role_name,
                 page,
                 passages,
             )
+            answer_path = "fallback" if provider_fallback else "model"
         else:
             answer = _render_retrieval_answer(passages)
             sources = _sources_for(passages, role_name)
@@ -512,23 +547,18 @@ class ChatbotService:
                     answer = "I couldn’t find a safe answer in the help guide."
                     links = ()
                     sources = ()
+                    answer_path = "fallback"
+        links = _dedupe_links(links)
+        if not answer.strip():
+            answer = _render_retrieval_answer(passages) or "I couldn’t find an answer in the help guide."
+            answer_path = "fallback"
         elapsed_ms = round((time.monotonic() - started) * 1000)
         logger.info(
             "chatbot_request",
             extra={
                 "chatbot_meta": {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "role": role_name,
-                    "category": decision.category,
-                    "in_scope": decision.in_scope,
-                    "mode": self.config.mode,
+                    "path": answer_path,
                     "latency_ms": elapsed_ms,
-                    "matched_knowledge_ids": [passage.id for passage in passages],
-                    "question_tokens": len(normalized_message.split()),
-                    "answer_tokens": len(answer.split()),
-                    "refusal_reason": decision.refusal_reason,
-                    "correlation_id": correlation_id,
-                    "source_type": source_type,
                 }
             },
         )
@@ -552,7 +582,12 @@ class ChatbotService:
         page: str,
         passages: list[Passage],
         live_data: str | None = None,
-    ) -> tuple[str, tuple[tuple[str, str, str], ...], tuple[tuple[str, str], ...]]:
+    ) -> tuple[
+        str,
+        tuple[tuple[str, str, str], ...],
+        tuple[tuple[str, str], ...],
+        bool,
+    ]:
         payload = ProviderPayload(
             question=redact(message),
             history=tuple((turn_role, redact(content)) for turn_role, content in history),
@@ -566,6 +601,7 @@ class ChatbotService:
             result = await self.provider.rewrite(payload)
             if (
                 not result.answerable
+                or not result.answer.strip()
                 or (passages and not result.sources)
                 or len(result.answer.split()) > WORD_LIMIT
                 or not set(result.sources).issubset(allowed_ids)
@@ -583,14 +619,17 @@ class ChatbotService:
                 if item.id in result.sources
                 and any(route in _role_routes(role) for route in item.related_routes)
             )
-            return result.answer.strip(), sources, _links_for(passages, role)
+            return result.answer.strip(), sources, _links_for(passages, role), False
         except (OSError, RuntimeError, TimeoutError, ValueError):
-            logger.warning(
-                "chatbot_provider_fallback",
-                extra={"chatbot_meta": {"mode": "llm", "matched_knowledge_ids": [item.id for item in passages]}},
-            )
+            fallback_answer = _render_retrieval_answer(passages) or live_data or ""
+            fallback_answer = " ".join(fallback_answer.split()[:140])
+            notice = "I couldn’t reach the answer service, so this is the help-guide answer."
+            answer = f"{fallback_answer} {notice}".strip()
+            if not fallback_answer:
+                answer = "I couldn’t reach the answer service or find a matching help article. Please try a specific platform feature."
             return (
-                live_data or _render_retrieval_answer(passages),
+                answer,
                 _sources_for(passages, role),
                 _links_for(passages, role),
+                True,
             )

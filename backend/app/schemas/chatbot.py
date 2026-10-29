@@ -1,8 +1,13 @@
 """Strict public request and response contracts for the chatbot."""
 
 from enum import Enum
-from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+MAX_HISTORY_TURNS = 4
+MAX_HISTORY_CHARS = 1500
 
 
 class ChatPage(str, Enum):
@@ -50,14 +55,39 @@ class ChatRole(str, Enum):
 class ChatTurn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     role: ChatRole
-    content: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=MAX_HISTORY_CHARS)
 
 
 class ChatAskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     message: str = Field(min_length=1, max_length=500)
-    history: list[ChatTurn] = Field(default_factory=list, max_length=4)
+    history: list[ChatTurn] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
     page: ChatPage = ChatPage.home
+
+    @field_validator("history", mode="before")
+    @classmethod
+    def _normalize_history(cls, value):
+        if not isinstance(value, list):
+            return value
+        invalid_roles = [
+            item
+            for item in value
+            if isinstance(item, dict) and item.get("role") not in {"user", "assistant"}
+        ]
+        if invalid_roles:
+            return invalid_roles[-MAX_HISTORY_TURNS:]
+
+        cleaned = []
+        for item in value:
+            if isinstance(item, dict) and isinstance(item.get("content"), str):
+                item = {
+                    **item,
+                    "content": item["content"].strip()[:MAX_HISTORY_CHARS],
+                }
+                if not item["content"]:
+                    continue
+            cleaned.append(item)
+        return cleaned[-MAX_HISTORY_TURNS:]
 
 
 class ChatLink(BaseModel):

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
 from app.models import User, UserRole
 from .chatbot_config import load_config, provider_configured
+from .guardrails import is_role_capability_question
 from ..schemas.chatbot import ChatAskRequest, ChatAskResponse, ChatFeedbackRequest, ChatLink, ChatSource
 from .orchestrator import classify_intent
 from .rag.ingest import ingest_knowledge
@@ -82,10 +83,6 @@ async def ask(
             headers={"Retry-After": str(retry_after)},
         )
     history = [(turn.role.value, turn.content) for turn in body.history]
-    correlation_id = request.headers.get("X-Correlation-ID", "")
-    if not correlation_id or len(correlation_id) > 80 or not correlation_id.isascii():
-        correlation_id = uuid4().hex
-
     threshold = config.rag_min_score if config.rag_enabled else config.min_score
     preflight = decide_scope(body.message, [], threshold, role)
     if any(contains_secret(content) for _, content in history) and not contains_secret(body.message):
@@ -95,7 +92,11 @@ async def ask(
     live_links: tuple[tuple[str, str], ...] = ()
     intent = classify_intent(body.message, role)
     router_intent = None
-    if config.mode == "llm" and not preflight.refused:
+    if (
+        config.mode == "llm"
+        and not preflight.refused
+        and not is_role_capability_question(body.message)
+    ):
         router_intent = await _service.classify_intent_hint(body.message, role)
         if router_intent == "both" and intent.tool_name:
             intent = replace(intent, category="both")
@@ -115,16 +116,7 @@ async def ask(
                 live_route = tool_result.route
                 live_links = tool_result.links
             except asyncio.TimeoutError:
-                logger.warning(
-                    "chatbot_tool_timeout",
-                    extra={
-                        "chatbot_meta": {
-                            "correlation_id": correlation_id,
-                            "role": role,
-                            "tool": intent.tool_name,
-                        }
-                    },
-                )
+                logger.warning("chatbot_tool_timeout")
                 live_answer = "Live platform data is taking longer than expected. Please retry."
         elif intent.tool_name and user is None:
             live_answer = (
@@ -132,20 +124,6 @@ async def ask(
             )
             live_route = "/login"
 
-    logger.info(
-        "chatbot_request_route",
-        extra={
-            "chatbot_meta": {
-                "correlation_id": correlation_id,
-                "role": role,
-                "intent": intent.category,
-                "router_intent": router_intent,
-                "tool": intent.tool_name,
-                "history_turns": len(history),
-                "question_tokens": len(body.message.split()),
-            }
-        },
-    )
     result = await _service.ask(
         body.message,
         history,
@@ -156,7 +134,6 @@ async def ask(
         live_answer=live_answer,
         live_route=live_route,
         live_links=live_links,
-        correlation_id=correlation_id,
     )
     return ChatAskResponse(
         answer=result.answer,

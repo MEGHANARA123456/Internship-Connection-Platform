@@ -40,6 +40,23 @@ describe('chatbot API errors', () => {
     expect(chatbotError(error).message).not.toContain('private-value')
   })
 
+  it('shows the character limit only for an over-limit user message', () => {
+    const error = new axios.AxiosError('unprocessable entity')
+    Object.assign(error, {
+      response: {
+        status: 422,
+        data: {
+          detail: [{
+            loc: ['body', 'message'],
+            msg: 'String should have at most 500 characters',
+            type: 'string_too_long',
+          }],
+        },
+      },
+    })
+    expect(chatbotError(error).message).toBe('Message too long (max 500 characters)')
+  })
+
   it('asks the user to sign in again after an expired session', () => {
     const error = new axios.AxiosError('unauthorized')
     Object.assign(error, { response: { status: 401, data: { detail: 'expired' } } })
@@ -86,6 +103,72 @@ describe('chatbot API errors', () => {
       { message: 'Where is my application?', history: [], page: 'applications' },
       { timeout: 20_000 },
     )
+  })
+
+  it('sends only recent, non-empty, plain-text history within the schema limit', async () => {
+    const response = {
+      answer: 'Done.',
+      links: [],
+      sources: [],
+      source_type: 'docs',
+      suggested_followups: [],
+      category: 'in_scope',
+      refused: false,
+    }
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: response } as never)
+    const longAnswer = `[guide](/applications) [1] 【source】 ${'a'.repeat(1600)}`
+
+    await askChatbot('Follow up', [
+      { role: 'user', content: 'old turn 1' },
+      { role: 'assistant', content: 'old turn 2' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'https://example.test/linked-chip' },
+      { role: 'assistant', content: longAnswer },
+    ], 'home')
+
+    const sentHistory = (post.mock.calls[0][1] as { history: Array<{ role: string; content: string }> }).history
+    expect(sentHistory).toHaveLength(2)
+    expect(sentHistory[0]).toEqual({ role: 'assistant', content: 'old turn 2' })
+    expect(sentHistory[1].content).toHaveLength(1500)
+    expect(sentHistory[1].content).not.toContain('/applications')
+    expect(sentHistory[1].content).not.toContain('[1]')
+    expect(sentHistory[1].content).not.toContain('【source】')
+  })
+
+  it('retries a history validation error once with shorter history', async () => {
+    const response = {
+      answer: 'Done.',
+      links: [],
+      sources: [],
+      source_type: 'docs',
+      suggested_followups: [],
+      category: 'in_scope',
+      refused: false,
+    }
+    const error = new axios.AxiosError('unprocessable entity')
+    Object.assign(error, {
+      response: {
+        status: 422,
+        data: {
+          detail: [{
+            loc: ['body', 'history', 0, 'content'],
+            msg: 'String should have at most 500 characters',
+            type: 'string_too_long',
+          }],
+        },
+      },
+    })
+    const post = vi.spyOn(api, 'post')
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce({ data: response } as never)
+
+    await expect(askChatbot('Follow up', [
+      { role: 'assistant', content: 'a'.repeat(1400) },
+    ], 'home')).resolves.toEqual(response)
+
+    expect(post).toHaveBeenCalledTimes(2)
+    const retriedHistory = (post.mock.calls[1][1] as { history: Array<{ content: string }> }).history
+    expect(retriedHistory[0].content).toHaveLength(500)
   })
 
   it('sends feedback metadata without the message content', async () => {

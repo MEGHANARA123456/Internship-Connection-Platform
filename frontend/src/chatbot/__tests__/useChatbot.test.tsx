@@ -11,6 +11,7 @@ import { askChatbot } from '../api'
 vi.mock('../api', () => ({
   askChatbot: vi.fn(),
   chatbotError: vi.fn(() => ({ message: 'Temporary help service error.' })),
+  MAX_CHAT_MESSAGE_CHARS: 500,
 }))
 
 const answer: ChatResponse = {
@@ -29,6 +30,7 @@ function Harness() {
     <div>
       {chat.messages.map((message) => <p key={message.id}>{message.content}</p>)}
       <button type="button" onClick={() => void chat.send('How do I apply?')}>Send question</button>
+      <button type="button" onClick={() => void chat.send('x'.repeat(501))}>Send long question</button>
       <button type="button" onClick={() => void chat.showSummary()}>Show summary</button>
       <button type="button" onClick={chat.retry}>Retry question</button>
       <span role="status">{chat.error}</span>
@@ -111,6 +113,15 @@ describe('transient chatbot state', () => {
     expect(await screen.findByText(answer.answer)).toBeInTheDocument()
     expect(askChatbot).toHaveBeenNthCalledWith(1, 'How do I apply?', [], 'home')
     expect(askChatbot).toHaveBeenNthCalledWith(2, 'How do I apply?', [], 'home')
+  })
+
+  it('shows a friendly length error for the user message without making a request', async () => {
+    render(<MemoryRouter><Harness /></MemoryRouter>)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send long question' }))
+
+    expect(await screen.findByText('Message too long (max 500 characters)')).toBeInTheDocument()
+    expect(askChatbot).not.toHaveBeenCalled()
   })
 
   it('fetches summaries from the role endpoint and excludes their data from chatbot requests', async () => {

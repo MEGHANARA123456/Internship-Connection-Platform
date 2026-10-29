@@ -65,12 +65,58 @@ export interface ChatTurn {
   content: string
 }
 
+export const MAX_CHAT_MESSAGE_CHARS = 500
+const MAX_HISTORY_TURNS = 4
+const MAX_HISTORY_CHARS = 1500
+
+function plainHistoryText(content: string, limit: number): string {
+  return content
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/【[^】]*】/g, '')
+    .replace(/\[(?:\d+|source[^\]]*|citation[^\]]*)\]/gi, '')
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/[*_~`>#]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, limit)
+}
+
+function trimmedHistory(history: ChatTurn[], limit = MAX_HISTORY_CHARS): ChatTurn[] {
+  return history
+    .slice(-MAX_HISTORY_TURNS)
+    .map(({ role, content }) => ({ role, content: plainHistoryText(content, limit) }))
+    .filter((turn) => turn.content.length > 0)
+}
+
+function isHistoryValidationError(error: unknown): boolean {
+  if (!axios.isAxiosError(error) || error.response?.status !== 422) return false
+  const details = error.response.data && typeof error.response.data === 'object'
+    && 'detail' in error.response.data
+    ? error.response.data.detail
+    : undefined
+  return Array.isArray(details) && details.some((item) => (
+    item !== null
+    && typeof item === 'object'
+    && 'loc' in item
+    && Array.isArray(item.loc)
+    && item.loc.includes('history')
+  ))
+}
+
 export async function askChatbot(message: string, history: ChatTurn[], page: ChatPage): Promise<ChatResponse> {
-  const response = await api.post<ChatResponse>(
+  const send = (turns: ChatTurn[]) => api.post<ChatResponse>(
     '/chatbot/ask',
-    { message, history, page },
+    { message, history: turns, page },
     { timeout: 20_000 },
   )
+  let response: Awaited<ReturnType<typeof send>>
+  try {
+    response = await send(trimmedHistory(history))
+  } catch (error) {
+    if (!isHistoryValidationError(error)) throw error
+    response = await send(trimmedHistory(history, 500))
+  }
   const result: unknown = response.data
   if (!isChatResponse(result)) throw new InvalidChatbotResponseError()
   return result
@@ -120,6 +166,17 @@ export function chatbotError(error: unknown): { message: string; retryAfter?: nu
       && 'detail' in response.data
       ? response.data.detail
       : undefined
+    if (Array.isArray(details) && details.some((item) => (
+      item !== null
+      && typeof item === 'object'
+      && 'loc' in item
+      && Array.isArray(item.loc)
+      && item.loc.includes('message')
+      && 'type' in item
+      && item.type === 'string_too_long'
+    ))) {
+      return { message: `Message too long (max ${MAX_CHAT_MESSAGE_CHARS} characters)` }
+    }
     const fields = Array.isArray(details)
       ? [...new Set(details.flatMap((item) => {
         if (!item || typeof item !== 'object' || !('loc' in item) || !Array.isArray(item.loc)) return []

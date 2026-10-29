@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuthStore, type UserRole } from '../store/auth'
-import { askChatbot, chatbotError, sendChatbotFeedback, type ChatTurn } from './api'
+import {
+  askChatbot,
+  chatbotError,
+  MAX_CHAT_MESSAGE_CHARS,
+  sendChatbotFeedback,
+  type ChatTurn,
+} from './api'
 import { fetchPersonalSummary } from './summaryApi'
 import type { ChatMessage, ChatPage, ChatResponse, ChatSourceType, PersonalSummary } from './types'
 
@@ -97,7 +103,12 @@ export function useChatbot() {
     appendUserMessage = true,
   ): Promise<boolean> => {
     const text = question.trim()
-    if (!text || text.length > 500 || typing || summaryLoading || requestInFlight.current) return false
+    if (!text) return false
+    if (text.length > MAX_CHAT_MESSAGE_CHARS) {
+      setError(`Message too long (max ${MAX_CHAT_MESSAGE_CHARS} characters)`)
+      return false
+    }
+    if (typing || summaryLoading || requestInFlight.current) return false
     requestInFlight.current = true
     setPendingQuestion(text)
     setError('')

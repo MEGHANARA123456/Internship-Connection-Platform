@@ -71,6 +71,17 @@ def is_chatbot_capability_question(text: str) -> bool:
     )
 
 
+def is_role_capability_question(text: str) -> bool:
+    return bool(
+        re.search(r"\bwhat is my role\b", text, re.I)
+        or re.search(
+            r"\bwhat can i do(?: here| on (?:this )?platform| with (?:my )?account)?\b",
+            text,
+            re.I,
+        )
+    )
+
+
 def detect_abuse(text: str) -> bool:
     return any(pattern.search(text) for pattern in ABUSE_PATTERNS)
 

@@ -13,6 +13,18 @@ interface MessageListProps {
   onFeedback: (turnId: string, rating: 'up' | 'down', sourceType: ChatSourceType) => Promise<boolean>
 }
 
+function uniqueByRoute<T extends { route: string }>(
+  items: T[] | undefined,
+  excludedRoutes: Set<string> = new Set(),
+): T[] {
+  const seen = new Set(excludedRoutes)
+  return (items ?? []).filter((item) => {
+    if (!isKnownInternalRoute(item.route) || seen.has(item.route)) return false
+    seen.add(item.route)
+    return true
+  })
+}
+
 export function MessageList({ messages, typing, onSend, onFeedback }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null)
   const shouldFollowLatest = useRef(true)
@@ -61,7 +73,7 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
         <article key={message.id} className={`max-w-[92%] rounded-2xl px-3 py-2.5 ${message.role === 'user' ? 'ml-auto bg-indigo-600 text-white' : 'mr-auto border border-slate-200 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'}`}>
           <SafeText text={message.content} />
           {message.summary && <PersonalSummaryCard summary={message.summary} />}
-          {message.links?.filter((link) => isKnownInternalRoute(link.route)).map((link) => (
+          {uniqueByRoute(message.links).map((link) => (
             <Link key={`${link.route}-${link.label}`} to={link.route} className="mt-2 inline-flex rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-200 dark:hover:bg-indigo-900">
               {link.label} →
             </Link>
@@ -75,7 +87,7 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
             <div className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950/50 dark:text-amber-100">
               <p>Couldn’t find this in the help docs. Try asking about one of these topics:</p>
               <div className="mt-1 flex flex-wrap gap-1">
-                {message.suggestedFollowups?.map((question) => (
+                {[...new Set(message.suggestedFollowups)].map((question) => (
                   <button key={question} type="button" disabled={typing} onClick={() => void onSend(question)} className="rounded-full border border-amber-300 px-2 py-1 text-[10px] font-medium hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:hover:bg-amber-900">
                     {question}
                   </button>
@@ -83,9 +95,9 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
               </div>
             </div>
           )}
-          {message.sources?.filter((source) => isKnownInternalRoute(source.route)).length ? (
+          {uniqueByRoute(message.sources, new Set((message.links ?? []).map((link) => link.route))).length ? (
             <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-200/70 pt-2 text-[10px] dark:border-slate-600">
-              {message.sources.filter((source) => isKnownInternalRoute(source.route)).map((source) => (
+              {uniqueByRoute(message.sources, new Set((message.links ?? []).map((link) => link.route))).map((source) => (
                 <Link key={source.id} to={source.route} className="rounded-full bg-indigo-50 px-2.5 py-1 font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-200 dark:hover:bg-indigo-900">
                   {source.title}
                 </Link>
@@ -103,7 +115,7 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
           </div>
           {message.role === 'assistant' && message.sourceType && (
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
-              {message.suggestedFollowups?.filter(() => !message.noEvidence).map((question) => (
+              {[...new Set(message.suggestedFollowups)].filter(() => !message.noEvidence).map((question) => (
                 <button key={question} type="button" disabled={typing} onClick={() => void onSend(question)} className="rounded-full border border-slate-300 px-2 py-1 text-[10px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
                   {question}
                 </button>

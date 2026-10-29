@@ -101,15 +101,24 @@ describe('chatbot dialog accessibility', () => {
         role: 'assistant',
         content: 'Use the applications page.',
         createdAt: Date.now(),
+        links: [
+          { label: 'Applications', route: '/applications' },
+          { label: 'Applications details', route: '/applications' },
+        ],
         sourceType: 'docs',
-        sources: [{ id: 'applications', title: 'Applications guide', route: '/applications' }],
+        sources: [
+          { id: 'applications', title: 'Applications guide', route: '/applications' },
+          { id: 'profile', title: 'Profile guide', route: '/profile/student' },
+        ],
         suggestedFollowups: ['How do I withdraw an application?'],
       }]}
       onFeedback={onFeedback}
     /></MemoryRouter>)
 
     expect(screen.getByText('Help docs')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Applications guide' })).toHaveAttribute('href', '/applications')
+    expect(screen.getAllByRole('link', { name: /Applications/ })).toHaveLength(1)
+    expect(screen.queryByRole('link', { name: 'Applications guide' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Profile guide' })).toHaveAttribute('href', '/profile/student')
     fireEvent.click(screen.getByRole('button', { name: 'How do I withdraw an application?' }))
     expect(props.onSend).toHaveBeenCalledWith('How do I withdraw an application?')
     fireEvent.click(screen.getByRole('button', { name: 'Helpful response' }))
