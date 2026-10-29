@@ -65,7 +65,7 @@ GUIDANCE = {
     "notifications": "Open Notifications & Mailbox to review your alerts.",
     "account": "Open your account settings to review your InternSphere account information.",
 }
-WORD_LIMIT = 150
+WORD_LIMIT = 120
 COMMON_ROUTES = {
     "/", "/opportunities", "/login", "/register-student", "/register-company",
     "/forgot-password", "/reset-password", "/verify", "/privacy", "/privacy-center",
@@ -103,17 +103,61 @@ class ChatResult:
     refusal_reason: str | None
 
 
-def _words(text: str) -> str:
-    return " ".join(text.split()[:WORD_LIMIT])
+def _truncate_answer(text: str) -> str:
+    accepted: list[str] = []
+    word_count = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if re.match(r"^(?:\d+[.)]|[-*])\s+", stripped):
+            units = [stripped]
+        else:
+            units = re.split(r"(?<=[.!?])\s+", stripped)
+            units = [unit for unit in units if unit.endswith((".", "!", "?"))]
+        for unit in units:
+            unit_words = len(unit.split())
+            if word_count + unit_words > WORD_LIMIT:
+                return "\n".join(accepted)
+            accepted.append(unit)
+            word_count += unit_words
+    return "\n".join(accepted)
 
 
 def _render_retrieval_answer(passages: list[Passage]) -> str:
-    paragraphs = []
-    for passage in passages:
-        content = re.sub(r"^#+\s*", "", passage.text, flags=re.M).strip()
-        content = re.sub(r"\[([^\]]+)\]\((/[^\s)]+)\)", r"\1 (\2)", content)
-        paragraphs.append(content)
-    return _words(" ".join(paragraphs))
+    if not passages:
+        return ""
+    content = passages[0].text
+    content = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", content)
+    content = re.sub(
+        r"\[([^\]]+)\]\(([^)]+)\)",
+        lambda match: (
+            f"{match.group(1)} ({match.group(2)})"
+            if match.group(2).startswith("/")
+            else match.group(1)
+        ),
+        content,
+    )
+    content = re.sub(r"^#{1,6}\s+.*$", "", content, flags=re.M)
+    content = re.sub(r"```[\w-]*\s*|\s*```", "", content)
+    content = re.sub(r"(`{1,2}|\*\*|__|~~|(?<!\w)[*_](?!\w))", "", content)
+    content = re.sub(r"<[^>]*>", "", content)
+    paragraphs = [
+        paragraph.strip()
+        for paragraph in re.split(r"\n\s*\n", content)
+        if paragraph.strip()
+    ]
+    return _truncate_answer("\n\n".join(paragraphs[:2]))
+
+
+def _no_evidence_reply(role: str) -> str:
+    suggestions = {
+        "student": "I can help with finding internships, applications, or skill assessments.",
+        "company": "I can help with internship postings, applicants, or your hiring pipeline.",
+        "admin": "I can help with moderation, company verification, or audit reports.",
+        "guest": "I can help with registration, finding internships, or general platform features.",
+    }
+    return f"I couldn’t find that in the help guide. {suggestions.get(role, suggestions['guest'])}"
 
 
 def _role_routes(role: str) -> set[str]:
@@ -310,7 +354,7 @@ def _admin_audit_summary(events: list[AuditEventSummary]) -> str:
         summaries.append(
             f"{actor} {action} {target} on {timestamp.strftime('%b %d, %Y at %H:%M UTC')}."
         )
-    return _words("Recent audit events: " + " ".join(summaries))
+    return _truncate_answer("Recent audit events: " + " ".join(summaries))
 
 
 class ChatbotService:
@@ -422,7 +466,11 @@ class ChatbotService:
         source_type = "docs"
         answer_path = "retrieval"
         if decision.refused:
-            answer = fixed_reply(decision, role_name)
+            answer = (
+                _no_evidence_reply(role_name)
+                if decision.refusal_reason == "no_product_intent_or_knowledge_match"
+                else fixed_reply(decision, role_name)
+            )
             answer_path = "refusal"
         elif is_role_capability_question(normalized_message):
             answer, role_route = _role_capabilities(role_name)
@@ -493,7 +541,7 @@ class ChatbotService:
                 route = PAGE_ROUTES.get(account_key, "/profile/student")
                 links = ((account_key.replace("-", " ").title(), route),)
         elif not passages:
-            answer = "I couldn’t find that in the help guide. Try asking about a platform page or feature."
+            answer = _no_evidence_reply(role_name)
         elif self.config.mode == "llm":
             answer, sources, links, provider_fallback = await self._answer_with_provider(
                 normalized_message,
@@ -514,9 +562,9 @@ class ChatbotService:
         allowed_routes.update(
             route for _, route in live_links if _is_allowed_live_route(route, role_name)
         )
-        answer = _words(answer)
+        answer = _truncate_answer(answer)
         if not output_is_safe(answer, allowed_routes):
-            safe_live_answer = _words(live_answer or "")
+            safe_live_answer = _truncate_answer(live_answer or "")
             if live_answer is not None and output_is_safe(safe_live_answer, allowed_routes):
                 answer = safe_live_answer
                 sources = ()
@@ -622,7 +670,7 @@ class ChatbotService:
             return result.answer.strip(), sources, _links_for(passages, role), False
         except (OSError, RuntimeError, TimeoutError, ValueError):
             fallback_answer = _render_retrieval_answer(passages) or live_data or ""
-            fallback_answer = " ".join(fallback_answer.split()[:140])
+            fallback_answer = _truncate_answer(fallback_answer)
             notice = "I couldn’t reach the answer service, so this is the help-guide answer."
             answer = f"{fallback_answer} {notice}".strip()
             if not fallback_answer:

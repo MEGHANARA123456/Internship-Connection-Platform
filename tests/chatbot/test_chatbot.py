@@ -17,7 +17,11 @@ from app.chatbot.scope import decide_scope
 from app.chatbot.redaction import contains_secret, redact
 from app.chatbot.retriever import BM25Retriever, load_documents
 from app.services.audit import AuditEventSummary
-from app.services.chatbot_service import ChatbotService
+from app.services.chatbot_service import (
+    ChatbotService,
+    _render_retrieval_answer,
+    _truncate_answer,
+)
 from app.chatbot.prompts import system_prompt_for
 from app.schemas.chatbot import ChatAskRequest
 from app.main import app
@@ -76,7 +80,7 @@ def test_anthropic_configuration_is_loaded_from_dotenv_and_bounded(tmp_path, mon
         "ANTHROPIC_API_KEY=local-test-key\n"
         "CHATBOT_MODEL=claude-sonnet-5-5\n"
         "CHATBOT_ROUTER_MODEL=claude-haiku-5-5\n"
-        "CHATBOT_MAX_TOKENS=900\n"
+        "CHATBOT_MAX_TOKENS=1900\n"
         "CHATBOT_TEMPERATURE=1\n"
         "CHATBOT_TIMEOUT_SECONDS=30\n"
         "CHATBOT_RETRIES=3\n",
@@ -103,7 +107,7 @@ def test_anthropic_configuration_is_loaded_from_dotenv_and_bounded(tmp_path, mon
     assert config.api_key == "local-test-key"
     assert config.model == "claude-sonnet-5-5"
     assert config.router_model == "claude-haiku-5-5"
-    assert config.max_tokens == 600
+    assert config.max_tokens == 1500
     assert config.temperature == 0.2
     assert config.timeout_seconds == 15
     assert config.retries == 1
@@ -253,12 +257,12 @@ async def test_openai_compatible_provider_redacts_and_retries_gpt_oss(
         else:
             response = {"choices": [{
                 "finish_reason": "stop",
-                "message": {"content": json.dumps({
+                "message": {"content": "Here is the result:\n```json\n" + json.dumps({
                     "answerable": True,
                     "answer": "Open Applications to review your timeline.",
                     "used_chunk_ids": ["applying"],
                     "confidence": 0.9,
-                })},
+                }) + "\n```"},
             }]}
         return json.dumps(response).encode("utf-8")
 
@@ -280,6 +284,7 @@ async def test_openai_compatible_provider_redacts_and_retries_gpt_oss(
     assert first_body["max_tokens"] == 600
     assert retry_body["max_tokens"] == 1500
     assert retry_body["reasoning_effort"] == "low"
+    assert first_body["reasoning_effort"] == "low"
     assert first_request.get_header("Authorization") == f"Bearer {config.api_key}"
     sent = json.loads(retry_body["messages"][1]["content"])
     assert "demo.student@example.test" not in sent["question"]
@@ -467,6 +472,10 @@ def test_role_prompts_are_separated_and_page_context_ranks_related_help() -> Non
     assert "Audience: COMPANY" in company_prompt
     assert "Audience: ADMIN" in admin_prompt
     assert len({guest_prompt, student_prompt, company_prompt, admin_prompt}) == 4
+    assert "numbered steps" in student_prompt
+    assert "under 120 words" in student_prompt
+    assert "I can't see your account data here, open Applications to check." in student_prompt
+    assert "Examples:" in student_prompt
 
     results = BM25Retriever().retrieve(
         "How do I move a candidate to the next stage?",
@@ -769,13 +778,76 @@ def test_redaction_does_not_change_non_sensitive_help_text() -> None:
     assert redact(text) == text
 
 
+def test_retrieval_rendering_keeps_step_lines_and_strips_markdown() -> None:
+    passage = SimpleNamespace(
+        text=(
+            "## Applying\n\n"
+            "Follow these steps:\n"
+            "1. Open **Opportunities**.\n"
+            "2. Choose a [posting](/opportunities) and review it.\n"
+            "3. Select `Apply`.\n\n"
+            "After submitting, check your status in Applications."
+        ),
+    )
+    other_passage = SimpleNamespace(text="This unrelated passage must not be joined.")
+
+    answer = _render_retrieval_answer([passage, other_passage])
+
+    assert "1. Open Opportunities." in answer
+    assert "2. Choose a posting (/opportunities) and review it." in answer
+    assert "3. Select Apply." in answer
+    assert "check your status in Applications" in answer
+    assert "unrelated passage" not in answer
+    assert "**" not in answer and "`" not in answer
+    assert answer.index("1.") < answer.index("\n2.") < answer.index("\n3.")
+
+
+def test_answer_truncation_ends_at_a_complete_sentence_or_list_item() -> None:
+    complete = " ".join(["word"] * 116) + "."
+    answer = _truncate_answer(f"{complete} " + "unfinished " * 20)
+    assert answer == complete
+    assert answer.endswith(".")
+    assert len(answer.split()) <= 120
+
+    steps = "\n".join(
+        [f"{index}. " + " ".join(["step"] * 50) for index in range(1, 4)]
+    )
+    truncated_steps = _truncate_answer(steps)
+    assert truncated_steps.count("\n") == 1
+    assert truncated_steps.startswith("1.")
+    assert "\n2." in truncated_steps
+    assert "\n3." not in truncated_steps
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("role", "expected_topics"),
+    [
+        ("student", ("internships", "applications", "skill assessments")),
+        ("company", ("postings", "applicants", "hiring pipeline")),
+        ("admin", ("moderation", "verification", "audit reports")),
+        ("guest", ("registration", "finding internships", "platform features")),
+    ],
+)
+async def test_empty_retrieval_suggests_help_topics_for_each_role(role, expected_topics) -> None:
+    class EmptyRetriever:
+        def retrieve(self, *_args, **_kwargs):
+            return []
+
+    service = ChatbotService(config=_config(), retriever=EmptyRetriever())
+    result = await service.ask("How do skill assessments work?", [], role, "home")
+
+    assert "couldn’t find that in the help guide" in result.answer
+    assert all(topic in result.answer for topic in expected_topics)
+
+
 def test_eval_corpus_has_required_categories_and_size() -> None:
     records = json.loads((Path(__file__).parent / "eval_questions.yaml").read_text(encoding="utf-8"))
     counts = {kind: sum(record["kind"] == kind for record in records) for kind in {
         "in_scope", "out_of_scope", "injection", "credential"
     }}
-    assert len(records) >= 80
-    assert counts == {"in_scope": 40, "out_of_scope": 15, "injection": 15, "credential": 10}
+    assert len(records) >= 88
+    assert counts == {"in_scope": 48, "out_of_scope": 15, "injection": 15, "credential": 10}
 
 
 @pytest.mark.anyio

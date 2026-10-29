@@ -38,6 +38,9 @@ async def evaluate(dataset: Path) -> dict[str, Any]:
         for item in in_scope:
             history = [tuple(turn) for turn in item.get("history", [])]
             role = str(item.get("role", "all")).lower()
+            expected_source = str(item.get("expected_source", item.get("expected", "")))
+            if not expected_source:
+                raise ValueError(f"Evaluation question {item.get('id')} has no expected source.")
             passages = await retriever.retrieve(
                 db,
                 str(item["question"]),
@@ -47,18 +50,18 @@ async def evaluate(dataset: Path) -> dict[str, Any]:
             matching_ranks = [
                 index
                 for index, passage in enumerate(passages, start=1)
-                if passage.doc_id == item["expected_source"]
+                if passage.doc_id == expected_source
             ]
             ranks.append(min(matching_ranks) if matching_ranks else 0)
             answer = " ".join(passage.text for passage in passages).casefold()
             facts = item.get("key_facts", [])
             absent_facts = [str(fact) for fact in facts if str(fact).casefold() not in answer]
-            if matching_ranks and facts and not absent_facts:
+            if matching_ranks and not absent_facts:
                 correct_answers += 1
             else:
                 missed_facts.append({
                     "id": str(item["id"]),
-                    "expected_source": str(item["expected_source"]),
+                    "expected_source": expected_source,
                     "absent_facts": absent_facts,
                 })
 
@@ -99,7 +102,11 @@ async def evaluate(dataset: Path) -> dict[str, Any]:
         },
         "refusal_failures": refusal_failures,
         "missed_sources": [
-            {"id": item["id"], "expected_source": item["expected_source"], "rank": rank}
+            {
+                "id": item["id"],
+                "expected_source": item.get("expected_source", item.get("expected")),
+                "rank": rank,
+            }
             for item, rank in zip(in_scope, ranks)
             if not rank
         ],

@@ -104,7 +104,7 @@ def load_config() -> ChatbotConfig:
             "CHATBOT_ROUTER_MODEL",
             setting("CHATBOT_MODEL", "claude-haiku-5-5"),
         ).strip(),
-        max_tokens=max(1, min(600, int(setting("CHATBOT_MAX_TOKENS", "600")))),
+        max_tokens=max(1, min(1500, int(setting("CHATBOT_MAX_TOKENS", "600")))),
         temperature=max(0.0, min(0.2, float(setting("CHATBOT_TEMPERATURE", "0.1")))),
         retries=max(0, min(1, int(setting("CHATBOT_RETRIES", "1")))),
         top_k=max(1, min(8, int(setting("CHATBOT_TOP_K", "3")))),

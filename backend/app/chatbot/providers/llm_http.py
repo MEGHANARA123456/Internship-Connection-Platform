@@ -14,6 +14,46 @@ from .base import ProviderPayload, ProviderResult
 logger = logging.getLogger("internsphere.chatbot")
 
 
+def _extract_json_object(content: str) -> dict[str, object]:
+    text = content.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[-1].strip() == "```":
+            lines = lines[1:-1]
+        else:
+            lines = lines[1:]
+        text = "\n".join(lines).strip()
+
+    start = text.find("{")
+    if start < 0:
+        raise ValueError("Provider response contains no JSON object.")
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        character = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                parsed = json.loads(text[start:index + 1])
+                if not isinstance(parsed, dict):
+                    raise ValueError("Provider response must be a JSON object.")
+                return parsed
+    raise ValueError("Provider response contains an incomplete JSON object.")
+
+
 class LLMHTTPProvider:
     def __init__(self, config: ChatbotConfig):
         self._config = config
@@ -63,7 +103,7 @@ class LLMHTTPProvider:
                         {"role": "user", "content": json.dumps(safe_payload)},
                     ],
                 }
-                if attempt and self._config.model.lower().startswith("gpt-oss"):
+                if self._config.model.lower().startswith("gpt-oss"):
                     body["reasoning_effort"] = "low"
                 request = Request(
                     f"{self._config.base_url}/v1/chat/completions",
@@ -96,9 +136,7 @@ class LLMHTTPProvider:
 
             if completion is None:
                 raise ValueError("Provider response has no completion.")
-            parsed = json.loads(content)
-            if not isinstance(parsed, dict):
-                raise ValueError("Provider response must be a JSON object.")
+            parsed = _extract_json_object(content)
             if not isinstance(parsed.get("answerable"), bool) or not isinstance(parsed.get("answer"), str):
                 raise ValueError("Provider response does not match the required schema.")
             source_values = parsed.get("used_chunk_ids")
