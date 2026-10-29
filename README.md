@@ -16,9 +16,10 @@
 
 
 <p align="center">
-  <img src="internsphere_app.png" alt="InternSphere Application Preview" width="100%">
+  <img src="md_file/internsphere_app.png"
+       alt="InternSphere Application Preview"
+       width="900">
 </p>
-</div>
 
 ---
 
