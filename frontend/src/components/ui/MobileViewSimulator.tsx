@@ -1,14 +1,14 @@
-import { useState, useEffect, useRef, type ReactNode } from 'react'
+import { useState, useEffect, useRef, type ReactNode, type SyntheticEvent } from 'react'
 import { useViewModeStore } from '../../store/viewMode'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Smartphone,
-  Monitor,
   RotateCw,
   RefreshCw,
   Check,
   ChevronDown,
   Sparkles,
+  X,
 } from 'lucide-react'
 
 interface DevicePreset {
@@ -22,21 +22,25 @@ const DEVICE_PRESETS: DevicePreset[] = [
   { id: 'actual', name: 'Actual size', width: 0, height: 0 },
   { id: 'laptop', name: 'Laptop', width: 1280, height: 900 },
   { id: 'tablet', name: 'Tablet', width: 768, height: 1024 },
+  { id: 'iphone-se', name: 'iPhone SE', width: 375, height: 667 },
+  { id: 'pixel', name: 'Pixel', width: 412, height: 915 },
   { id: 'mobile', name: 'Mobile', width: 390, height: 844 },
 ]
 
 export function MobileViewSimulator({ children }: { children: ReactNode }) {
   const { isMobileView, toggleMobileView } = useViewModeStore()
   const [selectedDevice, setSelectedDevice] = useState<DevicePreset>(() => {
-    if (typeof window === 'undefined') return DEVICE_PRESETS[3]
+    if (typeof window === 'undefined') return DEVICE_PRESETS.find((preset) => preset.id === 'mobile')!
     const id = window.sessionStorage.getItem('screen-preview-size')
-    return DEVICE_PRESETS.find((preset) => preset.id === id) ?? DEVICE_PRESETS[3]
+    return DEVICE_PRESETS.find((preset) => preset.id === id)
+      ?? DEVICE_PRESETS.find((preset) => preset.id === 'mobile')!
   })
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait')
   const [frameMode, setFrameMode] = useState<'hardware' | 'clean'>('hardware')
   const [scale, setScale] = useState<number | 'auto'>('auto')
   const [deviceDropdownOpen, setDeviceDropdownOpen] = useState(false)
   const [iframeKey, setIframeKey] = useState(0)
+  const [frameState, setFrameState] = useState({ identity: '', loading: true, error: false })
   const [currentTime, setCurrentTime] = useState('')
   const dropdownRef = useRef<HTMLDivElement>(null)
   const location = useLocation()
@@ -123,6 +127,9 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
   const previewUrl = typeof window !== 'undefined'
     ? `${window.location.pathname}${window.location.search ? `${window.location.search}&` : '?'}preview=1`
     : '/'
+  const frameIdentity = `${iframeKey}-${location.pathname}${location.search}`
+  const isFrameLoading = frameState.identity !== frameIdentity || frameState.loading
+  const frameError = frameState.identity === frameIdentity && frameState.error
 
   const isPortrait = orientation === 'portrait'
   const previewWidth = selectedDevice.id === 'actual' ? window.innerWidth : selectedDevice.width
@@ -141,6 +148,50 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
   const handleReload = () => {
     setIframeKey((prev) => prev + 1)
   }
+
+  const handleFrameLoad = (event: SyntheticEvent<HTMLIFrameElement>) => {
+    let error = false
+    try {
+      const frameLocation = event.currentTarget.contentWindow?.location
+      if (!frameLocation || frameLocation.href === 'about:blank' || frameLocation.origin !== window.location.origin) {
+        error = true
+      }
+    } catch {
+      error = true
+    }
+    setFrameState({ identity: frameIdentity, loading: false, error })
+  }
+
+  const handleFrameError = () => {
+    setFrameState({ identity: frameIdentity, loading: false, error: true })
+  }
+
+  const renderPreviewFrame = (title: string, width: number, height: number) => (
+    <>
+      <iframe
+        key={`${iframeKey}-${previewUrl}`}
+        src={previewUrl}
+        title={title}
+        width={width}
+        height={height}
+        className="absolute inset-0 h-full w-full border-0"
+        onLoad={handleFrameLoad}
+        onError={handleFrameError}
+      />
+      {isFrameLoading && !frameError && (
+        <div role="status" aria-live="polite" className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white/95 text-sm font-medium text-slate-600 dark:bg-slate-950/95 dark:text-slate-300">
+          <span className="h-7 w-7 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" aria-hidden="true" />
+          <span>Loading preview…</span>
+        </div>
+      )}
+      {frameError && (
+        <div role="alert" className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-white p-6 text-center text-sm text-slate-700 dark:bg-slate-950 dark:text-slate-200">
+          <strong>Preview couldn’t be displayed.</strong>
+          <span>This page may block embedding or may have failed to load. Reload the preview or open the page directly.</span>
+        </div>
+      )}
+    </>
+  )
 
   const toggleOrientation = () => {
     setOrientation((prev) => (prev === 'portrait' ? 'landscape' : 'portrait'))
@@ -240,6 +291,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
             onClick={toggleOrientation}
             className="p-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white transition-all cursor-pointer"
             title={`Rotate to ${orientation === 'portrait' ? 'Landscape' : 'Portrait'}`}
+            aria-label={`Rotate to ${orientation === 'portrait' ? 'Landscape' : 'Portrait'}`}
           >
             <RotateCw className="w-4 h-4" />
           </button>
@@ -249,6 +301,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
             onClick={handleReload}
             className="p-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white transition-all cursor-pointer"
             title="Reload preview screen"
+            aria-label="Reload preview screen"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
@@ -274,10 +327,11 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
           <button
             onClick={toggleMobileView}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-500/20 hover:text-rose-300 hover:border-rose-500/40 text-slate-200 border border-slate-700 text-xs font-semibold transition-all cursor-pointer ml-1"
-            title="Exit Mobile View (Esc)"
+            title="Close Mobile View (Esc)"
+            aria-label="Close mobile preview"
           >
-            <Monitor className="w-3.5 h-3.5 text-indigo-400 group-hover:text-rose-400" />
-            <span>Exit preview</span>
+            <X className="w-3.5 h-3.5 text-indigo-400 group-hover:text-rose-400" />
+            <span>Close preview</span>
             <kbd className="hidden sm:inline-block ml-1 px-1.5 py-0.2 bg-slate-900/80 border border-slate-700 rounded text-[9px] text-slate-400 font-mono">
               ESC
             </kbd>
@@ -293,7 +347,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
           marginBottom: `calc(${1 - computedScale} * -${activeHeight}px)`,
         }}
       >
-        {frameMode === 'hardware' && selectedDevice.id === 'mobile' ? (
+        {frameMode === 'hardware' && ['mobile', 'iphone-se', 'pixel'].includes(selectedDevice.id) ? (
           /* Realistic Titanium Flagship Chassis */
           <div
             className="relative bg-slate-950 rounded-[52px] p-[10px] shadow-[0_25px_70px_rgba(0,0,0,0.85),0_0_0_1px_rgba(255,255,255,0.12),0_0_0_8px_#1e293b,0_0_0_10px_#090d16] flex flex-col shrink-0 transition-all duration-300"
@@ -362,14 +416,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
 
               {/* Real 1:1 Responsive Iframe Screen */}
               <div className="flex-1 w-full relative overflow-hidden bg-slate-50 dark:bg-slate-950">
-                <iframe
-                  key={`${iframeKey}-${previewUrl}`}
-                  src={previewUrl}
-                  title="Mobile viewport"
-                  width={activeWidth}
-                  height={activeHeight - 68}
-                  className="w-full h-full border-0 block"
-                />
+                {renderPreviewFrame('Mobile viewport', activeWidth, activeHeight - 68)}
               </div>
 
               {/* iOS Home Indicator Bar */}
@@ -384,14 +431,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
             className="relative bg-white dark:bg-slate-950 rounded-2xl shadow-2xl overflow-hidden border border-slate-800 flex flex-col shrink-0"
             style={{ width: activeWidth, height: activeHeight }}
           >
-            <iframe
-              key={`${iframeKey}-${previewUrl}`}
-              src={previewUrl}
-              title="Mobile viewport clean"
-              width={activeWidth}
-              height={activeHeight}
-              className="w-full h-full border-0 block"
-            />
+            {renderPreviewFrame('Mobile viewport clean', activeWidth, activeHeight)}
           </div>
         )}
       </div>

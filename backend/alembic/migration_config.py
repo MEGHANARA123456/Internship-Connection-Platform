@@ -1,4 +1,4 @@
-# This file is the Alembic migration entry point.
+# This module contains the application's Alembic migration configuration.
 # It tells Alembic how to connect to the database and which SQLAlchemy models to use.
 from logging.config import fileConfig
 import asyncio

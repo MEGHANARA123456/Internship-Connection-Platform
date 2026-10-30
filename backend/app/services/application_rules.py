@@ -19,6 +19,7 @@ async def check_eligibility(
     student: User,
     internship: Internship,
 ) -> dict[str, Any]:
+    """Return application blockers, warnings, match details, and stored resume metadata for a student-role pair."""
     blockers: list[dict[str, Any]] = []
     warnings: list[dict[str, str]] = []
 

@@ -44,4 +44,5 @@ class Settings(BaseSettings):
 # Cache settings so environment values are loaded once for the runtime.
 @lru_cache
 def get_settings() -> Settings:
+    """Return the cached application settings loaded from environment and .env."""
     return Settings()

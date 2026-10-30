@@ -8,6 +8,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 def extract_text_from_pdf(file_path: str | Path) -> str:
+    """Extract text from each readable PDF page, returning an empty string on missing or invalid files."""
     path = Path(file_path)
     if not path.is_file():
         return ""

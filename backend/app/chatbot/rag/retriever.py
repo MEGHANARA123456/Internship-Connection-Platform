@@ -17,6 +17,7 @@ logger = logging.getLogger("internsphere.chatbot.rag")
 
 
 def standalone_query(query: str, history: list[tuple[str, str]]) -> str:
+    """Add up to three recent turns as context when the current query is at most seven words."""
     recent = history[-3:]
     if recent and len(query.split()) <= 7:
         context = " ".join(content[:160] for _, content in recent)
@@ -26,6 +27,7 @@ def standalone_query(query: str, history: list[tuple[str, str]]) -> str:
 
 class HybridRetriever:
     def __init__(self, config: ChatbotConfig):
+        """Retain the configuration controlling embeddings, vector dimensions, and result thresholds."""
         self.config = config
 
     async def retrieve(
@@ -35,6 +37,7 @@ class HybridRetriever:
         audience: str,
         history: list[tuple[str, str]] | None = None,
     ) -> list[Passage]:
+        """Combine audience-filtered vector and full-text rankings, then apply RAG score and count limits."""
         if audience not in {"student", "company", "admin", "all"}:
             audience = "all"
         recent_history = history or []

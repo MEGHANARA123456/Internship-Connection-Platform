@@ -11,6 +11,7 @@ from app.services.notify import notify
 
 
 def _duration_minutes(notes: str | None) -> int:
+    """Read a ``Duration: N min`` note value, defaulting to 30 outside the supported range."""
     match = re.search(r"(?:\[)?Duration:\s*(\d+)\s*min", notes or "", re.IGNORECASE)
     if match is None:
         return 30
@@ -22,6 +23,7 @@ async def expire_overdue_interviews(
     db: AsyncSession,
     now: datetime | None = None,
 ) -> int:
+    """Cancel scheduled interviews past their duration and grace period, notify participants, and commit changes."""
     current_time = now or datetime.now(timezone.utc)
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)

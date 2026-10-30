@@ -15,6 +15,7 @@ router = APIRouter(tags=["mailbox"])
 
 
 async def _get_user_emails(user: User, db: DbSession) -> list[dict]:
+    """Return the current user?s mailbox messages in the API shape, including their visible Gmail links."""
     messages = (
         await db.scalars(
             select(EmailMessage)

@@ -14,6 +14,7 @@ import { CheckCircle2, AlertCircle, KeyRound, UploadCloud, FileText, X } from 'l
 import { GoogleSignInButton } from '../components/auth/GoogleSignInButton'
 import { Logo } from '../components/layout/Logo'
 import { routes } from '../lib/routes'
+import { resolvePostLoginTarget } from '../lib/postLoginTarget'
 
 // --- Validation Schemas ---
 
@@ -99,10 +100,7 @@ export function LoginPage() {
 
   const finishLogin = (role: string, isFirstLogin = false) => {
     const requestedTarget = searchParams.get('next')
-    const safeTarget = requestedTarget?.startsWith('/') && !requestedTarget.startsWith('//')
-      ? requestedTarget
-      : null
-    const target = safeTarget ?? (role === 'ADMIN' ? routes.admin : role === 'COMPANY' ? routes.companyJobs() : routes.opportunities)
+    const target = resolvePostLoginTarget(role, requestedTarget)
     if (demoMode && role === 'COMPANY' && isFirstLogin) {
       setPostLoginPath(target)
       setDemoMailOpen(true)
@@ -410,7 +408,9 @@ export function LoginPage() {
         )}
 
         <Input
+          id="login-email"
           label="Email address"
+          aria-label="Email address"
           type="email"
           placeholder="you@example.com"
           error={errors.email?.message}
@@ -418,7 +418,9 @@ export function LoginPage() {
         />
 
         <Input
+          id="login-password"
           label="Password"
+          aria-label="Password"
           type="password"
           placeholder="••••••••"
           error={errors.password?.message}
@@ -588,6 +590,7 @@ export function StudentRegisterPage() {
           )}
 
           <Input
+            id="student-register-name"
             label="Full name"
             placeholder="Alex Smith"
             autoComplete="off"
@@ -597,7 +600,9 @@ export function StudentRegisterPage() {
 
           <div>
             <Input
+              id="student-register-email"
               label="Email address"
+              aria-label="Email address"
               type="email"
               placeholder="alex@university.edu"
               error={emailStatus === 'taken' ? 'This email is already registered. Please sign in instead.' : errors.email?.message}
@@ -615,7 +620,9 @@ export function StudentRegisterPage() {
           </div>
 
           <Input
+            id="student-register-password"
             label="Password"
+            aria-label="Password"
             type="password"
             placeholder="At least 8 characters"
             error={errors.password?.message}
@@ -941,7 +948,9 @@ export function CompanyRegisterPage() {
 
           <div>
             <Input
+              id="company-register-email"
               label="Corporate Work Email"
+              aria-label="Email address"
               type="email"
               placeholder="recruiter@acme.com"
               helperText="Must be your official corporate work email"
@@ -964,7 +973,9 @@ export function CompanyRegisterPage() {
           </div>
 
           <Input
+            id="company-register-password"
             label="Password"
+            aria-label="Password"
             type="password"
             placeholder="At least 8 characters"
             error={errors.password?.message}

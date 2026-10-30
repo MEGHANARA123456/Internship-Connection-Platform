@@ -18,6 +18,7 @@ from app.services.email_validation import validate_email_format
 
 
 async def create_admin_user(db: AsyncSession, email: str, password: str) -> User:
+    """Validate and create a verified admin, recording an audit event before committing."""
     data = AdminCreate(email=email, password=password)
     clean_email = validate_email_format(data.email)
     if await db.scalar(select(User.id).where(User.email == clean_email)):
@@ -46,11 +47,13 @@ async def create_admin_user(db: AsyncSession, email: str, password: str) -> User
 
 
 async def _create_admin(email: str, password: str) -> User:
+    """Create an admin using a newly opened async database session."""
     async with async_session_factory() as db:
         return await create_admin_user(db, email, password)
 
 
 def main() -> None:
+    """Prompt for matching passwords, create the admin, and report validation failures."""
     parser = argparse.ArgumentParser(description="Create the first InternSphere administrator.")
     parser.add_argument("email", help="Email address for the new administrator")
     args = parser.parse_args()

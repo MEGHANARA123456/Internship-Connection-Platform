@@ -38,6 +38,7 @@ logger.info(
 
 
 def _rate_key(request: Request, user, role: str) -> tuple[str, bool]:
+    """Build a salted stable key for signed-in users or fall back to the client's IP for guests."""
     authorization = request.headers.get("authorization", "")
     stable_id = getattr(user, "id", None)
     if role != "guest" and stable_id is not None:
@@ -65,6 +66,7 @@ async def ask(
     db: DbSession,
     user: Annotated[object | None, Depends(get_current_user_optional)],
 ) -> ChatAskResponse:
+    """Apply availability, role, rate, scope, intent, and live-tool checks before returning an answer."""
     config = _service.config
     if not config.enabled:
         raise HTTPException(status_code=404, detail="Not found")
@@ -151,6 +153,7 @@ async def ask(
 
 @router.get("/status")
 async def chatbot_status(db: DbSession) -> dict[str, bool | str | int | None]:
+    """Report chatbot configuration and, when RAG is enabled, indexed chunk totals and latest update."""
     from sqlalchemy import text
 
     indexed_chunks = 0
@@ -175,6 +178,7 @@ async def chatbot_status(db: DbSession) -> dict[str, bool | str | int | None]:
 async def reindex_chatbot_knowledge(
     user: Annotated[User, Depends(require_roles(UserRole("ADMIN")))],
 ) -> dict[str, int]:
+    """Rate-limit administrator-triggered knowledge reindexing and return its chunk counts."""
     config = load_config()
     if not config.enabled or not config.rag_enabled:
         raise HTTPException(status_code=404, detail="Knowledge indexing is not available.")
@@ -197,6 +201,7 @@ async def chatbot_feedback(
     body: ChatFeedbackRequest,
     user: Annotated[User, Depends(get_current_user)],
 ) -> None:
+    """Log a feedback rating and non-sensitive turn metadata without storing message content."""
     correlation_id = uuid4().hex
     logger.info(
         "chatbot_feedback",

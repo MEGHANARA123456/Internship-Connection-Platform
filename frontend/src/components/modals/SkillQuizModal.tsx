@@ -24,8 +24,12 @@ interface AssessmentQuestion {
 interface AssessmentAttempt {
   attempt_id: number
   topic: string
+  started_at: string
   expires_at: string
   duration_seconds: number
+  remaining_seconds: number
+  resumed: boolean
+  answers: Array<QuizAnswer | null> | null
   questions: AssessmentQuestion[]
 }
 
@@ -79,6 +83,15 @@ interface SkillQuizModalProps {
 
 function errorMessage(error: unknown): string {
   const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+  if (detail && typeof detail === 'object') {
+    const problem = detail as { code?: unknown; next_available_at?: unknown; detail?: unknown }
+    if (
+      (problem.code === 'COOLDOWN' || problem.code === 'WEEKLY_LIMIT')
+      && typeof problem.next_available_at === 'string'
+    ) {
+      return `${typeof problem.detail === 'string' ? problem.detail : 'You can start another assessment'} Available on ${formatDateTime(problem.next_available_at)}.`
+    }
+  }
   return typeof detail === 'string' ? detail : 'The assessment request failed. Please try again.'
 }
 
@@ -87,12 +100,25 @@ function formatTime(seconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 }
 
+function formatDateTime(value: string): string {
+  return new Date(value).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
 export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }: SkillQuizModalProps) {
   const [topics, setTopics] = useState<SkillTopic[]>([])
   const [loadingTopics, setLoadingTopics] = useState(false)
+  const [activeAttempts, setActiveAttempts] = useState<Record<string, AssessmentAttempt>>({})
   const [attempt, setAttempt] = useState<AssessmentAttempt | null>(null)
   const [result, setResult] = useState<AssessmentResult | null>(null)
   const [answers, setAnswers] = useState<QuizAnswer[]>([])
+  const [answersDirty, setAnswersDirty] = useState(false)
+  const answersRevision = useRef(0)
   const [questionTimes, setQuestionTimes] = useState<number[]>([])
   const questionStartedAt = useRef(Date.now())
   const [questionIndex, setQuestionIndex] = useState(0)
@@ -100,6 +126,7 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [expired, setExpired] = useState(false)
+  const remainingDeadline = useRef(0)
 
   useEffect(() => {
     if (!isOpen) return
@@ -107,8 +134,25 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
     setLoadingTopics(true)
     setError('')
     api.get('/skills/topics')
-      .then(({ data }) => {
-        if (active) setTopics(Array.isArray(data) ? data : [])
+      .then(async ({ data }) => {
+        const availableTopics = Array.isArray(data) ? data as SkillTopic[] : []
+        if (active) setTopics(availableTopics)
+        const topicsToCheck = initialTopic
+          ? availableTopics.filter((topic) => topic.id === initialTopic)
+          : availableTopics
+        const activeEntries = await Promise.all(topicsToCheck.map(async (topic) => {
+          const response = await api.get('/skills/assessments/active', { params: { topic: topic.id } })
+          return [topic.id, response.data as AssessmentAttempt | null] as const
+        }))
+        if (active) {
+          const attemptsByTopic: Record<string, AssessmentAttempt> = {}
+          for (const [topicId, activeAttempt] of activeEntries) {
+            if (activeAttempt && activeAttempt.remaining_seconds > 0) {
+              attemptsByTopic[topicId] = activeAttempt
+            }
+          }
+          setActiveAttempts(attemptsByTopic)
+        }
       })
       .catch((requestError: unknown) => {
         if (active) setError(errorMessage(requestError))
@@ -117,7 +161,27 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
         if (active) setLoadingTopics(false)
       })
     return () => { active = false }
-  }, [isOpen])
+  }, [isOpen, initialTopic])
+
+  const openAttempt = (startedAttempt: AssessmentAttempt) => {
+    const initialAnswers = startedAttempt.questions.map((question, index) => {
+      const saved = startedAttempt.answers?.[index]
+      if (saved !== null && saved !== undefined) return saved
+      return question.question_type === 'MULTI' ? [] : -1
+    })
+    const firstUnanswered = initialAnswers.findIndex((answer) => !hasAnswer(answer))
+    setAttempt(startedAttempt)
+    setAnswers(initialAnswers)
+    setAnswersDirty(false)
+    answersRevision.current += 1
+    setQuestionTimes(Array(startedAttempt.questions.length).fill(0))
+    setQuestionIndex(firstUnanswered >= 0 ? firstUnanswered : 0)
+    const remaining = Math.max(0, startedAttempt.remaining_seconds)
+    remainingDeadline.current = Date.now() + remaining * 1000
+    setSecondsLeft(remaining)
+    setResult(null)
+    setExpired(false)
+  }
 
   useEffect(() => {
     if (!attempt || result || expired) return
@@ -127,7 +191,8 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
   useEffect(() => {
     if (!attempt || result || expired) return
     const updateCountdown = () => {
-      const remaining = Math.max(0, Math.ceil((Date.parse(attempt.expires_at) - Date.now()) / 1000))
+      const deadline = remainingDeadline.current || Date.parse(attempt.expires_at)
+      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
       setSecondsLeft(remaining)
       if (remaining === 0) {
         setExpired(true)
@@ -145,18 +210,18 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
     try {
       const { data } = await api.post('/skills/assessments/start', { topic })
       const startedAttempt = data as AssessmentAttempt
-      setSecondsLeft(Math.max(0, Math.ceil((Date.parse(startedAttempt.expires_at) - Date.now()) / 1000)))
-      setAttempt(startedAttempt)
-      setAnswers(startedAttempt.questions.map((question) => question.question_type === 'MULTI' ? [] : -1))
-      setQuestionTimes(Array(startedAttempt.questions.length).fill(0))
-      setQuestionIndex(0)
-      setResult(null)
-      setExpired(false)
+      openAttempt(startedAttempt)
+      setActiveAttempts((current) => ({ ...current, [topic]: startedAttempt }))
     } catch (requestError) {
       setError(errorMessage(requestError))
     } finally {
       setSubmitting(false)
     }
+  }
+
+  const resumeAttempt = (topic: string) => {
+    const activeAttempt = activeAttempts[topic]
+    if (activeAttempt) openAttempt(activeAttempt)
   }
 
   const submitAssessment = async () => {
@@ -205,6 +270,8 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
 
   const setQuestionAnswer = (optionIndex: number) => {
     if (!currentQuestion) return
+    answersRevision.current += 1
+    setAnswersDirty(true)
     setAnswers((current) => current.map((answer, index) => {
       if (index !== questionIndex) return answer
       if (currentQuestion.question_type !== 'MULTI') return optionIndex
@@ -214,6 +281,32 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
         : [...selected, optionIndex]
     }))
   }
+
+  useEffect(() => {
+    if (!attempt || !answersDirty || result || expired) return
+    const snapshot = answers.map((answer) => (
+      typeof answer === 'number' && answer < 0 ? null : answer
+    ))
+    const revision = answersRevision.current
+    const timer = window.setTimeout(() => {
+      api.put(`/skills/attempts/${attempt.attempt_id}/answers`, { answers: snapshot })
+        .then(() => {
+          if (answersRevision.current === revision) setAnswersDirty(false)
+        })
+        .catch((requestError: unknown) => setError(errorMessage(requestError)))
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [attempt, answers, answersDirty, result, expired])
+
+  useEffect(() => {
+    if (!attempt || result || expired) return
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeLeaving)
+    return () => window.removeEventListener('beforeunload', warnBeforeLeaving)
+  }, [attempt, result, expired])
 
   const goToQuestion = (index: number) => {
     captureQuestionTime()
@@ -248,7 +341,9 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
                   key={topic.id}
                   type="button"
                   disabled={submitting}
-                  onClick={() => void startAssessment(topic.id)}
+                  onClick={() => activeAttempts[topic.id]
+                    ? resumeAttempt(topic.id)
+                    : void startAssessment(topic.id)}
                   className={`group flex cursor-pointer flex-col justify-between rounded-xl border p-3.5 text-left transition-all hover:border-indigo-500 hover:shadow-md disabled:cursor-wait disabled:opacity-60 dark:bg-slate-800/50 dark:hover:border-indigo-500 ${initialTopic === topic.id ? 'border-indigo-500 bg-indigo-50/70 ring-1 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-800' : 'border-slate-200 bg-slate-50/50 dark:border-slate-800'}`}
                 >
                   <div>
@@ -257,7 +352,13 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
                     <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">10 Questions • 80% Pass</p>
                   </div>
                   <div className="mt-3 flex items-center justify-between border-t border-slate-200/80 pt-2 dark:border-slate-700/60">
-                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400">{submitting ? 'Starting…' : 'Start Assessment →'}</span>
+                    <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400">
+                      {submitting
+                        ? 'Starting…'
+                        : activeAttempts[topic.id]
+                          ? `Resume (${formatTime(activeAttempts[topic.id].remaining_seconds)} left)`
+                          : 'Start Assessment →'}
+                    </span>
                     <Award className="h-3.5 w-3.5 text-indigo-500" />
                   </div>
                 </button>
@@ -279,9 +380,14 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
               Time: {Math.floor(result.time_taken_seconds / 60)}m {result.time_taken_seconds % 60}s · Percentile: {result.percentile}
             </p>
             {result.badge && (
-              <p className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
-                <Sparkles className="h-4 w-4" /> {result.badge.level} badge earned: {result.badge.title}
-              </p>
+              <div className="space-y-1">
+                <p className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                  <Sparkles className="h-4 w-4" /> {result.badge.level} badge earned: {result.badge.title}
+                </p>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  Badge expires on {formatDateTime(result.badge.expires_at)}.
+                </p>
+              </div>
             )}
           </div>
           <div className="max-h-[45vh] space-y-2 overflow-y-auto">

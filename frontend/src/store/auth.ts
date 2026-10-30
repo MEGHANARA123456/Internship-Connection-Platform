@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { clearUserCaches } from '../lib/queryClient'
 
 export type UserRole = 'STUDENT' | 'COMPANY' | 'ADMIN'
 
@@ -39,11 +40,13 @@ type AuthState = {
   session: Session
   persistence: SessionPersistence
   sessionChangedInAnotherTab: boolean
+  signedOutDeliberately: boolean
   setSession: (session: Session, persistence?: SessionPersistence) => void
   updateName: (name: string) => void
   updateAvatar: (avatar_url: string | null) => void
-  logout: () => void
+  logout: (deliberate?: boolean) => void
   clearSessionChangedNotice: () => void
+  clearSignedOutDeliberately: () => void
 }
 
 function removeUserScopedData() {
@@ -100,11 +103,13 @@ const initialSession = getInitialSession()
 export const useAuthStore = create<AuthState>((set, get) => ({
   ...initialSession,
   sessionChangedInAnotherTab: sessionStorage.getItem(SESSION_CHANGED_NOTICE_KEY) === 'true',
+  signedOutDeliberately: false,
   setSession: (session, requestedPersistence) => {
     const current = get().session
     const persistence = requestedPersistence ?? get().persistence
     if ((session && !current) || sessionsHaveDifferentUsers(current, session)) {
       removeUserScopedData()
+      clearUserCaches()
     }
     const storage = storageFor(persistence)
     if (session) {
@@ -113,8 +118,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } else {
       storage.removeItem(SESSION_KEY)
       removeUserScopedData()
+      clearUserCaches()
     }
-    set({ session, persistence })
+    set({ session, persistence, signedOutDeliberately: false })
   },
   updateName: (name) => {
     const { session, persistence } = get()
@@ -132,15 +138,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ session: updated })
     }
   },
-  logout: () => {
+  logout: (deliberate = true) => {
     storageFor(get().persistence).removeItem(SESSION_KEY)
     removeUserScopedData()
+    clearUserCaches()
     sessionStorage.removeItem(SESSION_CHANGED_NOTICE_KEY)
-    set({ session: null, persistence: 'session', sessionChangedInAnotherTab: false })
+    set({ session: null, persistence: 'session', sessionChangedInAnotherTab: false, signedOutDeliberately: deliberate })
   },
   clearSessionChangedNotice: () => {
     sessionStorage.removeItem(SESSION_CHANGED_NOTICE_KEY)
     set({ sessionChangedInAnotherTab: false })
+  },
+  clearSignedOutDeliberately: () => {
+    set({ signedOutDeliberately: false })
   },
 }))
 
@@ -160,10 +170,12 @@ if (typeof window !== 'undefined') {
 
     if (sessionsHaveDifferentUsers(current, nextSession) || (current && !nextSession)) {
       removeUserScopedData()
+      clearUserCaches()
       sessionStorage.setItem(SESSION_CHANGED_NOTICE_KEY, 'true')
       useAuthStore.setState({
         session: null,
         sessionChangedInAnotherTab: true,
+        signedOutDeliberately: false,
       })
       window.setTimeout(() => window.location.reload(), 1200)
       return

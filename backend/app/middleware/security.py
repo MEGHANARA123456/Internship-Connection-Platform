@@ -37,6 +37,7 @@ redis.call('EXPIRE', KEYS[1], window)
 return {1, 0}
 """
 def _trusted_proxy_networks(value: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """Parse comma-separated proxy CIDRs, warning and skipping entries that are invalid."""
     networks = []
     for item in value.split(","):
         item = item.strip()
@@ -49,6 +50,7 @@ def _trusted_proxy_networks(value: str) -> list[ipaddress.IPv4Network | ipaddres
     return networks
 
 def _is_trusted(address: str, networks: Iterable[ipaddress.IPv4Network | ipaddress.IPv6Network]) -> bool:
+    """Return whether an IP address belongs to any same-version trusted network."""
     try:
         ip = ipaddress.ip_address(address)
     except ValueError:
@@ -56,6 +58,7 @@ def _is_trusted(address: str, networks: Iterable[ipaddress.IPv4Network | ipaddre
     return any(ip in network for network in networks if ip.version == network.version)
 
 def _client_ip(request: Request, trusted_proxies: str) -> str:
+    """Resolve the client address, honoring forwarded hops only from a trusted peer."""
     remote = request.client.host if request.client else "unknown"
     networks = _trusted_proxy_networks(trusted_proxies)
     if not networks or not _is_trusted(remote, networks):
@@ -69,6 +72,7 @@ def _client_ip(request: Request, trusted_proxies: str) -> str:
     return chain[-1]
 
 def _strict_auth_route(path: str) -> bool:
+    """Identify authentication endpoints assigned the stricter rate-limit bucket."""
     if not path.startswith("/api/v1/auth/"):
         return False
     endpoint = path.removeprefix("/api/v1/auth/")
@@ -82,6 +86,7 @@ def _strict_auth_route(path: str) -> bool:
     )
 
 async def _request_email(request: Request) -> str | None:
+    """Hash a nonblank JSON email after trimming and lowercasing; return None if absent or invalid."""
     try:
         payload = await request.json()
     except (ValueError, UnicodeDecodeError):
@@ -92,6 +97,7 @@ async def _request_email(request: Request) -> str | None:
     return hashlib.sha256(email.strip().lower().encode()).hexdigest()
 
 def _authenticated_user_id(request: Request) -> str | None:
+    """Return the integer subject of a bearer access token, or None for an invalid credential."""
     authorization = request.headers.get("authorization", "")
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
@@ -106,6 +112,7 @@ def _authenticated_user_id(request: Request) -> str | None:
 
 class SecurityMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
+        """Initialize in-memory rate state or connect a Redis client from application settings."""
         super().__init__(app)
         self.requests: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
@@ -126,6 +133,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             self._redis = Redis.from_url(settings.rate_limit_redis_url, decode_responses=True)
 
     async def _allow(self, key: str, limit: int, window: int) -> tuple[bool, int]:
+        """Record a request in a sliding window and return allowance plus retry seconds."""
         now = time.time() if self._redis is not None else time.monotonic()
         if self._redis is not None:
             result = await self._redis.eval(
@@ -158,6 +166,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         return True, 0
 
     async def dispatch(self, request: Request, call_next):
+        """Rate-limit non-health HTTP requests and attach security headers to each response."""
         path = request.url.path
         settings = get_settings()
         is_websocket = request.scope.get("type") == "websocket"

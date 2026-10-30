@@ -6,6 +6,7 @@ from .llm_http import LLMHTTPProvider
 
 
 def create_answer_provider(config: ChatbotConfig) -> AnswerProvider:
+    """Instantiate the configured answer provider, importing Anthropic only when selected."""
     if config.provider == "anthropic":
         from .anthropic import AnthropicProvider
 

@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
+import { useViewModeStore } from '../../store/viewMode'
 import { Navbar } from './Navbar'
 
 vi.mock('../../api/client', () => ({
@@ -15,6 +16,8 @@ vi.mock('./BottomTabBar', () => ({ BottomTabBar: () => null }))
 afterEach(() => {
   vi.restoreAllMocks()
   useAuthStore.getState().logout()
+  useViewModeStore.getState().setMobileView(false)
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
 })
 
 describe('Navbar menus', () => {
@@ -121,5 +124,62 @@ describe('Navbar menus', () => {
     expect(await screen.findByText('Search couldn’t be completed.', {}, { timeout: 1500 })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByText('Audit event', {}, { timeout: 1500 })).toBeInTheDocument()
+  })
+
+  it.each(['COMPANY', 'ADMIN'] as const)('shows and opens the mobile preview action for %s users', (role) => {
+    useAuthStore.getState().setSession({
+      accessToken: 'token',
+      refreshToken: 'refresh',
+      userId: 4,
+      role,
+      email: `${role.toLowerCase()}@example.com`,
+    })
+    render(<MemoryRouter><Navbar /></MemoryRouter>)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+    const menu = screen.getByRole('menu', { name: 'Navigation' })
+    const items = within(menu).getAllByRole('menuitem')
+    const preview = within(menu).getByRole('menuitem', { name: 'Preview Mobile View' })
+    const signOut = within(menu).getByRole('menuitem', { name: 'Sign out' })
+
+    expect(items.indexOf(preview)).toBe(items.indexOf(signOut) - 1)
+    fireEvent.click(preview)
+    expect(useViewModeStore.getState().isMobileView).toBe(true)
+  })
+
+  it('hides the mobile preview action when the viewport becomes narrower than 768px', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 768 })
+    useAuthStore.getState().setSession({
+      accessToken: 'token',
+      refreshToken: 'refresh',
+      userId: 5,
+      role: 'COMPANY',
+      email: 'company@example.com',
+    })
+    render(<MemoryRouter><Navbar /></MemoryRouter>)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+    const menu = screen.getByRole('menu', { name: 'Navigation' })
+    expect(within(menu).getByRole('menuitem', { name: 'Preview Mobile View' })).toBeInTheDocument()
+
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 767 })
+    fireEvent(window, new Event('resize'))
+    expect(within(menu).queryByRole('menuitem', { name: 'Preview Mobile View' })).not.toBeInTheDocument()
+  })
+
+  it('hides the mobile preview action inside the simulator route', () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'token',
+      refreshToken: 'refresh',
+      userId: 6,
+      role: 'ADMIN',
+      email: 'admin@example.com',
+    })
+    render(<MemoryRouter initialEntries={['/admin?preview=1']}><Navbar /></MemoryRouter>)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+    const menu = screen.getByRole('menu', { name: 'Navigation' })
+    expect(within(menu).queryByRole('menuitem', { name: 'Preview Mobile View' })).not.toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: 'Sign out' })).toBeInTheDocument()
   })
 })

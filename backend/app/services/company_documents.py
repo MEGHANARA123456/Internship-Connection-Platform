@@ -18,6 +18,7 @@ STORED_FILENAME_PATTERN = re.compile(r"^[a-f0-9]{32}\.(pdf|jpg|jpeg|png)$")
 
 
 async def validate_company_document(upload: UploadFile) -> tuple[bytes, str, str]:
+    """Read and validate a PDF/JPG/PNG upload; return its bytes, basename, and normalized extension."""
     filename = (upload.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
     extension = Path(filename).suffix.lower()
     format_info = DOCUMENT_FORMATS.get(extension)
@@ -49,6 +50,7 @@ async def validate_company_document(upload: UploadFile) -> tuple[bytes, str, str
 
 
 def company_document_path(stored_filename: str) -> Path:
+    """Resolve a generated company-document filename inside the configured storage directory."""
     if not STORED_FILENAME_PATTERN.fullmatch(stored_filename):
         raise HTTPException(status_code=404, detail="Company document file not found.")
     storage = Path(get_settings().company_document_storage_path).resolve()

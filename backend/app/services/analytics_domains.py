@@ -42,6 +42,7 @@ def normalize_domain_rows(
     rows: Iterable[tuple[str | None, int]],
     limit: int = 6,
 ) -> list[dict[str, object]]:
+    """Aggregate counts by normalized domain and fold ranked overflow into Other."""
     grouped: dict[str, dict[str, object]] = defaultdict(
         lambda: {"count": 0, "names": set()}
     )

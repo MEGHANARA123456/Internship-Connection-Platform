@@ -50,6 +50,7 @@ async def submit_company_review(
     db: DbSession,
 ) -> dict[str, Any]:
     # Verify company exists
+    """Create a review for an existing company and eligible internship, returning the saved review."""
     company = await db.scalar(select(User).where(User.id == company_id, User.role == UserRole.COMPANY))
     if company is None:
         raise HTTPException(404, "Company not found")
@@ -117,6 +118,7 @@ async def get_company_reviews(
     company_id: int,
     db: DbSession,
 ) -> dict[str, Any]:
+    """Return a company?s reviews with the average rating and total count, or empty review data when none exist."""
     company = await db.scalar(select(User).where(User.id == company_id, User.role == UserRole.COMPANY))
     if company is None:
         raise HTTPException(404, "Company not found")

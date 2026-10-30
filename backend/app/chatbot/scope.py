@@ -49,6 +49,7 @@ class ScopeDecision:
 
 
 def is_admin_audit_query(text: str) -> bool:
+    """Return whether text refers to administrator audit records or actions."""
     return bool(ADMIN_AUDIT_PATTERN.search(text))
 
 
@@ -58,6 +59,7 @@ def decide_scope(
     minimum_score: float,
     role: str = "guest",
 ) -> ScopeDecision:
+    """Classify safety, role, account-specific, and knowledge-match scope in precedence order."""
     if contains_secret(text):
         return ScopeDecision("credential", False, True, "credential_detected")
     if detect_abuse(text):
@@ -89,6 +91,7 @@ def decide_scope(
 
 
 def fixed_reply(decision: ScopeDecision, role: str = "guest") -> str:
+    """Choose the deterministic refusal or role-specific guidance for a scope decision."""
     if decision.category == "credential":
         return SECRET_REPLY
     if decision.category == "injection":

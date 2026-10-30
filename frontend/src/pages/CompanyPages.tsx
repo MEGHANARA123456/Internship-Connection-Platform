@@ -1024,16 +1024,23 @@ export function CompanyJobsPage() {
 // --- 2. Create & Edit Internship Form ---
 
 const jobFormSchema = z.object({
-  title: z.string().min(3, 'Title must be at least 3 characters'),
+  title: z.string().min(3, 'Title must be at least 3 characters').max(255, 'Title must be 255 characters or fewer'),
   description: z.string().min(20, 'Provide a detailed description of duties and qualifications'),
-  location: z.string().min(2, 'Location is required (e.g. Remote or San Francisco, CA)'),
-  industry: z.string().min(2, 'Industry is required'),
-  duration_months: z.coerce.number().min(1, 'Duration must be at least 1 month').max(24),
+  location: z.string().min(2, 'Location is required (e.g. Remote or San Francisco, CA)').max(255, 'Location must be 255 characters or fewer'),
+  industry: z.string().min(2, 'Industry is required').max(255, 'Industry must be 255 characters or fewer'),
+  duration_months: z.coerce.number().min(1, 'Duration must be at least 1 month').max(36, 'Duration cannot exceed 36 months'),
   stipend: z.coerce.number().min(0, 'Stipend must be 0 or greater'),
   work_mode: z.enum(['REMOTE', 'HYBRID', 'ONSITE']),
   deadline: z.string().min(1, 'Application deadline is required'),
-  skills: z.string().optional().or(z.literal('')),
+  skills: z.string().optional().or(z.literal('')).refine(
+    (value) => !value || value.split(',').map((skill) => skill.trim()).filter(Boolean).length <= 30,
+    'Enter no more than 30 skills.',
+  ),
 })
+
+function isJobFormField(value: unknown): value is keyof z.infer<typeof jobFormSchema> {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(jobFormSchema.shape, value)
+}
 
 export function JobFormPage() {
   const navigate = useNavigate()
@@ -1046,6 +1053,7 @@ export function JobFormPage() {
   const {
     register,
     handleSubmit,
+    setError,
     setValue,
     watch,
     formState: { errors, isSubmitting },
@@ -1103,8 +1111,44 @@ export function JobFormPage() {
         await api.post('/internships', payload)
       }
       navigate(routes.companyJobs())
-    } catch {
-      setServerError('Failed to save internship. Please review your inputs.')
+    } catch (error: unknown) {
+      const response = typeof error === 'object' && error !== null && 'response' in error
+        ? error.response
+        : undefined
+      const status = typeof response === 'object' && response !== null && 'status' in response
+        ? response.status
+        : undefined
+      const responseData = typeof response === 'object' && response !== null && 'data' in response
+        ? response.data
+        : undefined
+      const detail = typeof responseData === 'object' && responseData !== null && 'detail' in responseData
+        ? responseData.detail
+        : undefined
+
+      if (status === 422 && Array.isArray(detail)) {
+        let firstErrorField: keyof z.infer<typeof jobFormSchema> | undefined
+        for (const issue of detail) {
+          if (typeof issue !== 'object' || issue === null || !('loc' in issue) || !('msg' in issue)) continue
+          const location = issue.loc
+          const message = issue.msg
+          if (!Array.isArray(location) || typeof message !== 'string') continue
+          const field = location[location.length - 1]
+          if (!isJobFormField(field)) continue
+          setError(field, { type: 'server', message })
+          firstErrorField ??= field
+        }
+        setServerError('Please fix the highlighted fields.')
+        if (firstErrorField) {
+          document.querySelector<HTMLElement>(`[name="${firstErrorField}"]`)?.scrollIntoView?.({
+            behavior: 'smooth',
+            block: 'center',
+          })
+        }
+      } else if (typeof detail === 'string' && detail.trim()) {
+        setServerError(detail)
+      } else {
+        setServerError('Failed to save internship. Please review your inputs.')
+      }
     }
   }
 
@@ -1136,26 +1180,38 @@ export function JobFormPage() {
               </div>
             )}
 
-            <Input
-              label="Job Title"
-              placeholder="e.g. Software Engineering Intern (Summer 2026)"
-              error={errors.title?.message}
-              {...register('title')}
-            />
+            <div>
+              <Input
+                label="Job Title"
+                placeholder="e.g. Software Engineering Intern (Summer 2026)"
+                maxLength={255}
+                error={errors.title?.message}
+                {...register('title')}
+              />
+              <p className="mt-1 text-right text-xs text-slate-500">{(watch('title') || '').length}/255</p>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Input
-                label="Location"
-                placeholder="e.g. Remote, or New York, NY"
-                error={errors.location?.message}
-                {...register('location')}
-              />
-              <Input
-                label="Industry"
-                placeholder="e.g. Technology, Finance, Media"
-                error={errors.industry?.message}
-                {...register('industry')}
-              />
+              <div>
+                <Input
+                  label="Location"
+                  placeholder="e.g. Remote, or New York, NY"
+                  maxLength={255}
+                  error={errors.location?.message}
+                  {...register('location')}
+                />
+                <p className="mt-1 text-right text-xs text-slate-500">{(watch('location') || '').length}/255</p>
+              </div>
+              <div>
+                <Input
+                  label="Industry"
+                  placeholder="e.g. Technology, Finance, Media"
+                  maxLength={255}
+                  error={errors.industry?.message}
+                  {...register('industry')}
+                />
+                <p className="mt-1 text-right text-xs text-slate-500">{(watch('industry') || '').length}/255</p>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-3">
@@ -1174,7 +1230,7 @@ export function JobFormPage() {
                 label="Duration (Months)"
                 type="number"
                 min={1}
-                max={24}
+                max={36}
                 error={errors.duration_months?.message}
                 {...register('duration_months')}
               />

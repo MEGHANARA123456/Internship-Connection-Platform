@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 def _clean_meeting_link(v: str | None) -> str | None:
+    """Normalize blank links to None and reject nonempty URLs without an HTTP(S) scheme."""
     if v is None:
         return None
     cleaned = v.strip()
@@ -44,6 +45,7 @@ class InterviewCreate(BaseModel):
     @field_validator("meeting_link")
     @classmethod
     def validate_meeting_link(cls, value: str | None) -> str | None:
+        """Apply the shared trimming and HTTP(S)-scheme validation to an interview link."""
         return _clean_meeting_link(value)
 
 
@@ -58,6 +60,7 @@ class InterviewUpdate(BaseModel):
     @field_validator("meeting_link")
     @classmethod
     def validate_meeting_link(cls, value: str | None) -> str | None:
+        """Apply the shared trimming and HTTP(S)-scheme validation to an interview link."""
         return _clean_meeting_link(value)
 
 

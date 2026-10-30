@@ -39,6 +39,7 @@ DEFAULT_KB_PATH = Path(__file__).resolve().parents[2] / "kb"
 
 
 def _chatbot_dotenv() -> dict[str, str | None]:
+    """Load only chatbot-related entries from the project-root .env file."""
     env_file = Path(".env")
     if not env_file.is_file():
         return {}
@@ -81,12 +82,14 @@ def load_config() -> ChatbotConfig:
     dotenv = _chatbot_dotenv()
 
     def setting(name: str, default: str) -> str:
+        """Resolve a setting from the process environment, then filtered dotenv."""
         if name in os.environ:
             return os.environ[name]
         value = dotenv.get(name)
         return default if value is None else value
 
     def boolean_setting(name: str, default: bool) -> bool:
+        """Interpret common affirmative strings as true and all others as false."""
         return setting(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
     provider = setting("CHATBOT_PROVIDER", "anthropic").strip().lower()
@@ -133,6 +136,7 @@ def load_config() -> ChatbotConfig:
 
 
 def provider_configured(config: ChatbotConfig) -> bool:
+    """Report whether the selected LLM provider has its required endpoint and credentials."""
     if config.mode == "retrieval":
         return True
     parsed_url = urlsplit(config.base_url)

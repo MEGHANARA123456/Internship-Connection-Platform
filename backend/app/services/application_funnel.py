@@ -17,6 +17,7 @@ async def cumulative_student_application_counts(
     student_id: int,
     application_ids: list[int] | None = None,
 ) -> dict[str, int]:
+    """Count distinct student applications that have reached each configured funnel stage."""
     all_event_types = set().union(*STAGE_EVENT_TYPES.values())
     query = (
         select(ApplicationEvent.event_type, ApplicationEvent.application_id)

@@ -23,6 +23,7 @@ TOPIC_SKILL_TERMS: dict[str, tuple[str, ...]] = {
 
 
 async def get_valid_badges(db: AsyncSession, student_id: int) -> list[SkillBadge]:
+    """Fetch unexpired badges for a student, retaining only the latest badge per topic."""
     now = datetime.now(timezone.utc)
     badges = list(await db.scalars(
         select(SkillBadge)
@@ -36,6 +37,7 @@ async def get_valid_badges(db: AsyncSession, student_id: int) -> list[SkillBadge
 
 
 def badge_matches_skill(topic: str, skill: str) -> bool:
+    """Match a skill against the configured aliases for a badge topic, using token boundaries for short terms."""
     normalized = " ".join(skill.casefold().replace("_", " ").replace("-", " ").split())
     terms = TOPIC_SKILL_TERMS.get(topic, (topic.replace("_", " ").replace("-", " "),))
     return any(
@@ -51,6 +53,7 @@ def apply_verified_badge_boost(
     required_skills: list[str],
     badges: list[SkillBadge],
 ) -> dict[str, Any]:
+    """Add up to 15 points for matched required skills covered by valid badges and explain the resulting score."""
     if match.get("score") is None:
         return {
             **match,
@@ -87,6 +90,7 @@ def apply_verified_badge_boost(
 
 
 def badge_response(badge: SkillBadge) -> dict[str, Any]:
+    """Serialize the public badge fields without exposing student or internal record data."""
     return {
         "id": badge.id,
         "topic": badge.topic,

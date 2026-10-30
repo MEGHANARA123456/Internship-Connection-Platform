@@ -7,6 +7,7 @@ import logging
 import sys
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
+        """Serialize a record's level, logger name, message, and timestamp as a JSON object."""
         return json.dumps({
             "level": record.levelname,
             "logger": record.name,
@@ -15,6 +16,7 @@ class JsonFormatter(logging.Formatter):
         })
 
 def configure_logging() -> None:
+    """Replace root handlers with JSON output to stdout and set the root level to INFO."""
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()

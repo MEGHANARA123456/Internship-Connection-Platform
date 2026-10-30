@@ -145,7 +145,7 @@ Internship Connection Platform/
 │   │   ├── schemas/         # Pydantic request/response models
 │   │   ├── services/        # ai, resume_parser, mail, pdf, audit, email_validation
 │   │   └── main.py          # FastAPI entry point
-│   ├── alembic/versions/    # migrations 0001 – 0007
+│   ├── alembic/versions/    # versioned database migrations
 │   ├── storage/             # private resumes & avatars
 │   └── requirements.txt
 ├── frontend/
@@ -206,19 +206,19 @@ Student may WITHDRAW at any stage before a final decision.
 ### Option 1 — Docker (recommended)
 
 ```bash
-# 1. Configure environment
+# Configure environment using placeholders; replace values for your setup.
 cp .env.example .env
 
-# 2. Start the full stack
-docker compose up --build
+# Start the full stack from the repository root.
+docker compose -f doc/docker-compose.yml up --build
 ```
 
 | Service | URL |
 |---|---|
-| Frontend | http://localhost:5173 |
-| API | http://localhost:8000 |
-| Swagger UI | http://localhost:8000/docs |
-| Mailpit (emails) | http://localhost:8025 |
+| Frontend | http://localhost:5174 |
+| API | http://localhost:8011 |
+| Swagger UI | http://localhost:8011/docs |
+| Mailpit (emails) | http://localhost:18025 |
 
 The backend container runs `alembic upgrade head` before starting Uvicorn.
 
@@ -228,22 +228,26 @@ The backend container runs `alembic upgrade head` before starting Uvicorn.
 ### Option 2 — Run services directly
 
 **Backend**
-```bash
+```powershell
 cd backend
 python -m venv .venv
-.\.venv\Scripts\activate          # Windows  (Linux/macOS: source .venv/bin/activate)
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-$env:PYTHONPATH = "."             # Linux/macOS: export PYTHONPATH=.
+# Create backend/.env with the backend settings below; do not commit it.
 alembic upgrade head
-python -m uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8010
 ```
 
 **Frontend** (in a second terminal)
-```bash
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
+
+For a local run, set `FRONTEND_URL` in `backend/.env` to the Vite origin shown in
+the terminal (Vite defaults to `http://localhost:5173`). The frontend API defaults
+to `http://localhost:8010/api/v1`; override it with `VITE_API_BASE_URL` if needed.
 
 ---
 
@@ -251,22 +255,28 @@ npm run dev
 
 | Variable | Required | Description |
 |---|---|---|
-| `DATABASE_URL` | Yes | Async PostgreSQL URL (`postgresql+asyncpg://...`) |
-| `SECRET_KEY` | Yes | JWT signing secret — use a long random string |
-| `FRONTEND_URL` | Yes | Allowed frontend origin (CORS, email links) |
-| `ADMIN_SIGNUP_KEY` | Yes | Secret key required to register an admin account |
-| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | Docker | Database container credentials |
-| `RATE_LIMIT_REQUESTS` | No | Requests per window per client (default `120`) |
-| `RATE_LIMIT_WINDOW_SECONDS` | No | Rate-limit window (default `60`) |
-| `MAX_RESUME_SIZE_MB` | No | Resume upload limit (default `5`) |
-| `RESUME_STORAGE_PATH` | No | Private resume directory |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` / `REFRESH_TOKEN_EXPIRE_DAYS` | No | Token lifetimes (default `30` / `7`) |
-| `MAIL_SERVER`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM` | Prod | SMTP settings (Mailpit is used in development) |
-| `REQUIRE_EMAIL_VERIFICATION` | No | Enforce email verification (default `true`) |
-| `GEMINI_API_KEY` | No | Optional API key for AI features |
-| `VITE_API_BASE_URL` | Frontend | Public API base URL, e.g. `http://localhost:8000/api/v1` |
+| `DATABASE_URL` | Required for backend | Async PostgreSQL URL (`postgresql+asyncpg://...`) |
+| `SECRET_KEY` | Required for production | Long, randomly generated JWT signing secret |
+| `FRONTEND_URL` | Required for local deployment | Allowed frontend origin for CORS and email links |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Docker | PostgreSQL container settings |
+| `RATE_LIMIT_BACKEND`, `RATE_LIMIT_REDIS_URL` | Optional | Select in-memory or Redis rate limiting |
+| `GOOGLE_CLIENT_ID` | Optional | Backend Google sign-in client ID |
+| `MAIL_SERVER`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM` | Optional | SMTP settings; Mailpit is available in Docker development |
+| `GEMINI_API_KEY` | Optional | Key for features that use Gemini |
+| `VITE_GOOGLE_CLIENT_ID`, `VITE_API_BASE_URL` | Frontend | Google sign-in and API base URL overrides |
+| `CHATBOT_ENABLED` | Optional | Enable the chatbot; defaults to disabled |
+| `CHATBOT_MODE` | Optional | `retrieval` or `llm` |
+| `CHATBOT_PROVIDER`, `CHATBOT_BASE_URL` | Optional | Provider type and base URL for OpenAI-compatible providers |
+| `CHATBOT_MODEL`, `CHATBOT_ROUTER_MODEL` | Optional | Answer and routing model identifiers |
+| `CHATBOT_API_KEY`, `ANTHROPIC_API_KEY` | Optional | Provider keys; supply through an untracked local environment file |
+| `CHATBOT_MAX_TOKENS`, `CHATBOT_TEMPERATURE`, `CHATBOT_RETRIES`, `CHATBOT_TIMEOUT_SECONDS` | Optional | Model request limits |
+| `CHATBOT_TOP_K`, `CHATBOT_MIN_SCORE`, `CHATBOT_USER_PER_MINUTE`, `CHATBOT_USER_PER_DAY`, `CHATBOT_GUEST_PER_MINUTE` | Optional | Retrieval and request limits |
+| `RAG_ENABLED`, `RAG_TOP_K`, `RAG_MIN_SCORE`, `EMBEDDING_MODEL`, `EMBEDDING_DIM`, `RERANK_ENABLED`, `KB_PATH` | Optional | Retrieval, embedding, reranking, and knowledge-base settings |
 
 > ⚠️ Never commit `.env`. Replace every placeholder secret before deploying.
+
+The pgvector extension is optional for the core application. Enable it when using
+vector-backed chatbot retrieval; the Docker database image includes pgvector.
 
 ---
 
@@ -356,13 +366,13 @@ Every schema change must be an Alembic migration.
 
 ```bash
 cd backend
-$env:PYTHONPATH = "."
 alembic revision --autogenerate -m "describe the schema change"
 alembic upgrade head
 alembic downgrade -1        # roll back one revision
 ```
 
-> Never edit a running database schema manually.
+Review autogenerated migrations before applying them. Do not edit existing
+migration revision IDs; add a new revision for each schema change.
 
 ---
 
@@ -370,17 +380,15 @@ alembic downgrade -1        # roll back one revision
 
 **Backend**
 ```bash
-cd backend
-$env:PYTHONPATH = "."
-python -m pytest tests -q
+python -m pytest -q
 ```
 
 **Frontend**
 ```bash
 cd frontend
-npm test
-npm run build
 npm run lint
+npm run test
+npm run build
 ```
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every push and pull request to `main`/`master`:

@@ -22,11 +22,13 @@ router = APIRouter(prefix="/ws", tags=["websockets"])
 class ConnectionManager:
     def __init__(self):
         # Map user_id -> set of active WebSockets
+        """Initialize the in-memory user and video-interview connection registries."""
         self.active_user_connections: dict[int, set[WebSocket]] = defaultdict(set)
         # Map interview_id -> set of active WebSockets for WebRTC signaling
         self.video_rooms: dict[int, set[WebSocket]] = defaultdict(set)
 
     async def connect_user(self, user_id: int, websocket: WebSocket):
+        """Accept and register a user chat socket, then broadcast the updated presence state."""
         await websocket.accept()
         self.active_user_connections[user_id].add(websocket)
         logger.info("User %s connected to chat WebSocket. Total connections: %s", user_id, len(self.active_user_connections[user_id]))
@@ -34,6 +36,7 @@ class ConnectionManager:
         await self.broadcast_presence()
 
     def disconnect_user(self, user_id: int, websocket: WebSocket):
+        """Remove a user chat socket and broadcast offline presence when their final socket closes."""
         sockets = self.active_user_connections.get(user_id)
         if sockets and websocket in sockets:
             sockets.remove(websocket)
@@ -42,12 +45,15 @@ class ConnectionManager:
         logger.info("User %s disconnected from chat WebSocket.", user_id)
 
     def is_online(self, user_id: int) -> bool:
+        """Return whether the user currently has at least one active chat socket."""
         return user_id in self.active_user_connections and len(self.active_user_connections[user_id]) > 0
 
     def get_online_user_ids(self) -> list[int]:
+        """Return identifiers for users with active chat sockets."""
         return list(self.active_user_connections.keys())
 
     async def send_personal_message(self, user_id: int, data: dict[str, Any]):
+        """Send a JSON payload to every active socket for a user, pruning disconnected sockets."""
         sockets = self.active_user_connections.get(user_id, set()).copy()
         for socket in sockets:
             try:
@@ -57,12 +63,14 @@ class ConnectionManager:
                 self.disconnect_user(user_id, socket)
 
     async def broadcast_presence(self):
+        """Send the current online-user list to all connected chat users."""
         online_users = self.get_online_user_ids()
         msg = {"type": "presence_update", "online_users": online_users}
         for uid in self.get_online_user_ids():
             await self.send_personal_message(uid, msg)
 
     async def connect_video(self, interview_id: int, websocket: WebSocket):
+        """Accept and register a participant socket for a video-interview room."""
         await websocket.accept()
         self.video_rooms[interview_id].add(websocket)
         # Notify room peers
@@ -71,6 +79,7 @@ class ConnectionManager:
                 await peer.send_json({"type": "peer_joined"})
 
     def disconnect_video(self, interview_id: int, websocket: WebSocket):
+        """Remove a video-room socket and delete the room entry when no peers remain."""
         peers = self.video_rooms.get(interview_id)
         if peers and websocket in peers:
             peers.remove(websocket)
@@ -82,6 +91,7 @@ manager = ConnectionManager()
 
 
 async def _authenticated_user(websocket: WebSocket) -> User | None:
+    """Resolve an active database user from a WebSocket access token, returning None for invalid credentials."""
     token = websocket.query_params.get("token")
     if not token:
         return None
@@ -115,6 +125,7 @@ async def notify_user(user_id: int, notification_data: dict[str, Any]) -> None:
 
 @router.websocket("/chat/{user_id}")
 async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
+    """Authenticate the requested user and manage their chat socket lifecycle and incoming messages."""
     user = await _authenticated_user(websocket)
     if user is None:
         await websocket.close(code=4401)
@@ -173,6 +184,7 @@ async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
 
 @router.websocket("/video-signal/{interview_id}")
 async def websocket_video_signal_endpoint(websocket: WebSocket, interview_id: int):
+    """Authenticate an interview participant and relay signaling messages within the authorized video room."""
     user = await _authenticated_user(websocket)
     if user is None:
         await websocket.close(code=4401)

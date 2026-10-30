@@ -24,6 +24,7 @@ ALLOWED_DOCUMENT_TYPES = {
 MAX_DOCUMENTS_PER_COMPANY = 5
 
 def document_response(document: CompanyDocument) -> dict:
+    """Build the public response fields for a company document without exposing its storage path."""
     return {
         "id": document.id,
         "company_id": document.company_id,
@@ -41,6 +42,7 @@ async def upload_company_document(
     file: UploadFile = File(...),
     document_type: str = Form(...),
 ) -> dict:
+    """Validate and store a company verification document, enforcing allowed types and the per-company document limit."""
     clean_type = document_type.strip().upper()
     if clean_type not in ALLOWED_DOCUMENT_TYPES:
         raise HTTPException(
@@ -105,6 +107,7 @@ async def upload_company_document(
 
 @router.get("")
 async def list_company_documents(user: company_only, db: DbSession) -> list[dict]:
+    """List the authenticated company?s uploaded verification documents."""
     documents = await db.scalars(
         select(CompanyDocument)
         .where(CompanyDocument.company_id == user.id)
@@ -118,6 +121,7 @@ async def download_company_document(
     user: company_only,
     db: DbSession,
 ) -> FileResponse:
+    """Return a stored company document only when it exists and is available on disk."""
     document = await db.scalar(
         select(CompanyDocument).where(
             CompanyDocument.id == document_id,
@@ -137,6 +141,7 @@ async def delete_company_document(
     user: company_only,
     db: DbSession,
 ) -> None:
+    """Remove a company document when deletion is allowed by the company verification state."""
     document = await db.scalar(
         select(CompanyDocument).where(
             CompanyDocument.id == document_id,

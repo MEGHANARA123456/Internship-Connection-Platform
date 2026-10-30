@@ -24,15 +24,18 @@ router = APIRouter(tags=["search"])
 
 
 def _contains(value: str) -> str:
+    """Escape SQL LIKE wildcard characters and wrap a search term for a contains match."""
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
 
 
 def _item(item_id: int, title: str, subtitle: str, badge: str, url: str) -> dict[str, Any]:
+    """Build one normalized search-result item with its display text, badge, and destination URL."""
     return {"id": item_id, "title": title, "subtitle": subtitle, "badge": badge, "url": url}
 
 
 def _group(group_type: str, label: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Build a labeled result group, returning None when it contains no items."""
     return {"type": group_type, "label": label, "items": items} if items else None
 
 

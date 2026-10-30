@@ -104,6 +104,7 @@ class ChatResult:
 
 
 def _truncate_answer(text: str) -> str:
+    """Keep complete sentences or list items up to the configured word limit, stopping at the first overflow."""
     accepted: list[str] = []
     word_count = 0
     for line in text.splitlines():
@@ -125,6 +126,7 @@ def _truncate_answer(text: str) -> str:
 
 
 def _render_retrieval_answer(passages: list[Passage]) -> str:
+    """Clean and truncate the first retrieved passage to at most its first two nonempty paragraphs."""
     if not passages:
         return ""
     content = passages[0].text
@@ -151,6 +153,7 @@ def _render_retrieval_answer(passages: list[Passage]) -> str:
 
 
 def _no_evidence_reply(role: str) -> str:
+    """Return a role-specific help-guide fallback when retrieval provides no usable evidence."""
     suggestions = {
         "student": "I can help with finding internships, applications, or skill assessments.",
         "company": "I can help with internship postings, applicants, or your hiring pipeline.",
@@ -161,16 +164,19 @@ def _no_evidence_reply(role: str) -> str:
 
 
 def _role_routes(role: str) -> set[str]:
+    """Return the routes permitted for a role, defaulting unknown roles to guest routes."""
     return ROLE_ROUTES.get(role, COMMON_ROUTES)
 
 
 def _is_allowed_live_route(route: str, role: str) -> bool:
+    """Check role route access, allowing students to open numeric opportunity-detail routes."""
     if route in _role_routes(role):
         return True
     return role == "student" and re.fullmatch(r"/opportunities/[1-9]\d*", route) is not None
 
 
 def _allowed_routes(passages: list[Passage], role: str) -> set[str]:
+    """Collect role-authorized routes referenced by retrieved passages."""
     role_routes = _role_routes(role)
     return {
         route
@@ -181,6 +187,7 @@ def _allowed_routes(passages: list[Passage], role: str) -> set[str]:
 
 
 def _links_for(passages: list[Passage], role: str) -> tuple[tuple[str, str], ...]:
+    """Build up to four unique, role-authorized passage-title links."""
     links = []
     seen = set()
     role_routes = _role_routes(role)
@@ -193,6 +200,7 @@ def _links_for(passages: list[Passage], role: str) -> tuple[tuple[str, str], ...
 
 
 def _sources_for(passages: list[Passage], role: str) -> tuple[tuple[str, str, str], ...]:
+    """Return up to five distinct passage IDs paired with titles and each passage's first allowed route."""
     sources = []
     seen: set[str] = set()
     role_routes = _role_routes(role)
@@ -208,6 +216,7 @@ def _sources_for(passages: list[Passage], role: str) -> tuple[tuple[str, str, st
 
 
 def _dedupe_links(links: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+    """Keep the first link for each route while preserving input order."""
     unique = []
     seen_routes: set[str] = set()
     for link in links:
@@ -218,6 +227,7 @@ def _dedupe_links(links: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], 
 
 
 def _role_capabilities(role: str) -> tuple[str, str]:
+    """Describe the role's main platform capabilities and return its primary route."""
     if role == "student":
         return (
             "Your role is Student. You can discover internships, apply and track applications, save opportunities, update your profile, and review interviews.",
@@ -240,6 +250,7 @@ def _role_capabilities(role: str) -> tuple[str, str]:
 
 
 def _suggested_followups(role: str, message: str) -> tuple[str, ...]:
+    """Choose canned follow-up questions from role and message keywords, with a role-specific default set."""
     text = message.casefold()
     if role == "student":
         if any(term in text for term in ("application", "submission")):
@@ -310,6 +321,7 @@ def _suggested_followups(role: str, message: str) -> tuple[str, ...]:
 
 
 def _admin_audit_summary(events: list[AuditEventSummary]) -> str:
+    """Render recent audit summaries with UTC timestamps and truncate the combined text to the chatbot limit."""
     if not events:
         return "There are no recent audit events to summarize."
 
@@ -366,6 +378,7 @@ class ChatbotService:
         provider: AnswerProvider | None = None,
         now=time.monotonic,
     ):
+        """Configure retrieval and answer providers, accepting injected dependencies for deterministic use."""
         self.config = config or load_config()
         self.retriever = retriever or BM25Retriever()
         self.provider = provider or (
@@ -377,6 +390,7 @@ class ChatbotService:
         self._requests: dict[str, deque[float]] = defaultdict(deque)
 
     async def classify_intent_hint(self, message: str, role: str) -> str | None:
+        """Ask a router provider for a redacted intent hint, returning ``None`` if routing is unavailable."""
         if not isinstance(self.provider, ChatbotRouterProvider):
             return None
         try:
@@ -386,6 +400,7 @@ class ChatbotService:
             return None
 
     def check_rate_limit(self, key: str, *, authenticated: bool) -> int | None:
+        """Record a request if within role-specific rolling limits; otherwise return retry seconds."""
         now = self._now()
         entries = self._requests[key]
         if authenticated:
@@ -422,6 +437,7 @@ class ChatbotService:
         live_route: str | None = None,
         live_links: tuple[tuple[str, str], ...] = (),
     ) -> ChatResult:
+        """Retrieve and scope help/live context, construct a safe role-aware answer, and attach allowed sources and links."""
         started = time.monotonic()
         normalized_message = " ".join(message.split())
         role_name = role.lower() if role.lower() in {"student", "company", "admin"} else "guest"
@@ -636,6 +652,7 @@ class ChatbotService:
         tuple[tuple[str, str], ...],
         bool,
     ]:
+        """Request a redacted provider answer and validate its length, citations, and routes, falling back to retrieved text."""
         payload = ProviderPayload(
             question=redact(message),
             history=tuple((turn_role, redact(content)) for turn_role, content in history),

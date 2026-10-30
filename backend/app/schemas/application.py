@@ -17,6 +17,7 @@ class OfferAcceptance(BaseModel):
     @field_validator("signature_name")
     @classmethod
     def validate_signature_name(cls, value: str) -> str:
+        """Trim the signed name and reject it if no non-whitespace characters remain."""
         value = value.strip()
         if not value:
             raise ValueError("Signature name cannot be blank")

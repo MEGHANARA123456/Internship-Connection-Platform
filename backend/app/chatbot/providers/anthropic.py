@@ -25,9 +25,11 @@ JSON_RESPONSE_SCHEMA = {
 
 class AnthropicProvider:
     def __init__(self, config: ChatbotConfig):
+        """Store configuration used for answer and router API requests."""
         self._config = config
 
     async def rewrite(self, payload: ProviderPayload) -> ProviderResult:
+        """Request a schema-constrained answer and validate citations and confidence."""
         passages = [
             {
                 "id": item.id,
@@ -87,6 +89,7 @@ class AnthropicProvider:
         )
 
     async def classify_intent(self, message: str, role: str) -> str:
+        """Ask the router model for one of the four supported intent labels."""
         content = await self._request(
             model=self._config.router_model,
             system=(
@@ -121,6 +124,7 @@ class AnthropicProvider:
         history: list[tuple[str, str]],
         role: str,
     ) -> str:
+        """Rewrite a short follow-up for search, using at most the three latest turns."""
         content = await self._request(
             model=self._config.router_model,
             system=(
@@ -165,6 +169,7 @@ class AnthropicProvider:
         temperature: float,
         output_schema: dict[str, object],
     ) -> str:
+        """Call Anthropic's Messages API with bounded retries and return its text blocks."""
         body = json.dumps({
             "model": model,
             "max_tokens": max_tokens,
@@ -219,5 +224,6 @@ class AnthropicProvider:
         raise RuntimeError("Anthropic chatbot request failed.") from last_error
 
     def _post(self, request: Request) -> bytes:
+        """Perform the blocking API request and limit the response body to 256 KB."""
         with urlopen(request, timeout=self._config.timeout_seconds) as response:
             return response.read(256_000)

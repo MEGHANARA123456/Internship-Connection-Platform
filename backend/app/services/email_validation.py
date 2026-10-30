@@ -49,6 +49,7 @@ class EmailValidationResult:
 
 
 def validate_email_format(email: str) -> str:
+    """Normalize an email address and reject malformed or overlong local/domain components."""
     clean_email = email.strip().lower()
     if len(clean_email) > 254 or not _EMAIL_PATTERN.fullmatch(clean_email):
         raise ValueError("Please enter a valid email address.")
@@ -59,18 +60,22 @@ def validate_email_format(email: str) -> str:
 
 
 def _domain(email: str) -> str:
+    """Return the domain portion of an already validated email address."""
     return email.rsplit("@", 1)[1]
 
 
 def is_personal_email(email: str) -> bool:
+    """Check whether a valid email uses one of the configured personal-mail domains."""
     return _domain(validate_email_format(email)) in PERSONAL_EMAIL_DOMAINS
 
 
 def is_disposable_email(email: str) -> bool:
+    """Check whether a valid email uses one of the configured disposable-mail domains."""
     return _domain(validate_email_format(email)) in DISPOSABLE_EMAIL_DOMAINS
 
 
 def is_institution_email(email: str) -> bool:
+    """Recognize institutional addresses by configured domain suffixes or name markers."""
     domain = _domain(validate_email_format(email))
     return domain.endswith(_INSTITUTION_SUFFIXES) or any(
         marker in domain for marker in ("college", "university", "campus", "institute")
@@ -78,6 +83,7 @@ def is_institution_email(email: str) -> bool:
 
 
 def classify_email(email: str) -> EmailValidationResult:
+    """Classify a normalized address and flag recruiter-like dot-separated local-part tokens."""
     clean_email = validate_email_format(email)
     domain = _domain(clean_email)
     if is_disposable_email(clean_email):
@@ -94,6 +100,7 @@ def classify_email(email: str) -> EmailValidationResult:
 
 
 def validate_student_email(email: str) -> EmailValidationResult:
+    """Classify a student address, rejecting disposable domains but allowing personal mail."""
     result = classify_email(email)
     if result.classification == "DISPOSABLE_EMAIL":
         raise ValueError("Please use a valid personal or institutional email address.")
@@ -101,6 +108,7 @@ def validate_student_email(email: str) -> EmailValidationResult:
 
 
 def validate_organization_email(email: str) -> EmailValidationResult:
+    """Classify an organization address and reject personal or disposable mail providers."""
     result = classify_email(email)
     if result.classification in {"PERSONAL_EMAIL", "DISPOSABLE_EMAIL"}:
         raise ValueError("Please use your official company or institute email address.")

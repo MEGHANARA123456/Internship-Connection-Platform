@@ -44,11 +44,13 @@ INTERVIEW_APPLICATION_STATUSES = {"INTERVIEW_SCHEDULED", "SELECTED", "ACCEPTED"}
 
 
 def _cutoff(range_value: str) -> datetime | None:
+    """Return a UTC lookback timestamp for the requested number of days, or None when no limit is requested."""
     days = RANGE_DAYS.get(range_value)
     return datetime.now(timezone.utc) - timedelta(days=days) if days is not None else None
 
 
 def _scope(query: Any, user: User) -> Any:
+    """Restrict an application query to records visible to the supplied student or company user."""
     if user.role == UserRole.STUDENT:
         return query.where(Application.student_id == user.id)
     if user.role == UserRole.COMPANY:
@@ -57,6 +59,7 @@ def _scope(query: Any, user: User) -> Any:
 
 
 def _application_date_filter(query: Any, range_value: str) -> Any:
+    """Apply the requested creation-date lookback to an application query."""
     cutoff = _cutoff(range_value)
     return query.where(Application.created_at >= cutoff) if cutoff is not None else query
 
@@ -66,6 +69,7 @@ async def _chart_series(
     user: User,
     range_value: str,
 ) -> dict[str, Any]:
+    """Build role-scoped application funnel and activity-series data for the requested reporting range."""
     status_query = _scope(
         select(Application.status, func.count(Application.id))
         .join(Internship, Application.internship_id == Internship.id),

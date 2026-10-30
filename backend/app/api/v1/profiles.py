@@ -25,6 +25,7 @@ ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 
 
 def assert_resume_access(user: User, resume: Resume, company_has_application: bool = False) -> None:
+    """Enforce student ownership or the company-application relationship required to access a resume."""
     if user.role == UserRole.STUDENT and resume.student_id != user.id:
         raise HTTPException(403, "You can only access your own resume")
     if user.role == UserRole.COMPANY and not company_has_application:
@@ -32,11 +33,13 @@ def assert_resume_access(user: User, resume: Resume, company_has_application: bo
 
 
 def profile_response(profile: StudentProfile | CompanyProfile) -> ProfileResponse:
+    """Validate a profile ORM object into the shared profile response schema."""
     return ProfileResponse.model_validate(profile, from_attributes=True)
 
 
 @router.get("/student", response_model=ProfileResponse)
 async def get_student_profile(user: student_only, db: DbSession) -> ProfileResponse:
+    """Return the authenticated student?s profile or a not-found response."""
     profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
     if profile is None:
         raise HTTPException(404, "Student profile not found")
@@ -45,6 +48,7 @@ async def get_student_profile(user: student_only, db: DbSession) -> ProfileRespo
 
 @router.put("/student", response_model=ProfileResponse)
 async def update_student_profile(data: StudentProfileUpdate, user: student_only, db: DbSession) -> ProfileResponse:
+    """Apply the supplied changes to the authenticated student?s profile and return it."""
     profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
     if profile is None:
         profile = StudentProfile(user_id=user.id, **data.model_dump())
@@ -59,12 +63,14 @@ async def update_student_profile(data: StudentProfileUpdate, user: student_only,
 
 @router.delete("/student", status_code=204)
 async def delete_student_profile(user: student_only, db: DbSession) -> None:
+    """Delete the authenticated student?s profile record."""
     await db.execute(delete(StudentProfile).where(StudentProfile.user_id == user.id))
     await db.commit()
 
 
 @router.get("/company", response_model=ProfileResponse)
 async def get_company_profile(user: company_only, db: DbSession) -> ProfileResponse:
+    """Return the authenticated company?s profile or a not-found response."""
     profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
     if profile is None:
         raise HTTPException(404, "Company profile not found")
@@ -73,6 +79,7 @@ async def get_company_profile(user: company_only, db: DbSession) -> ProfileRespo
 
 @router.put("/company", response_model=ProfileResponse)
 async def update_company_profile(data: CompanyProfileUpdate, user: company_only, db: DbSession) -> ProfileResponse:
+    """Apply the supplied changes to the authenticated company?s profile and return it."""
     profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
     if profile is None:
         profile = CompanyProfile(user_id=user.id, **data.model_dump())
@@ -87,11 +94,13 @@ async def update_company_profile(data: CompanyProfileUpdate, user: company_only,
 
 @router.delete("/company", status_code=204)
 async def delete_company_profile(user: company_only, db: DbSession) -> None:
+    """Delete the authenticated company?s profile record."""
     await db.execute(delete(CompanyProfile).where(CompanyProfile.user_id == user.id))
     await db.commit()
 
 
 async def validate_resume(upload: UploadFile) -> bytes:
+    """Read and validate a resume upload against the supported file types and configured size limit."""
     extension = Path(upload.filename or "").suffix.lower()
     if extension not in ALLOWED_EXTENSIONS or upload.content_type not in ALLOWED_TYPES:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Resume must be PDF, DOC, or DOCX")
@@ -103,6 +112,7 @@ async def validate_resume(upload: UploadFile) -> bytes:
 
 @router.post("/student/resume", response_model=ResumeResponse)
 async def upload_resume(user: student_only, db: DbSession, file: UploadFile = File(...)) -> Resume:
+    """Validate and store the authenticated student?s resume, replacing an existing resume when present."""
     content = await validate_resume(file)
     existing = await db.scalar(select(Resume).where(Resume.student_id == user.id))
     storage = Path(get_settings().resume_storage_path)
@@ -125,6 +135,7 @@ async def upload_resume(user: student_only, db: DbSession, file: UploadFile = Fi
 
 
 async def get_resume_for_user(resume_id: int, user: User, db: DbSession) -> Resume:
+    """Load a resume after enforcing role-specific student ownership or company access."""
     resume = await db.scalar(select(Resume).where(Resume.id == resume_id))
     if resume is None:
         raise HTTPException(404, "Resume not found")
@@ -138,6 +149,7 @@ async def get_resume_for_user(resume_id: int, user: User, db: DbSession) -> Resu
 
 @router.get("/student/resume", response_model=ResumeResponse)
 async def get_my_resume(user: student_only, db: DbSession) -> Resume:
+    """Return the authenticated student?s resume record, or not found when none exists."""
     resume = await db.scalar(select(Resume).where(Resume.student_id == user.id))
     if resume is None:
         raise HTTPException(404, "No resume uploaded")
@@ -146,6 +158,7 @@ async def get_my_resume(user: student_only, db: DbSession) -> Resume:
 
 @router.get("/resume/{resume_id}", response_model=ResumeResponse)
 async def resume_metadata(resume_id: int, user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))], db: DbSession) -> Resume:   # type: ignore
+    """Return metadata for a resume the current user may access without streaming its contents."""
     resume = await get_resume_for_user(resume_id, user, db)
     if user.role == UserRole.COMPANY:
         matching_apps = list(await db.scalars(
@@ -161,6 +174,7 @@ async def resume_metadata(resume_id: int, user: Annotated[User, Depends(require_
 
 @router.get("/resume/{resume_id}/download")
 async def download_resume(resume_id: int, user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))], db: DbSession) -> FileResponse:   # type: ignore
+    """Stream a stored resume file after enforcing the caller?s access and confirming the file exists."""
     resume = await get_resume_for_user(resume_id, user, db)
     if user.role == UserRole.COMPANY:
         matching_apps = list(await db.scalars(
@@ -179,6 +193,7 @@ async def download_resume(resume_id: int, user: Annotated[User, Depends(require_
 
 @router.delete("/student/resume/{resume_id}", status_code=204)
 async def delete_resume(resume_id: int, user: student_only, db: DbSession) -> None:
+    """Delete the accessible resume record and its stored file."""
     resume = await get_resume_for_user(resume_id, user, db)
     (Path(get_settings().resume_storage_path) / resume.stored_filename).unlink(missing_ok=True)
     await db.delete(resume)
@@ -187,6 +202,7 @@ async def delete_resume(resume_id: int, user: student_only, db: DbSession) -> No
 
 @router.post("/student/resume/parse")
 async def parse_student_resume(user: student_only, db: DbSession) -> dict[str, Any]:
+    """Extract structured resume details from the authenticated student?s stored PDF resume."""
     resume = await db.scalar(select(Resume).where(Resume.student_id == user.id))
     if resume is None:
         raise HTTPException(404, "No resume uploaded yet. Please upload a resume first.")
@@ -213,6 +229,7 @@ async def parse_student_resume(user: student_only, db: DbSession) -> dict[str, A
 
 @router.post("/student/resume/apply-parsed")
 async def apply_parsed_resume_to_profile(user: student_only, db: DbSession) -> dict[str, Any]:
+    """Parse the student?s resume and apply extracted profile fields, returning the fields updated."""
     resume = await db.scalar(select(Resume).where(Resume.student_id == user.id))
     if resume is None:
         raise HTTPException(404, "No resume uploaded yet")
@@ -273,6 +290,7 @@ async def upload_avatar(
     db: DbSession,
     file: UploadFile = File(...),
 ) -> dict[str, str]:
+    """Validate and store the user?s avatar image within the supported format and size limits."""
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_AVATAR_EXTENSIONS or (file.content_type and file.content_type not in ALLOWED_AVATAR_TYPES):
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Avatar must be a JPEG, PNG, WEBP, or SVG image")
@@ -321,6 +339,7 @@ async def upload_avatar(
 
 @router.get("/avatar/{filename}")
 async def get_avatar(filename: str) -> FileResponse:
+    """Serve the user avatar from the configured storage location when the file is available."""
     avatar_dir = Path(get_settings().resume_storage_path).parent / "avatars"
     safe_path = avatar_dir / Path(filename).name
     if not safe_path.exists() or not safe_path.is_file():
@@ -342,6 +361,7 @@ async def delete_avatar(
     user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))],  # type: ignore
     db: DbSession,
 ) -> dict[str, Any]:
+    """Remove the current user?s avatar file and clear its profile URL."""
     if user.role == UserRole.STUDENT:
         profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
     else:

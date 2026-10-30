@@ -27,10 +27,12 @@ class KnowledgeDocument:
 
 
 def _tokens(text: str) -> list[str]:
+    """Return lowercase alphanumeric tokens used by the local BM25 index."""
     return TOKEN_PATTERN.findall(text.lower())
 
 
 def load_documents(directory: Path = KB_DIR) -> list[KnowledgeDocument]:
+    """Load Markdown documents with required metadata and split their bodies by level-two headings."""
     documents = []
     for path in sorted(directory.glob("*.md")):
         raw = path.read_text(encoding="utf-8")
@@ -58,6 +60,7 @@ def load_documents(directory: Path = KB_DIR) -> list[KnowledgeDocument]:
 
 class BM25Retriever:
     def __init__(self, documents: list[KnowledgeDocument] | None = None, *, k1: float = 1.5, b: float = 0.75):
+        """Build BM25 corpus statistics from supplied documents or the default knowledge directory."""
         self.documents = documents if documents is not None else load_documents()
         self.k1 = k1
         self.b = b
@@ -80,6 +83,7 @@ class BM25Retriever:
         minimum_score: float = 0.5,
         page_route: str | None = None,
     ) -> list[Passage]:
+        """Rank audience-visible passages by BM25, with a strong boost for the current page route."""
         query_tokens = [token for token in _tokens(query) if token not in QUERY_STOPWORDS]
         if not query_tokens:
             return []

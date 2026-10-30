@@ -1,4 +1,7 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -14,8 +17,9 @@ from app.api.v1.skills import _badge_level
 from app.services.skill_badges import apply_verified_badge_boost
 
 
-async def _setup_skill_app():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+async def _setup_skill_app(sqlite_path: Path | None = None):
+    database_url = f"sqlite+aiosqlite:///{sqlite_path}" if sqlite_path else "sqlite+aiosqlite:///:memory:"
+    engine = create_async_engine(database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -108,6 +112,129 @@ async def test_assessment_withholds_answers_grades_on_server_and_rejects_double_
 
 
 @pytest.mark.anyio
+async def test_active_assessment_resume_and_answer_saving_preserve_private_question_data() -> None:
+    engine, sessions, students, _ = await _setup_skill_app()
+    student, other_student = students
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            started = await client.post(
+                "/api/v1/skills/assessments/start",
+                headers=_headers(student),
+                json={"topic": "python"},
+            )
+            assert started.status_code == 200
+            start_payload = started.json()
+            expected_keys = {
+                "attempt_id",
+                "topic",
+                "started_at",
+                "expires_at",
+                "remaining_seconds",
+                "resumed",
+                "answers",
+                "questions",
+            }
+            assert set(start_payload) == expected_keys
+            assert start_payload["resumed"] is False
+            assert start_payload["answers"] is None
+            assert start_payload["remaining_seconds"] > 0
+            original_questions = start_payload["questions"]
+            async with sessions() as session:
+                attempt = await session.get(SkillAttempt, start_payload["attempt_id"])
+                snapshots = [dict(snapshot) for snapshot in attempt.question_snapshots]
+                snapshots[0]["question_type"] = "MULTI"
+                attempt.question_snapshots = snapshots
+                await session.commit()
+            original_questions[0]["question_type"] = "MULTI"
+
+            active = await client.get(
+                "/api/v1/skills/assessments/active",
+                headers=_headers(student),
+                params={"topic": "python"},
+            )
+            assert active.status_code == 200
+            active_payload = active.json()
+            assert set(active_payload) == expected_keys
+            assert active_payload["attempt_id"] == start_payload["attempt_id"]
+            assert active_payload["resumed"] is True
+            assert active_payload["questions"] == original_questions
+            assert active_payload["answers"] == [[], *([None] * 9)]
+            assert all(
+                "correct_index" not in question
+                and "correct_answers" not in question
+                and "explanation" not in question
+                for question in active_payload["questions"]
+            )
+
+            saved_selections = [[], None, *([0] * 8)]
+            saved = await client.put(
+                f"/api/v1/skills/attempts/{start_payload['attempt_id']}/answers",
+                headers=_headers(student),
+                json={"answers": saved_selections},
+            )
+            assert saved.status_code == 200
+            assert saved.json() == {"saved": True}
+            rejected_key_data = await client.put(
+                f"/api/v1/skills/attempts/{start_payload['attempt_id']}/answers",
+                headers=_headers(student),
+                json={"answers": saved_selections, "correct_answers": [0]},
+            )
+            assert rejected_key_data.status_code == 422
+
+            resumed = await client.get(
+                "/api/v1/skills/assessments/active",
+                headers=_headers(student),
+                params={"topic": "python"},
+            )
+            assert resumed.json()["questions"] == original_questions
+            assert resumed.json()["answers"] == saved_selections
+            assert resumed.json()["resumed"] is True
+
+            other_active = await client.get(
+                "/api/v1/skills/assessments/active",
+                headers=_headers(other_student),
+                params={"topic": "python"},
+            )
+            assert other_active.status_code == 200
+            assert other_active.json() is None
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_simultaneous_assessment_starts_return_one_active_attempt() -> None:
+    database_path = Path(f".skill_assessments_{uuid4().hex}.db")
+    engine, sessions, students, _ = await _setup_skill_app(database_path)
+    student = students[0]
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            responses = await asyncio.gather(*[
+                client.post(
+                    "/api/v1/skills/assessments/start",
+                    headers=_headers(student),
+                    json={"topic": "python"},
+                )
+                for _ in range(2)
+            ])
+            assert [response.status_code for response in responses] == [200, 200]
+            assert responses[0].json()["attempt_id"] == responses[1].json()["attempt_id"]
+            async with sessions() as session:
+                attempts = list(await session.scalars(
+                    select(SkillAttempt).where(
+                        SkillAttempt.student_id == student.id,
+                        SkillAttempt.topic == "python",
+                        SkillAttempt.status == "IN_PROGRESS",
+                    )
+                ))
+                assert len(attempts) == 1
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
+        database_path.unlink(missing_ok=True)
+
+
+@pytest.mark.anyio
 async def test_assessments_enforce_expiry_ownership_cooldown_and_weekly_limit() -> None:
     engine, sessions, students, _ = await _setup_skill_app()
     student, other_student = students
@@ -127,6 +254,19 @@ async def test_assessments_enforce_expiry_ownership_cooldown_and_weekly_limit() 
             assert wrong_owner.status_code == 404
             assert (await client.get("/api/v1/skills/attempts", headers=_headers(other_student))).json() == []
 
+            resumed = await client.post(
+                "/api/v1/skills/assessments/start",
+                headers=_headers(student),
+                json={"topic": "python"},
+            )
+            assert resumed.status_code == 200
+            assert resumed.json()["attempt_id"] == attempt_id
+            assert resumed.json()["resumed"] is True
+            async with sessions() as session:
+                attempt = await session.get(SkillAttempt, attempt_id)
+                attempt.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+                await session.commit()
+
             cooldown = await client.post(
                 "/api/v1/skills/assessments/start",
                 headers=_headers(student),
@@ -134,14 +274,19 @@ async def test_assessments_enforce_expiry_ownership_cooldown_and_weekly_limit() 
             )
             assert cooldown.status_code == 429
             assert "24 hours" in cooldown.json()["detail"]
+            assert cooldown.json()["code"] == "COOLDOWN"
+            assert cooldown.json()["next_available_at"]
+            async with sessions() as session:
+                attempt = await session.get(SkillAttempt, attempt_id)
+                assert attempt.status == "EXPIRED"
 
             async with sessions() as session:
                 attempt = await session.get(SkillAttempt, attempt_id)
-                attempt.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
                 for topic in ("react", "sql"):
                     session.add(SkillAttempt(
                         student_id=student.id,
                         topic=topic,
+                        status="EXPIRED",
                         question_ids=[],
                         question_snapshots=[],
                         option_orders=[],
@@ -163,6 +308,8 @@ async def test_assessments_enforce_expiry_ownership_cooldown_and_weekly_limit() 
             )
             assert weekly_limit.status_code == 429
             assert "limit of 3" in weekly_limit.json()["detail"]
+            assert weekly_limit.json()["code"] == "WEEKLY_LIMIT"
+            assert weekly_limit.json()["next_available_at"]
     finally:
         app.dependency_overrides.clear()
         await engine.dispose()
@@ -282,6 +429,7 @@ async def test_percentile_is_returned_only_after_thirty_topic_attempts() -> None
                     session.add(SkillAttempt(
                         student_id=other_student.id,
                         topic="python",
+                        status="COMPLETED",
                         question_ids=[],
                         question_snapshots=[],
                         option_orders=[],

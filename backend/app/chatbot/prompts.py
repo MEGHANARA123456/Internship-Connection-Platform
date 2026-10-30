@@ -38,4 +38,5 @@ ROLE_PROMPTS = {
 
 
 def system_prompt_for(role: str) -> str:
+    """Build the base response instructions with the requested role, defaulting unknown roles to guest."""
     return f"{BASE_PROMPT}\n\n{ROLE_PROMPTS.get(role, ROLE_PROMPTS['guest'])}"

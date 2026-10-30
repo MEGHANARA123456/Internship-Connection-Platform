@@ -13,6 +13,7 @@ from app.services.chatbot_service import ChatbotService
 
 
 def _records(path: Path) -> list[dict[str, Any]]:
+    """Load an evaluation JSON array and reject non-object records or non-array roots."""
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
         raise ValueError(f"Evaluation dataset must be a JSON array of records: {path}")
@@ -20,6 +21,7 @@ def _records(path: Path) -> list[dict[str, Any]]:
 
 
 async def evaluate(dataset: Path) -> dict[str, Any]:
+    """Measure expected-source ranking, key-fact coverage, and refusal rates for a dataset."""
     records = _records(dataset)
     config = load_config()
     if not config.rag_enabled:
@@ -115,6 +117,7 @@ async def evaluate(dataset: Path) -> dict[str, Any]:
 
 
 def main() -> None:
+    """Parse the dataset path and print retrieval and refusal evaluation metrics as JSON."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dataset", type=Path, help="Path to tests/rag_eval.json")
     args = parser.parse_args()

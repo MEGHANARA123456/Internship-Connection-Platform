@@ -25,6 +25,7 @@ PASSWORD = "Load-check-Password-1!"
 
 
 async def run_load_check(*, baseline_sync_hash: bool = False) -> tuple[int, int, float, float]:
+    """Run concurrent auth/browse/apply/notification requests against an isolated test database and return counts and latency percentiles."""
     with tempfile.TemporaryDirectory(prefix="internship-load-check-") as temporary_directory:
         database_url = os.getenv("LOAD_CHECK_DATABASE_URL")
         schema_name = f"load_check_{uuid4().hex}"
@@ -53,6 +54,7 @@ async def run_load_check(*, baseline_sync_hash: bool = False) -> tuple[int, int,
                 await connection.run_sync(Base.metadata.create_all)
 
         async def override_db():
+            """Yield a session from the load check's isolated database factory."""
             async with sessions() as session:
                 yield session
 
@@ -66,6 +68,7 @@ async def run_load_check(*, baseline_sync_hash: bool = False) -> tuple[int, int,
             original_verify = auth_api.verify_password_async
 
             async def verify_password_on_event_loop(password: str, password_hash: str) -> bool:
+                """Provide the synchronous verification baseline on the event loop."""
                 return verify_password(password, password_hash)
 
             auth_api.verify_password_async = verify_password_on_event_loop
@@ -139,6 +142,7 @@ async def run_load_check(*, baseline_sync_hash: bool = False) -> tuple[int, int,
             expected_status: int,
             **kwargs,
         ) -> Response | None:
+            """Issue one timed request and track transport or expected-status failures."""
             nonlocal failures, request_count
             started_at = time.perf_counter()
             try:
@@ -155,6 +159,7 @@ async def run_load_check(*, baseline_sync_hash: bool = False) -> tuple[int, int,
             return response
 
         async def user_flow(index: int, email: str, internship_id: int) -> None:
+            """Exercise login, browsing, application submission, and notifications for one user."""
             nonlocal failures
             async with AsyncClient(
                 transport=ASGITransport(

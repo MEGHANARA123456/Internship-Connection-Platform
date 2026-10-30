@@ -44,6 +44,7 @@ REPORT_TRANSITIONS = {"OPEN": {"INVESTIGATING"}, "INVESTIGATING": {"RESOLVED"}, 
 
 
 def report_transition_allowed(current: str, target: str) -> bool:
+    """Return whether the requested report status is an allowed next state."""
     return target in REPORT_TRANSITIONS.get(current, set())
 
 
@@ -61,7 +62,9 @@ def _get_ip(request: Request) -> str | None:
 
 @router.get("/dashboard")
 async def dashboard(db: DbSession, user: admin_user) -> dict[str, int]:
+    """Count users, internships, applications, pending verification and approval items, and unresolved reports for the admin dashboard."""
     async def count(model, *where):
+        """Return the database count for a model constrained by the supplied SQL conditions."""
         return int(await db.scalar(select(func.count()).select_from(model).where(*where)) or 0)
     return {
         "students": await count(User, User.role == UserRole.STUDENT),
@@ -85,6 +88,7 @@ async def search_users(
     include_suspended: bool = True,
     created: str | None = Query(None, pattern="^this_month$"),
 ) -> list[User]:
+    """List users newest first, optionally filtering by email text, role, current-month creation, and suspended status."""
     query = select(User).order_by(User.id.desc())
     if search:
         query = query.where(User.email.ilike(f"%{search}%"))
@@ -107,6 +111,7 @@ async def create_admin(
     request: Request,
     background_tasks: BackgroundTasks,
 ) -> User:
+    """Validate and create an active, verified administrator, record the action, and queue an account email."""
     try:
         email = validate_email_format(data.email)
     except ValueError as exc:
@@ -243,6 +248,7 @@ async def delete_user_account(
     db: DbSession,
     user: admin_user,
 ) -> dict[str, Any]:
+    """Delete the specified user after applying the supplied administrator deletion policy and recording the action."""
     target = await db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="User not found")
@@ -259,6 +265,7 @@ async def delete_user_account(
 
 @router.post("/users/{user_id}/suspend", response_model=UserAdminResponse)
 async def suspend_user(user_id: int, db: DbSession, user: admin_user, request: Request) -> User:
+    """Suspend the specified user and record the administrator action."""
     found = await db.get(User, user_id)
     if found is None:
         raise HTTPException(404, "User not found")
@@ -288,6 +295,7 @@ async def suspend_user(user_id: int, db: DbSession, user: admin_user, request: R
 
 @router.post("/users/{user_id}/reactivate", response_model=UserAdminResponse)
 async def reactivate_user(user_id: int, db: DbSession, user: admin_user, request: Request) -> User:
+    """Reactivate a suspended user and record the administrator action."""
     found = await db.get(User, user_id)
     if found is None:
         raise HTTPException(404, "User not found")
@@ -307,6 +315,7 @@ async def reactivate_user(user_id: int, db: DbSession, user: admin_user, request
 # ── Company Management ───────────────────────────────────────────────────────
 
 def _company_output(profile: CompanyProfile) -> dict:
+    """Build the API representation of a company profile."""
     return {
         "id": profile.id,
         "user_id": profile.user_id,
@@ -320,6 +329,7 @@ def _company_output(profile: CompanyProfile) -> dict:
 
 
 def _company_document_output(document: CompanyDocument) -> dict:
+    """Build the API representation of a company verification document."""
     return {
         "id": document.id,
         "company_id": document.company_id,
@@ -335,6 +345,7 @@ def _company_document_output(document: CompanyDocument) -> dict:
 async def company_verification_documents(
     user_id: int, db: DbSession, user: admin_user
 ) -> list[dict]:
+    """List the verification documents associated with the selected company profile."""
     profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user_id))
     if profile is None:
         raise HTTPException(status_code=404, detail="Company profile not found")
@@ -350,6 +361,7 @@ async def company_verification_documents(
 async def download_company_verification_document(
     user_id: int, document_id: int, db: DbSession, user: admin_user
 ) -> FileResponse:
+    """Return the stored verification document file, or a not-found response when it is unavailable."""
     document = await db.scalar(
         select(CompanyDocument).where(
             CompanyDocument.id == document_id,
@@ -367,6 +379,7 @@ async def download_company_verification_document(
 @router.get("/verifications")
 @router.get("/companies/unverified")
 async def pending_verifications(db: DbSession, user: admin_user) -> list[dict]:
+    """List company profiles awaiting administrator verification."""
     profiles = list(
         (
             await db.execute(
@@ -444,6 +457,7 @@ async def list_all_companies(
 async def verify_company(
     user_id: int, data: ModerationStatus, db: DbSession, user: admin_user, request: Request
 ) -> dict:
+    """Approve or reject a company verification request and persist the administrator decision."""
     if data.status not in {"VERIFIED", "PUBLISHED", "REJECTED"}:
         raise HTTPException(400, "Use VERIFIED or REJECTED")
     profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user_id))
@@ -583,6 +597,7 @@ async def moderate_company_posting(
 
 @router.get("/internships", response_model=list[dict])
 async def moderation_queue(db: DbSession, user: admin_user, status: str | None = None) -> list[dict]:
+    """List internships awaiting moderation, with their associated company information."""
     query = select(Internship).order_by(Internship.created_at.desc())
     if status:
         query = query.where(Internship.status == status)
@@ -621,6 +636,7 @@ async def moderate_internship(
     request: Request,
     background_tasks: BackgroundTasks,
 ) -> dict:
+    """Apply the administrator moderation decision to an internship and record the action."""
     item = await db.get(Internship, internship_id)
     if item is None:
         raise HTTPException(404, "Internship not found")
@@ -666,6 +682,7 @@ async def moderate_internship(
 
 @router.get("/reports", response_model=list[ReportResponse])
 async def reports(db: DbSession, user: admin_user, status: str | None = None) -> list[Report]:
+    """List reports for administrator review, optionally narrowed by status."""
     query = select(Report).order_by(Report.created_at.desc())
     if status:
         query = query.where(Report.status == status)
@@ -676,6 +693,7 @@ async def reports(db: DbSession, user: admin_user, status: str | None = None) ->
 async def update_report(
     report_id: int, data: ReportUpdate, db: DbSession, user: admin_user, request: Request
 ) -> Report:
+    """Move a report to an allowed review status and record the administrator action."""
     report = await db.get(Report, report_id)
     if report is None:
         raise HTTPException(404, "Report not found")

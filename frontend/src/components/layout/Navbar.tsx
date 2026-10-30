@@ -57,6 +57,13 @@ const quickLinks: Record<Exclude<NavigationRole, 'GUEST'>, Array<{ label: string
   ],
 }
 
+const previewMobileItem: NavigationItem = {
+  id: 'preview-mobile-view',
+  label: 'Preview Mobile View',
+  icon: Smartphone,
+  action: 'view-mode',
+}
+
 function GlobalSearch({ role }: { role: NavigationRole }) {
   const navigate = useNavigate()
   const rootRef = useRef<HTMLDivElement>(null)
@@ -284,6 +291,7 @@ export function Navbar() {
   const [navMenuOpen, setNavMenuOpen] = useState(false)
   const [internshipsMenuOpen, setInternshipsMenuOpen] = useState(false)
   const [statusMenuOpen, setStatusMenuOpen] = useState(false)
+  const [isDesktopViewport, setIsDesktopViewport] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768)
   const [studentNavCounts, setStudentNavCounts] = useState<StudentCounts>({
     unread_notifications: 0,
     invites_new: 0,
@@ -295,6 +303,9 @@ export function Navbar() {
 
   const role: NavigationRole = session?.role ?? 'GUEST'
   const config = navigationConfig[role]
+  const hamburgerItems = role === 'COMPANY'
+    ? config.hamburger.flatMap((item) => item.action === 'sign-out' ? [previewMobileItem, item] : [item])
+    : config.hamburger
   const countFor = useCallback((source?: NavigationCountSource) => {
     if (source === 'invites_new') return studentNavCounts.invites_new
     if (source === 'application_updates') return studentNavCounts.application_updates
@@ -304,6 +315,12 @@ export function Navbar() {
   }, [studentNavCounts, unreadCount])
 
   useWebSocketChat(session?.userId)
+
+  useEffect(() => {
+    const updateViewport = () => setIsDesktopViewport(window.innerWidth >= 768)
+    window.addEventListener('resize', updateViewport)
+    return () => window.removeEventListener('resize', updateViewport)
+  }, [])
 
   useEffect(() => {
     if (!session?.accessToken) {
@@ -417,7 +434,11 @@ export function Navbar() {
 
   const renderItem = (item: NavigationItem, mobileTop = false) => {
     const Icon = item.icon
-    if (item.action === 'view-mode' && (window.self !== window.top || new URLSearchParams(location.search).has('preview'))) return null
+    if (item.action === 'view-mode' && (
+      ((role === 'COMPANY' || role === 'ADMIN') && !isDesktopViewport)
+      || window.self !== window.top
+      || new URLSearchParams(location.search).has('preview')
+    )) return null
     if (item.id === 'application-status') {
       return (
         <div key={item.id} className="space-y-1">
@@ -459,9 +480,13 @@ export function Navbar() {
     }
     if (item.action) {
       const label = item.action === 'view-mode'
-        ? (isMobileView ? 'Exit screen preview' : 'Screen preview')
+        ? (role === 'COMPANY' || role === 'ADMIN'
+          ? 'Preview Mobile View'
+          : isMobileView ? 'Exit screen preview' : 'Screen preview')
         : item.action === 'sign-out' ? 'Sign out' : item.label
-      const ActionIcon = item.action === 'view-mode' ? (isMobileView ? Monitor : Smartphone) : Icon
+      const ActionIcon = item.action === 'view-mode'
+        ? (role === 'COMPANY' || role === 'ADMIN' ? Smartphone : isMobileView ? Monitor : Smartphone)
+        : Icon
       return (
         <button key={item.id} type="button" role="menuitem" onClick={() => handleAction(item)} className={rowClass()}>
           <ActionIcon className="h-4 w-4 shrink-0 text-slate-400" />
@@ -574,7 +599,7 @@ export function Navbar() {
                       {config.topBar.map((item) => renderItem(item, true))}
                     </div>
                   )}
-                  {config.hamburger.map((item) => renderItem(item))}
+                  {hamburgerItems.map((item) => renderItem(item))}
                 </div>
               )}
             </div>

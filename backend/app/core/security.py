@@ -17,18 +17,22 @@ password_hasher = PasswordHasher()
 ALGORITHM = "HS256"
 
 def hash_password(password: str) -> str:
+    """Hash a plaintext password with Argon2 and return its encoded representation."""
     return password_hasher.hash(password)
 
 def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a password against an Argon2 hash, returning false on verification failure."""
     try:
         return password_hasher.verify(password_hash, password)
     except VerificationError:
         return False
 
 async def hash_password_async(password: str) -> str:
+    """Hash a password in a worker thread so Argon2 does not block the event loop."""
     return await asyncio.to_thread(hash_password, password)
 
 async def verify_password_async(password: str, password_hash: str) -> bool:
+    """Verify a password in a worker thread and return whether the hash matches."""
     return await asyncio.to_thread(verify_password, password, password_hash)
 
 def get_encryption_key() -> bytes:
@@ -65,6 +69,7 @@ def mask_email(email: str) -> str:
     return f"{masked_user}@{domain}"
 
 def create_token(subject: str, role: str, token_type: str, expires_delta: timedelta) -> str:
+    """Encode an HS256 JWT with subject, role, type, issue/expiry times, and refresh JTI."""
     now = datetime.now(timezone.utc)
     payload = {"sub": subject, "role": role, "type": token_type, "iat": now, "exp": now + expires_delta}
     if token_type == "refresh":
@@ -72,6 +77,7 @@ def create_token(subject: str, role: str, token_type: str, expires_delta: timede
     return jwt.encode(payload, get_settings().secret_key, algorithm=ALGORITHM)
 
 def decode_token(token: str) -> dict:
+    """Decode an HS256 JWT using the configured secret, raising ValueError if invalid."""
     try:
         return jwt.decode(token, get_settings().secret_key, algorithms=[ALGORITHM])
     except JWTError as error:

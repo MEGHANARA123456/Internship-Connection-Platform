@@ -38,6 +38,7 @@ def output(
     match_explanation: str | None = None,
     match: dict | None = None,
 ) -> dict:
+    """Convert an internship record and its related company information into the API response shape."""
     data = {key: getattr(item, key) for key in ("id", "company_id", "title", "description", "location", "industry", "duration_months", "stipend", "work_mode", "deadline", "status", "created_at", "closed_at")}
     data["skills"] = [skill for skill in (item.skills or "").split(",") if skill]
     data["company_name"] = company_name or "Enterprise Partner"
@@ -57,11 +58,13 @@ def output(
 
 
 async def get_company_name(company_id: int, db: DbSession) -> str:
+    """Return the display name for a company, using a fallback when its profile is unavailable."""
     profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == company_id))
     return profile.company_name if (profile and profile.company_name) else "Enterprise Partner"
 
 
 def _search_filter(search: str | None):
+    """Add the supported free-text search conditions to an internship query."""
     tokens = re.findall(r"[a-z0-9]+", (search or "").casefold())
     if not tokens:
         return None
@@ -75,6 +78,7 @@ def _search_filter(search: str | None):
 
 
 def transition_allowed(current: str, target: str) -> bool:
+    """Return whether an internship may move from its current status to the requested status."""
     return target in {"PENDING_APPROVAL"} if current == "DRAFT" else target == "PUBLISHED" if current == "PENDING_APPROVAL" else target == "CLOSED" if current == "PUBLISHED" else False
 
 
@@ -86,6 +90,7 @@ async def _ensure_unique_active_posting(
     *,
     exclude_id: int | None = None,
 ) -> None:
+    """Reject another active posting with the same company/title where the uniqueness rule applies."""
     query = select(Internship.id).where(
         Internship.company_id == company_id,
         Internship.status.in_({"DRAFT", "PENDING_APPROVAL", "PUBLISHED"}),
@@ -103,6 +108,7 @@ async def _ensure_unique_active_posting(
 
 @router.post("", response_model=InternshipResponse, status_code=201)
 async def create_internship(data: InternshipInput, user: company_only, db: DbSession) -> dict:
+    """Create a draft internship for the authenticated company from the submitted fields."""
     await _ensure_unique_active_posting(db, user.id, data.title, data.location)
     item = Internship(company_id=user.id, status="DRAFT", skills=",".join(data.skills), **data.model_dump(exclude={"skills"}))
     db.add(item); await db.commit(); await db.refresh(item)
@@ -112,6 +118,7 @@ async def create_internship(data: InternshipInput, user: company_only, db: DbSes
 
 @router.get("/mine", response_model=list[InternshipResponse])
 async def list_company_internships(user: company_only, db: DbSession) -> list[dict]:
+    """List internships owned by the authenticated company."""
     result = (
         await db.execute(
             select(Internship, func.count(Application.id))
@@ -136,6 +143,7 @@ async def list_saved_internships(
     min_stipend: Annotated[int | None, Query(ge=0)] = None,
     skills: str | None = None,
 ) -> list[dict]:
+    """List internships saved by the authenticated student."""
     query = (
         select(Internship)
         .join(SavedInternship, SavedInternship.internship_id == Internship.id)
@@ -212,6 +220,7 @@ async def list_saved_internships(
 
 @router.post("/{internship_id}/save", status_code=200)
 async def save_internship(internship_id: int, user: student_only, db: DbSession) -> dict:
+    """Save an internship for the authenticated student if it is available to save."""
     internship = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.status == "PUBLISHED"))
     if internship is None:
         raise HTTPException(404, "Internship not found or not published")
@@ -243,6 +252,7 @@ async def save_internship(internship_id: int, user: student_only, db: DbSession)
 
 @router.delete("/{internship_id}/save", status_code=200)
 async def unsave_internship(internship_id: int, user: student_only, db: DbSession) -> dict:
+    """Remove an internship from the authenticated student?s saved list."""
     saved = await db.scalar(
         select(SavedInternship).where(
             SavedInternship.student_id == user.id,
@@ -273,6 +283,7 @@ async def browse_internships(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> InternshipPage:
+    """Browse internships visible to students, applying the requested search and listing filters."""
     query = select(Internship).where(
         Internship.status == "PUBLISHED",
         Internship.deadline >= date.today(),
@@ -355,6 +366,7 @@ async def browse_internships(
 
 @router.get("/{internship_id}", response_model=InternshipResponse)
 async def get_internship(internship_id: int, db: DbSession, user: optional_user) -> dict:
+    """Return an internship visible to the caller, including its associated company information."""
     item = await db.scalar(select(Internship).where(Internship.id == internship_id))
     if item is None:
         raise HTTPException(404, "Internship not found")
@@ -417,6 +429,7 @@ async def get_internship(internship_id: int, db: DbSession, user: optional_user)
 
 @router.put("/{internship_id}", response_model=InternshipResponse)
 async def edit_internship(internship_id: int, data: InternshipInput, user: company_only, db: DbSession) -> dict:
+    """Update an internship owned by the authenticated company using the supplied fields."""
     item = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id))
     if item is None: raise HTTPException(404, "Internship not found")
     await _ensure_unique_active_posting(
@@ -435,6 +448,7 @@ async def edit_internship(internship_id: int, data: InternshipInput, user: compa
 
 @router.post("/{internship_id}/duplicate", response_model=InternshipResponse, status_code=201)
 async def duplicate_internship(internship_id: int, user: company_only, db: DbSession) -> dict:
+    """Create a new company-owned internship by copying the selected internship?s posting details."""
     source = await db.scalar(
         select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id)
     )
@@ -461,6 +475,7 @@ async def duplicate_internship(internship_id: int, user: company_only, db: DbSes
 
 @router.post("/{internship_id}/status", response_model=InternshipResponse)
 async def change_status(internship_id: int, target: str, user: company_only, db: DbSession) -> dict:
+    """Change an internship?s status when the requested transition is permitted for its owner."""
     if target == "CLOSED":
         item = await db.scalar(select(Internship).where(Internship.id == internship_id))
         if item is None:
@@ -513,6 +528,7 @@ async def change_status(internship_id: int, target: str, user: company_only, db:
 
 @router.post("/{internship_id}/submit", response_model=InternshipResponse)
 async def submit_internship(internship_id: int, user: company_only, db: DbSession) -> dict:
+    """Submit a company internship for administrator approval."""
     return await change_status(internship_id, "PENDING_APPROVAL", user, db)
 
 
@@ -522,6 +538,7 @@ async def close_preview(
     user: Annotated[User, Depends(get_current_user)],
     db: DbSession,
 ) -> dict:
+    """Close the preview state for an internship owned by the authenticated company."""
     item = await db.get(Internship, internship_id)
     if item is None:
         raise HTTPException(404, "Internship not found")
@@ -556,6 +573,7 @@ async def close_internship_endpoint(
     db: DbSession,
     data: InternshipCloseRequest = Body(default=InternshipCloseRequest()),
 ) -> dict:
+    """Close an internship and persist its closed status for the owning company."""
     item = await db.get(Internship, internship_id)
     if item is None or item.company_id != user.id:
         raise HTTPException(404, "Internship not found")
@@ -584,6 +602,7 @@ async def review_internship(
     db: DbSession,
     reason: str | None = Query(default=None, max_length=300),
 ) -> dict:
+    """Apply an administrator?s approval or rejection decision to a submitted internship."""
     item = await db.scalar(select(Internship).where(Internship.id == internship_id))
     if item is None: raise HTTPException(404, "Internship not found")
     if item.status != "PENDING_APPROVAL" or target not in {"PUBLISHED", "REJECTED"}:
@@ -610,6 +629,7 @@ async def review_internship(
 
 @router.delete("/{internship_id}", status_code=204)
 async def delete_internship(internship_id: int, user: company_only, db: DbSession) -> None:
+    """Delete an internship owned by the authenticated company when the posting can be removed."""
     item = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id))
     if item is None: raise HTTPException(404, "Internship not found")
     if item.status != "DRAFT":

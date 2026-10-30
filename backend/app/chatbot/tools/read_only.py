@@ -50,6 +50,8 @@ MAX_ROWS = 10
 
 @dataclass(frozen=True)
 class ToolResult:
+    """Represent a read-only tool answer and the route/link destinations it supports."""
+
     name: str
     answer: str
     route: str
@@ -57,6 +59,7 @@ class ToolResult:
 
 
 def _validated_args(name: str, args: dict[str, Any]) -> int | None:
+    """Reject unsupported inputs and return a valid optional company internship ID."""
     if set(args) - {"internship_id"}:
         raise HTTPException(status_code=422, detail="Unsupported tool arguments.")
     if name not in {"company_applicants", "company_shortlisted", "company_internships"}:
@@ -72,6 +75,7 @@ def _validated_args(name: str, args: dict[str, Any]) -> int | None:
 
 
 def _when(value) -> str:
+    """Format database dates consistently in UTC, including naive datetime values."""
     if value is None:
         return "date not recorded"
     if isinstance(value, date) and not isinstance(value, datetime):
@@ -82,10 +86,12 @@ def _when(value) -> str:
 
 
 async def _student_applications(db: AsyncSession, user: User) -> ToolResult:
+    """Summarize this student's latest applications and their relevant next events."""
     rows = (await db.execute(
         select(Application, Internship.title, CompanyProfile.company_name)
         .join(Internship, Internship.id == Application.internship_id)
         .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
+        # Scope the query to the authenticated student before retrieving any details.
         .where(Application.student_id == user.id)
         .order_by(Application.updated_at.desc(), Application.id.desc())
         .limit(MAX_ROWS)
@@ -124,11 +130,13 @@ async def _student_applications(db: AsyncSession, user: User) -> ToolResult:
 
 
 async def _student_interviews(db: AsyncSession, user: User) -> ToolResult:
+    """List this student's upcoming scheduled interviews, newest time first."""
     rows = (await db.execute(
         select(Interview, Internship.title)
         .join(Application, Application.id == Interview.application_id)
         .join(Internship, Internship.id == Application.internship_id)
         .where(
+            # Join through the student's own application to prevent cross-account access.
             Application.student_id == user.id,
             Interview.status == "SCHEDULED",
             Interview.scheduled_at >= datetime.now(timezone.utc),
@@ -149,6 +157,7 @@ async def _student_interviews(db: AsyncSession, user: User) -> ToolResult:
 
 
 async def _student_notifications(db: AsyncSession, user: User) -> ToolResult:
+    """Summarize the authenticated student's most recent notifications."""
     rows = list((await db.scalars(
         select(Notification)
         .where(Notification.user_id == user.id)
@@ -167,6 +176,7 @@ async def _student_notifications(db: AsyncSession, user: User) -> ToolResult:
 
 
 async def _student_profile(db: AsyncSession, user: User) -> ToolResult:
+    """Report which core profile fields and resume are missing for this student."""
     profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
     resume = await db.scalar(select(Resume.id).where(Resume.student_id == user.id))
     if profile is None:
@@ -195,6 +205,7 @@ async def _student_profile(db: AsyncSession, user: User) -> ToolResult:
 
 
 async def _student_saved_internships(db: AsyncSession, user: User) -> ToolResult:
+    """List this student's recently saved internships and provide detail links."""
     rows = (await db.execute(
         select(Internship.title, Internship.id, CompanyProfile.company_name)
         .join(SavedInternship, SavedInternship.internship_id == Internship.id)
@@ -218,6 +229,7 @@ async def _student_saved_internships(db: AsyncSession, user: User) -> ToolResult
 
 
 async def _student_recommended_internships(db: AsyncSession, user: User) -> ToolResult:
+    """Rank a bounded set of open internships against the student's profile skills."""
     from app.services.ai import compute_match
 
     profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
@@ -236,6 +248,7 @@ async def _student_recommended_internships(db: AsyncSession, user: User) -> Tool
             Internship.deadline >= date.today(),
         )
         .order_by(Internship.created_at.desc(), Internship.id.desc())
+        # Bound the candidates scored per request to keep this read tool predictable.
         .limit(100)
     )).all()
     skills = [item.strip() for item in re.split(r"[,;\n]", profile.skills) if item.strip()]
@@ -250,6 +263,7 @@ async def _student_recommended_internships(db: AsyncSession, user: User) -> Tool
         )
         if match["score"] is not None:
             matches.append((match["score"], internship, company_name, match["matched"]))
+    # Break equal scores by internship ID so the recommendations remain deterministic.
     matches.sort(key=lambda item: (-item[0], item[1].id))
     matches = matches[:5]
     answer = (
@@ -269,9 +283,11 @@ async def _student_recommended_internships(db: AsyncSession, user: User) -> Tool
 
 
 async def _company_internships(db: AsyncSession, user: User, internship_id: int | None) -> ToolResult:
+    """Summarize postings owned by this company, optionally filtering to one posting."""
     query = (
         select(Internship.title, Internship.status, Internship.deadline, func.count(Application.id))
         .outerjoin(Application, Application.internship_id == Internship.id)
+        # Ownership is enforced in the query, even when a caller supplies an ID.
         .where(Internship.company_id == user.id)
         .group_by(Internship.id)
         .order_by(Internship.created_at.desc())
@@ -298,6 +314,7 @@ async def _company_applicants(
     internship_id: int | None,
     shortlisted: bool = False,
 ) -> ToolResult:
+    """List this company's applicants, optionally narrowed by posting or shortlist."""
     query = (
         select(
             StudentProfile.full_name,
@@ -310,6 +327,7 @@ async def _company_applicants(
         )
         .join(Internship, Internship.id == Application.internship_id)
         .outerjoin(StudentProfile, StudentProfile.user_id == Application.student_id)
+        # Never trust a requested internship ID as an ownership check by itself.
         .where(Internship.company_id == user.id)
         .order_by(Application.created_at.desc(), Application.id.desc())
         .limit(MAX_ROWS)
@@ -336,6 +354,7 @@ async def _company_applicants(
 
 
 def _company_applicant_summary(row: Any) -> str:
+    """Format one applicant row with a match score against the company posting."""
     from app.services.ai import compute_match
 
     name, student_skills, title, description, job_skills, status, created_at = row
@@ -355,6 +374,7 @@ def _company_applicant_summary(row: Any) -> str:
 
 
 async def _company_pipeline(db: AsyncSession, user: User) -> ToolResult:
+    """Count application records by stage for internships owned by this company."""
     rows = (await db.execute(
         select(Application.status, func.count(Application.id))
         .join(Internship, Internship.id == Application.internship_id)
@@ -374,11 +394,13 @@ async def _company_pipeline(db: AsyncSession, user: User) -> ToolResult:
 
 
 async def _company_interviews(db: AsyncSession, user: User) -> ToolResult:
+    """List upcoming scheduled interviews for the company's own internships."""
     rows = (await db.execute(
         select(Internship.title, Interview.status, Interview.scheduled_at)
         .join(Application, Application.id == Interview.application_id)
         .join(Internship, Internship.id == Application.internship_id)
         .where(
+            # Filter by internship ownership through the associated application.
             Internship.company_id == user.id,
             Interview.status == "SCHEDULED",
             Interview.scheduled_at >= datetime.now(timezone.utc),
@@ -398,6 +420,7 @@ async def _company_interviews(db: AsyncSession, user: User) -> ToolResult:
 
 
 async def _admin_audit(db: AsyncSession, user: User) -> ToolResult:
+    """Summarize a small set of recent audit events for the authenticated admin."""
     events = await get_recent_admin_audit_events(db, user, limit=5)
     if not events:
         answer = "There are no recent audit events to summarize."
@@ -417,6 +440,7 @@ async def _admin_audit(db: AsyncSession, user: User) -> ToolResult:
 
 
 async def _admin_pending(db: AsyncSession) -> ToolResult:
+    """Count internship postings awaiting administrator approval."""
     count = int(await db.scalar(
         select(func.count(Internship.id)).where(Internship.status == "PENDING_APPROVAL")
     ) or 0)
@@ -428,6 +452,7 @@ async def _admin_pending(db: AsyncSession) -> ToolResult:
 
 
 async def _admin_verification_counts(db: AsyncSession) -> ToolResult:
+    """Return company verification totals, including statuses with zero records."""
     rows = (await db.execute(
         select(CompanyProfile.verification_status, func.count(CompanyProfile.id))
         .group_by(CompanyProfile.verification_status)
@@ -445,6 +470,7 @@ async def _admin_verification_counts(db: AsyncSession) -> ToolResult:
 
 
 async def _admin_analytics(db: AsyncSession) -> ToolResult:
+    """Aggregate high-level platform account, internship, and audit counts."""
     users = (await db.execute(
         select(User.role, func.count(User.id)).group_by(User.role)
     )).all()
@@ -467,6 +493,7 @@ async def execute_read_tool(
     user: User | None,
     db: AsyncSession,
 ) -> ToolResult:
+    """Authorize a role-specific tool, validate its inputs, and enforce a timeout."""
     expected_role = TOOL_ROLES.get(name)
     if expected_role is None:
         raise HTTPException(status_code=400, detail="Unsupported chatbot tool.")
@@ -475,6 +502,7 @@ async def execute_read_tool(
     if user.role != expected_role:
         raise HTTPException(status_code=403, detail="This live-data request is not available for your role.")
     internship_id = _validated_args(name, args)
+    # Keep tool dispatch explicit so the allowlist above and its role mapping stay auditable.
     actions = {
         "student_applications": lambda: _student_applications(db, user),
         "student_interviews": lambda: _student_interviews(db, user),
@@ -492,4 +520,5 @@ async def execute_read_tool(
         "admin_verification_counts": lambda: _admin_verification_counts(db),
         "admin_analytics": lambda: _admin_analytics(db),
     }
+    # A slow database/tool call should not hold the chatbot request open indefinitely.
     return await asyncio.wait_for(actions[name](), timeout=TOOL_TIMEOUT_SECONDS)

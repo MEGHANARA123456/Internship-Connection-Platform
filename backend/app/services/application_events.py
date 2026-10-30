@@ -13,6 +13,7 @@ async def record_event(
     actor_id: int | None = None,
     once: bool = False,
 ) -> ApplicationEvent | None:
+    """Add an application event unless its type is blank or already recorded when ``once`` is set."""
     event_type = (event_type or '').strip()
     if not event_type:
         return None
@@ -69,6 +70,7 @@ async def record_status_event(
     *,
     note: str | None = None,
 ) -> ApplicationStatusEvent:
+    """Persist a status-history row and a matching general event, without committing."""
     event = ApplicationStatusEvent(
         application_id=application_id,
         from_status=from_status,
@@ -89,6 +91,7 @@ async def record_interview_event(
     *,
     note: str | None = None,
 ) -> ApplicationStatusEvent:
+    """Record an interview-related event while leaving the application's status unchanged."""
     application = await db.get(Application, application_id)
     current_status = application.status if application else None
     await record_event(db, application_id, event_type, actor_id)

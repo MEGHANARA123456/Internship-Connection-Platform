@@ -34,16 +34,22 @@ class ProviderResult:
 
 
 class AnswerProvider(Protocol):
-    async def rewrite(self, payload: ProviderPayload) -> ProviderResult: ...
+    async def rewrite(self, payload: ProviderPayload) -> ProviderResult:
+        """Return a structured answer using the supplied conversation and evidence payload."""
+        ...
 
 
 @runtime_checkable
 class ChatbotRouterProvider(Protocol):
-    async def classify_intent(self, message: str, role: str) -> str: ...
+    async def classify_intent(self, message: str, role: str) -> str:
+        """Classify a request as docs, live_data, both, or out_of_scope."""
+        ...
 
     async def rewrite_query(
         self,
         query: str,
         history: list[tuple[str, str]],
         role: str,
-    ) -> str: ...
+    ) -> str:
+        """Resolve a short follow-up into a standalone search query using recent history."""
+        ...

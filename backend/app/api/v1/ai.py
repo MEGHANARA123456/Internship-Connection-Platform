@@ -27,6 +27,7 @@ class EvaluateAnswerRequest(BaseModel):
 #interesting endpoints for AI-assisted features
 @router.get("/internships/{internship_id}/ats-score")
 async def get_ats_score(internship_id: int, user: student_only, db: DbSession) -> dict:
+    """Compute an ATS-style fit score from the student resume and skills against an existing internship."""
     internship = await db.scalar(select(Internship).where(Internship.id == internship_id))
     if internship is None:
         raise HTTPException(404, "Internship not found")
@@ -49,6 +50,7 @@ async def get_ats_score(internship_id: int, user: student_only, db: DbSession) -
 #interesting endpoints for AI-assisted features
 @router.post("/internships/{internship_id}/generate-pitch")
 async def generate_pitch(internship_id: int, user: student_only, db: DbSession) -> dict[str, str]:
+    """Generate a student-specific application pitch using the student profile and internship/company details."""
     internship = await db.scalar(select(Internship).where(Internship.id == internship_id))
     if internship is None:
         raise HTTPException(404, "Internship not found")
@@ -77,6 +79,7 @@ async def generate_pitch(internship_id: int, user: student_only, db: DbSession) 
 
 @router.get("/internships/{internship_id}/mock-interview")
 async def get_mock_interview(internship_id: int, user: student_only, db: DbSession) -> dict:
+    """Generate interview questions tailored to an existing internship and its listed skills."""
     internship = await db.scalar(select(Internship).where(Internship.id == internship_id))
     if internship is None:
         raise HTTPException(404, "Internship not found")
@@ -96,6 +99,7 @@ async def get_mock_interview(internship_id: int, user: student_only, db: DbSessi
 
 @router.post("/mock-interview/evaluate")
 async def evaluate_answer(data: EvaluateAnswerRequest, user: student_only) -> dict:
+    """Evaluate the submitted interview answer against its question and optional rubric."""
     return evaluate_mock_interview_answer(
         question=data.question,
         answer=data.answer,

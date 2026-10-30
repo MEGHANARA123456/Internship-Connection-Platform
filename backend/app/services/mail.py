@@ -40,6 +40,7 @@ FAKE_EMAIL_DOMAINS = {
 
 
 def record_email_locally(to: str, subject: str, body: str, html: str | None = None) -> dict[str, Any]:
+    """Add a normalized recipient email to the newest-first in-memory cache, capped at 2,000 entries."""
     email_entry = {
         "id": f"mail-{next(_EMAIL_IDS)}",
         "to": to.strip().lower(),
@@ -56,6 +57,7 @@ def record_email_locally(to: str, subject: str, body: str, html: str | None = No
 
 
 def get_emails_for_recipient(recipient_email: str) -> list[dict[str, Any]]:
+    """Return copies of cached emails whose normalized recipient matches the supplied address."""
     clean = recipient_email.strip().lower()
     with _SENT_EMAILS_LOCK:
         return [dict(email) for email in SENT_EMAILS if email["to"] == clean]
@@ -164,6 +166,7 @@ async def send_dev_email(
     db: AsyncSession | None = None,
     application_id: int | None = None,
 ) -> None:
+    """Record an email locally, optionally persist it for a user, then try Mailpit and configured SMTP delivery."""
     settings = get_settings()
     clean_to = to.strip().lower()
     record_email_locally(clean_to, subject, body, html)

@@ -13,9 +13,11 @@ from typing import Annotated, Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from starlette.responses import StreamingResponse
+from fastapi.responses import JSONResponse
 
 from app.api.v1.dependencies import DbSession, require_roles
 from app.models import Internship, Notification, SkillAttempt, SkillBadge, SkillLearningResource, SkillQuestion, User, UserRole
@@ -53,6 +55,7 @@ class AssessmentStart(BaseModel):
     @field_validator("topic")
     @classmethod
     def trim_topic(cls, value: str) -> str:
+        """Strip whitespace and lowercase the assessment topic supplied in the request."""
         return value.strip().lower()
 
 
@@ -63,9 +66,19 @@ class AssessmentSubmit(BaseModel):
     @field_validator("question_time_seconds")
     @classmethod
     def validate_question_times(cls, values: list[int]) -> list[int]:
+        """Reject per-question durations outside zero through the configured assessment duration."""
         if any(value < 0 or value > int(ASSESSMENT_DURATION.total_seconds()) for value in values):
             raise ValueError("Question times must be between 0 and 900 seconds")
         return values
+
+
+class AssessmentAnswers(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answers: list[StrictInt | list[StrictInt] | None] = Field(
+        min_length=ASSESSMENT_QUESTION_COUNT,
+        max_length=ASSESSMENT_QUESTION_COUNT,
+    )
 
 
 class SkillQuestionCreate(BaseModel):
@@ -84,6 +97,7 @@ class SkillQuestionCreate(BaseModel):
     @field_validator("topic", "prompt", "explanation")
     @classmethod
     def trim_required_text(cls, value: str) -> str:
+        """Strip required question text fields and reject values that become blank."""
         result = value.strip()
         if not result:
             raise ValueError("This value cannot be blank")
@@ -92,6 +106,7 @@ class SkillQuestionCreate(BaseModel):
     @field_validator("subtopic")
     @classmethod
     def validate_subtopic(cls, value: str) -> str:
+        """Normalize a subtopic identifier and require lowercase letters, digits, hyphens, or underscores."""
         result = value.strip().lower()
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", result):
             raise ValueError("Subtopic must use lowercase letters, numbers, '-' or '_'")
@@ -100,6 +115,7 @@ class SkillQuestionCreate(BaseModel):
     @field_validator("topic")
     @classmethod
     def validate_topic(cls, value: str) -> str:
+        """Normalize a topic identifier to lowercase and reject characters outside its identifier format."""
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value.lower()):
             raise ValueError("Topic must be a lowercase id using letters, numbers, '-' or '_'")
         return value.lower()
@@ -107,6 +123,7 @@ class SkillQuestionCreate(BaseModel):
     @field_validator("options")
     @classmethod
     def validate_options(cls, values: list[str]) -> list[str]:
+        """Trim answer options and reject blank or case-insensitively duplicated values."""
         normalized = [value.strip() for value in values]
         if any(not value for value in normalized):
             raise ValueError("Answer options cannot be blank")
@@ -117,6 +134,7 @@ class SkillQuestionCreate(BaseModel):
     @field_validator("difficulty")
     @classmethod
     def validate_difficulty(cls, value: str) -> str:
+        """Normalize supported difficulty aliases and require EASY, MEDIUM, or HARD."""
         difficulty = value.strip().upper()
         difficulty = {
             "BEGINNER": "EASY",
@@ -130,6 +148,7 @@ class SkillQuestionCreate(BaseModel):
     @field_validator("question_type")
     @classmethod
     def validate_question_type(cls, value: str) -> str:
+        """Normalize and validate a question type against the supported assessment types."""
         question_type = value.strip().upper()
         if question_type not in QUESTION_TYPES:
             raise ValueError("Question type must be SINGLE, MULTI, or TRUE_FALSE")
@@ -138,6 +157,7 @@ class SkillQuestionCreate(BaseModel):
     @field_validator("source")
     @classmethod
     def validate_source(cls, value: str) -> str:
+        """Trim the source label and reject a blank value."""
         result = value.strip()
         if not result:
             raise ValueError("Source cannot be blank")
@@ -172,10 +192,12 @@ class SkillLearningResourceUpdate(BaseModel):
 
 
 def _utc(value: datetime) -> datetime:
+    """Normalize a datetime to UTC, attaching UTC to naive values."""
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 def _add_months(value: datetime, months: int) -> datetime:
+    """Shift a datetime by whole calendar months, clamping the day to the destination month."""
     month_index = value.month - 1 + months
     year = value.year + month_index // 12
     month = month_index % 12 + 1
@@ -184,21 +206,63 @@ def _add_months(value: datetime, months: int) -> datetime:
 
 
 def _retry_after(until: datetime, now: datetime) -> int:
+    """Return the positive whole-second delay until an assessment becomes available."""
     return max(1, math.ceil((until - now).total_seconds()))
 
 
-def _question_response(question: SkillQuestion, options: list[str]) -> dict[str, Any]:
+def _attempt_payload(attempt: SkillAttempt, now: datetime, *, resumed: bool) -> dict[str, Any]:
+    """Serialize an active assessment attempt, shuffling options by its saved order and including remaining time and resumed answers."""
+    questions = [
+        {
+            "id": question_id,
+            "prompt": snapshot["prompt"],
+            "options": [
+                snapshot["options"][index]
+                for index in option_order
+            ],
+            "difficulty": snapshot.get("difficulty", "MEDIUM"),
+            "subtopic": snapshot.get("subtopic", "fundamentals"),
+            "question_type": snapshot.get("question_type", "SINGLE"),
+        }
+        for question_id, snapshot, option_order in zip(
+            attempt.question_ids,
+            attempt.question_snapshots,
+            attempt.option_orders,
+        )
+    ]
+    default_answers = [
+        [] if snapshot.get("question_type") == "MULTI" else None
+        for snapshot in attempt.question_snapshots
+    ]
     return {
-        "id": question.id,
-        "prompt": question.prompt,
-        "options": options,
-        "difficulty": question.difficulty,
-        "subtopic": question.subtopic,
-        "question_type": question.question_type,
+        "attempt_id": attempt.id,
+        "topic": attempt.topic,
+        "started_at": attempt.started_at,
+        "expires_at": attempt.expires_at,
+        "remaining_seconds": max(0, math.ceil((_utc(attempt.expires_at) - now).total_seconds())),
+        "resumed": resumed,
+        "questions": questions,
+        "answers": (
+            attempt.answers if attempt.answers is not None else default_answers
+        ) if resumed else None,
     }
 
 
+def _assessment_limit_error(code: str, next_available_at: datetime, detail: str, now: datetime) -> JSONResponse:
+    """Build a 429 response with the next assessment availability time and Retry-After header."""
+    return JSONResponse(
+        status_code=429,
+        content={
+            "code": code,
+            "next_available_at": _utc(next_available_at).isoformat(),
+            "detail": detail,
+        },
+        headers={"Retry-After": str(_retry_after(next_available_at, now))},
+    )
+
+
 def _badge_level(score: float) -> str:
+    """Map a percentage score to the Beginner, Intermediate, or Advanced badge level."""
     if score >= 80:
         return "Advanced"
     if score >= 60:
@@ -207,6 +271,7 @@ def _badge_level(score: float) -> str:
 
 
 def _question_dict(question: SkillQuestion) -> dict[str, Any]:
+    """Serialize a skill question with its answer key, explanation, difficulty, and source fields."""
     return {
         "id": question.id,
         "topic": question.topic,
@@ -225,6 +290,7 @@ def _question_dict(question: SkillQuestion) -> dict[str, Any]:
 
 
 def _correct_indices(snapshot: dict[str, Any]) -> list[int]:
+    """Return the correct option indices from a question snapshot, supporting both legacy and multi-answer data."""
     answers = snapshot.get("correct_answers")
     if isinstance(answers, list) and answers:
         return [int(answer) for answer in answers]
@@ -236,6 +302,7 @@ def _answer_credit(
     snapshot: dict[str, Any],
     option_order: list[int],
 ) -> tuple[float, str | list[str], str | list[str]]:
+    """Map displayed selections back to stored options and calculate credit, raising 422 for invalid selections."""
     question_type = str(snapshot.get("question_type", "SINGLE"))
     selected_positions = answer if isinstance(answer, list) else [answer]
     if question_type != "MULTI" and len(selected_positions) != 1:
@@ -262,6 +329,7 @@ def _validate_question(
     correct_answers: list[int] | None,
     question_type: str,
 ) -> None:
+    """Validate correct-answer indices and option counts for single-, multiple-, and true/false questions."""
     if question_type == "TRUE_FALSE" and len(options) != 2:
         raise HTTPException(422, "TRUE_FALSE questions must have exactly two options")
     if question_type == "MULTI":
@@ -279,10 +347,12 @@ def _validate_question(
 
 
 def _difficulty_weight(difficulty: str) -> int:
+    """Return the configured score weight for a difficulty, defaulting unknown values to the medium weight."""
     return DIFFICULTY_WEIGHTS.get(difficulty.upper(), 2)
 
 
 def _question_results(attempt: SkillAttempt) -> list[dict[str, Any]]:
+    """Build per-question result details, including selected/correct answers, earned credit, and recorded time."""
     results = []
     question_times = attempt.question_time_seconds or []
     for index, (answer, snapshot, order) in enumerate(zip(
@@ -308,6 +378,7 @@ def _question_results(attempt: SkillAttempt) -> list[dict[str, Any]]:
 
 
 async def _attempt_result(db: DbSession, attempt: SkillAttempt) -> dict[str, Any]:
+    """Build a submitted assessment result with question details, subtopic strengths, weaknesses, and learning resources."""
     if attempt.submitted_at is None or attempt.answers is None:
         raise HTTPException(409, "Submit this assessment before viewing its result")
     questions = _question_results(attempt)
@@ -402,6 +473,7 @@ async def _attempt_result(db: DbSession, attempt: SkillAttempt) -> dict[str, Any
 
 
 def _report_pdf(result: dict[str, Any]) -> bytes:
+    """Render an assessment result into a downloadable PDF report."""
     report_lines = [
         "InternSphere Skill Assessment Performance Report",
         f"Topic: {result['topic']}",
@@ -461,6 +533,7 @@ def _report_pdf(result: dict[str, Any]) -> bytes:
         ])
 
     def pdf_text(value: str) -> str:
+        """Escape text characters that are special in PDF string literals."""
         safe = value.encode("latin-1", "replace").decode("latin-1")
         return safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
@@ -509,6 +582,7 @@ async def _assert_unique_prompt(
     *,
     exclude_id: int | None = None,
 ) -> None:
+    """Reject a question prompt that duplicates another question in the same topic."""
     query = select(SkillQuestion.id).where(
         SkillQuestion.topic == topic,
         func.lower(SkillQuestion.prompt) == prompt.casefold(),
@@ -521,6 +595,7 @@ async def _assert_unique_prompt(
 
 @router.get("/topics")
 async def list_assessment_topics(user: student_only, db: DbSession) -> list[dict[str, str]]:
+    """List the configured assessment topics and their available question counts."""
     topics = list(await db.scalars(
         select(SkillQuestion.topic)
         .where(SkillQuestion.active.is_(True))
@@ -543,34 +618,62 @@ async def start_assessment(
     user: student_only,
     db: DbSession,
 ) -> dict[str, Any]:
+    """Resume an eligible in-progress attempt or create a randomized timed assessment for the student."""
+    student_id = user.id
+    await db.scalar(select(User).where(User.id == student_id).with_for_update())
     now = datetime.now(timezone.utc)
+    active_attempt = await db.scalar(
+        select(SkillAttempt)
+        .where(
+            SkillAttempt.student_id == student_id,
+            SkillAttempt.topic == data.topic,
+            SkillAttempt.status == "IN_PROGRESS",
+        )
+        .with_for_update()
+    )
+    expired_attempt_closed = False
+    if active_attempt is not None:
+        if now < _utc(active_attempt.expires_at):
+            return _attempt_payload(active_attempt, now, resumed=True)
+        active_attempt.status = "EXPIRED"
+        expired_attempt_closed = True
+        await db.flush()
+
     weekly_attempts = list(await db.scalars(
         select(SkillAttempt)
-        .where(SkillAttempt.student_id == user.id, SkillAttempt.started_at >= now - RETENTION_WINDOW)
+        .where(SkillAttempt.student_id == student_id, SkillAttempt.started_at >= now - RETENTION_WINDOW)
         .order_by(SkillAttempt.started_at)
     ))
     if len(weekly_attempts) >= 3:
         oldest_expiry = _utc(weekly_attempts[0].started_at) + RETENTION_WINDOW
-        raise HTTPException(
-            429,
+        response = _assessment_limit_error(
+            "WEEKLY_LIMIT",
+            oldest_expiry,
             "You have reached the limit of 3 assessment attempts in 7 days. Try again after the oldest attempt leaves the weekly window.",
-            headers={"Retry-After": str(_retry_after(oldest_expiry, now))},
+            now,
         )
+        if expired_attempt_closed:
+            await db.commit()
+        return response
 
     latest_for_topic = await db.scalar(
         select(SkillAttempt)
-        .where(SkillAttempt.student_id == user.id, SkillAttempt.topic == data.topic)
+        .where(SkillAttempt.student_id == student_id, SkillAttempt.topic == data.topic)
         .order_by(SkillAttempt.started_at.desc())
         .limit(1)
     )
     if latest_for_topic is not None:
         retry_at = _utc(latest_for_topic.started_at) + timedelta(hours=24)
         if now < retry_at:
-            raise HTTPException(
-                429,
+            response = _assessment_limit_error(
+                "COOLDOWN",
+                retry_at,
                 "You can retake this topic 24 hours after your previous attempt.",
-                headers={"Retry-After": str(_retry_after(retry_at, now))},
+                now,
             )
+            if expired_attempt_closed:
+                await db.commit()
+            return response
 
     available = list(await db.scalars(
         select(SkillQuestion).where(
@@ -607,13 +710,12 @@ async def start_assessment(
     picker.shuffle(chosen_questions)
     topic_attempt_count = int(await db.scalar(
         select(func.count(SkillAttempt.id)).where(
-            SkillAttempt.student_id == user.id,
+            SkillAttempt.student_id == student_id,
             SkillAttempt.topic == data.topic,
         )
     ) or 0)
     option_orders: list[list[int]] = []
     snapshots: list[dict[str, Any]] = []
-    presented_questions: list[dict[str, Any]] = []
     for question in chosen_questions:
         order = list(range(len(question.options)))
         picker.shuffle(order)
@@ -628,14 +730,11 @@ async def start_assessment(
             "subtopic": question.subtopic,
             "question_type": question.question_type,
         })
-        presented_questions.append(_question_response(
-            question,
-            [question.options[index] for index in order],
-        ))
 
     attempt = SkillAttempt(
-        student_id=user.id,
+        student_id=student_id,
         topic=data.topic,
+        status="IN_PROGRESS",
         question_ids=[question.id for question in chosen_questions],
         question_snapshots=snapshots,
         option_orders=option_orders,
@@ -644,17 +743,94 @@ async def start_assessment(
         attempt_number=topic_attempt_count + 1,
     )
     db.add(attempt)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        active_attempt = await db.scalar(
+            select(SkillAttempt).where(
+                SkillAttempt.student_id == student_id,
+                SkillAttempt.topic == data.topic,
+                SkillAttempt.status == "IN_PROGRESS",
+            )
+        )
+        resumed_at = datetime.now(timezone.utc)
+        if active_attempt is None or resumed_at >= _utc(active_attempt.expires_at):
+            raise
+        return _attempt_payload(active_attempt, resumed_at, resumed=True)
     await db.refresh(attempt)
-    return {
-        "attempt_id": attempt.id,
-        "topic": attempt.topic,
-        "started_at": attempt.started_at,
-        "expires_at": attempt.expires_at,
-        "attempt_number": attempt.attempt_number,
-        "duration_seconds": int(ASSESSMENT_DURATION.total_seconds()),
-        "questions": presented_questions,
-    }
+    return _attempt_payload(attempt, datetime.now(timezone.utc), resumed=False)
+
+
+@router.get("/assessments/active")
+async def get_active_assessment(
+    user: student_only,
+    db: DbSession,
+    topic: str,
+) -> dict[str, Any] | None:
+    """Return the authenticated student?s current unsubmitted assessment attempt, if one is active."""
+    normalized_topic = topic.strip().lower()
+    attempt = await db.scalar(
+        select(SkillAttempt).where(
+            SkillAttempt.student_id == user.id,
+            SkillAttempt.topic == normalized_topic,
+            SkillAttempt.status == "IN_PROGRESS",
+        )
+    )
+    if attempt is None:
+        return None
+    now = datetime.now(timezone.utc)
+    if now >= _utc(attempt.expires_at):
+        attempt.status = "EXPIRED"
+        await db.commit()
+        return None
+    return _attempt_payload(attempt, now, resumed=True)
+
+
+@router.put("/attempts/{attempt_id}/answers")
+async def save_assessment_answers(
+    attempt_id: int,
+    data: AssessmentAnswers,
+    user: student_only,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Persist draft answers for the student?s active assessment without submitting it."""
+    attempt = await db.scalar(
+        select(SkillAttempt).where(
+            SkillAttempt.id == attempt_id,
+            SkillAttempt.student_id == user.id,
+        ).with_for_update()
+    )
+    if attempt is None:
+        raise HTTPException(404, "Assessment attempt not found")
+    if attempt.status != "IN_PROGRESS" or attempt.submitted_at is not None:
+        raise HTTPException(409, "This assessment attempt is no longer in progress")
+    if datetime.now(timezone.utc) >= _utc(attempt.expires_at):
+        attempt.status = "EXPIRED"
+        await db.commit()
+        raise HTTPException(410, "The assessment time limit expired.")
+    if len(data.answers) != len(attempt.option_orders):
+        raise HTTPException(422, "Provide one selection entry for each question")
+    for answer, snapshot, option_order in zip(
+        data.answers,
+        attempt.question_snapshots,
+        attempt.option_orders,
+    ):
+        if snapshot.get("question_type") == "MULTI":
+            if not isinstance(answer, list):
+                raise HTTPException(422, "Multi-answer questions require a selection list")
+        elif answer is None:
+            continue
+        elif not isinstance(answer, int) or isinstance(answer, bool):
+            raise HTTPException(422, "Single-answer questions require one selected option")
+        selected = answer if isinstance(answer, list) else [answer]
+        if len(set(selected)) != len(selected) or any(
+            selection < 0 or selection >= len(option_order) for selection in selected
+        ):
+            raise HTTPException(422, "An answer does not match an available option")
+    attempt.answers = data.answers
+    await db.commit()
+    return {"saved": True}
 
 
 @router.post("/assessments/{attempt_id}/submit")
@@ -664,6 +840,7 @@ async def submit_assessment(
     user: student_only,
     db: DbSession,
 ) -> dict[str, Any]:
+    """Validate and grade the active assessment, persist its result, and update any earned skill credential."""
     attempt = await db.scalar(select(SkillAttempt).where(
         SkillAttempt.id == attempt_id,
         SkillAttempt.student_id == user.id,
@@ -674,6 +851,8 @@ async def submit_assessment(
         raise HTTPException(409, "This assessment attempt has already been submitted")
     now = datetime.now(timezone.utc)
     if now > _utc(attempt.expires_at):
+        attempt.status = "EXPIRED"
+        await db.commit()
         raise HTTPException(410, "The assessment time limit expired. Late submissions are not accepted.")
     if data.question_time_seconds and len(data.question_time_seconds) != len(attempt.question_ids):
         raise HTTPException(422, "Provide time spent for each question")
@@ -718,6 +897,7 @@ async def submit_assessment(
         for difficulty, result in difficulty_scores.items()
     }
     attempt.answers = data.answers
+    attempt.status = "COMPLETED"
     attempt.question_time_seconds = data.question_time_seconds or [0] * len(data.answers)
     attempt.raw_score = round(raw_score, 2)
     attempt.weighted_percentage = weighted_percentage
@@ -774,6 +954,7 @@ async def get_assessment_result(
     user: student_only,
     db: DbSession,
 ) -> dict[str, Any]:
+    """Return a submitted assessment result belonging to the authenticated student."""
     attempt = await db.scalar(select(SkillAttempt).where(
         SkillAttempt.id == attempt_id,
         SkillAttempt.student_id == user.id,
@@ -789,6 +970,7 @@ async def download_assessment_report(
     user: student_only,
     db: DbSession,
 ) -> StreamingResponse:
+    """Generate and stream the PDF report for a submitted assessment owned by the student."""
     attempt = await db.scalar(select(SkillAttempt).where(
         SkillAttempt.id == attempt_id,
         SkillAttempt.student_id == user.id,
@@ -805,6 +987,7 @@ async def download_assessment_report(
 
 @router.get("/history")
 async def list_assessment_history(user: student_only, db: DbSession) -> dict[str, Any]:
+    """List the authenticated student?s assessment attempts, newest first."""
     attempts = list(await db.scalars(
         select(SkillAttempt)
         .where(
@@ -834,6 +1017,7 @@ async def list_assessment_history(user: student_only, db: DbSession) -> dict[str
 
 @router.get("/badges")
 async def list_my_skill_badges(user: student_only, db: DbSession) -> list[dict[str, Any]]:
+    """List skill badges earned by the authenticated student."""
     now = datetime.now(timezone.utc)
     badges = list(await db.scalars(
         select(SkillBadge)
@@ -882,6 +1066,7 @@ async def list_my_skill_badges(user: student_only, db: DbSession) -> list[dict[s
 
 @router.get("/attempts")
 async def list_my_skill_attempts(user: student_only, db: DbSession) -> list[dict[str, Any]]:
+    """List the authenticated student?s assessment attempt summaries."""
     attempts = list(await db.scalars(
         select(SkillAttempt)
         .where(SkillAttempt.student_id == user.id)
@@ -912,6 +1097,7 @@ async def list_skill_questions(
     topic: str | None = None,
     active: bool | None = None,
 ) -> list[dict[str, Any]]:
+    """List skill questions with the supported topic and question-management filters."""
     query = select(SkillQuestion).order_by(SkillQuestion.topic, SkillQuestion.id)
     if topic:
         query = query.where(SkillQuestion.topic == topic.strip().lower())
@@ -927,6 +1113,7 @@ async def create_skill_question(
     user: admin_only,
     db: DbSession,
 ) -> dict[str, Any]:
+    """Validate and create a skill question, recording the administrator action."""
     _validate_question(data.options, data.correct_index, data.correct_answers, data.question_type)
     await _assert_unique_prompt(db, data.topic, data.prompt)
     values = data.model_dump()
@@ -955,6 +1142,7 @@ async def update_skill_question(
     user: admin_only,
     db: DbSession,
 ) -> dict[str, Any]:
+    """Update an existing skill question from the supplied fields and record the administrator action."""
     question = await db.get(SkillQuestion, question_id)
     if question is None:
         raise HTTPException(404, "Skill question not found")
@@ -1031,6 +1219,7 @@ async def delete_skill_question(
     user: admin_only,
     db: DbSession,
 ) -> None:
+    """Delete a skill question and record the administrator action."""
     question = await db.get(SkillQuestion, question_id)
     if question is None:
         raise HTTPException(404, "Skill question not found")
@@ -1052,6 +1241,7 @@ async def import_skill_questions(
     db: DbSession,
     file: UploadFile = File(...),
 ) -> dict[str, int]:
+    """Parse and validate a question-bank import before creating its skill questions."""
     if not (file.filename or "").lower().endswith(".csv"):
         raise HTTPException(415, "Upload a CSV file")
     raw = await file.read(2 * 1024 * 1024 + 1)
@@ -1120,6 +1310,7 @@ async def import_skill_questions(
 
 
 def _validated_resource_url(url: str) -> str:
+    """Require a well-formed HTTP or HTTPS URL before saving a learning resource."""
     normalized = url.strip()
     parts = urlsplit(normalized)
     if parts.scheme not in {"http", "https"} or not parts.netloc:
@@ -1128,6 +1319,7 @@ def _validated_resource_url(url: str) -> str:
 
 
 def _learning_resource_dict(resource: SkillLearningResource) -> dict[str, Any]:
+    """Serialize a skill learning resource for API responses."""
     return {
         "id": resource.id,
         "topic": resource.topic,
@@ -1141,6 +1333,7 @@ def _learning_resource_dict(resource: SkillLearningResource) -> dict[str, Any]:
 
 @router.get("/admin/resources")
 async def list_learning_resources(user: admin_only, db: DbSession) -> list[dict[str, Any]]:
+    """List active learning resources for the requested skill topic and subtopic."""
     resources = list(await db.scalars(
         select(SkillLearningResource)
         .order_by(SkillLearningResource.topic, SkillLearningResource.subtopic, SkillLearningResource.id)
@@ -1154,6 +1347,7 @@ async def create_learning_resource(
     user: admin_only,
     db: DbSession,
 ) -> dict[str, Any]:
+    """Create a learning resource after validating its URL and record the administrator action."""
     topic = data.topic.strip().lower()
     subtopic = data.subtopic.strip().lower()
     url = _validated_resource_url(data.url)
@@ -1193,6 +1387,7 @@ async def update_learning_resource(
     user: admin_only,
     db: DbSession,
 ) -> dict[str, Any]:
+    """Update an existing learning resource and record the administrator action."""
     resource = await db.get(SkillLearningResource, resource_id)
     if resource is None:
         raise HTTPException(404, "Learning resource not found")
@@ -1225,6 +1420,7 @@ async def delete_learning_resource(
     user: admin_only,
     db: DbSession,
 ) -> None:
+    """Delete a learning resource and record the administrator action."""
     resource = await db.get(SkillLearningResource, resource_id)
     if resource is None:
         raise HTTPException(404, "Learning resource not found")
@@ -1242,6 +1438,7 @@ async def delete_learning_resource(
 
 @router.get("/admin/stats")
 async def get_skill_assessment_stats(user: admin_only, db: DbSession) -> list[dict[str, Any]]:
+    """Aggregate assessment participation, scores, and skill results for the administrator statistics response."""
     questions = list(await db.scalars(select(SkillQuestion).order_by(SkillQuestion.topic, SkillQuestion.id)))
     attempts = list(await db.scalars(
         select(SkillAttempt).where(SkillAttempt.submitted_at.is_not(None))

@@ -55,6 +55,7 @@ def _close_notification_body(
     *,
     closed_by_platform: bool,
 ) -> str:
+    """Build the applicant-facing closure message while preserving selected applications."""
     prefix = "The platform has closed" if closed_by_platform else f"{company_name} has closed"
     if status == "SELECTED":
         outcome = "your selection is unaffected."
@@ -290,6 +291,7 @@ async def close_internship(
 
 
 async def send_closure_emails(messages: list[dict[str, Any]], db: AsyncSession) -> None:
+    """Send queued closure emails through the configured development/mail delivery service."""
     for message in messages:
         await send_dev_email(
             to=message["to"],

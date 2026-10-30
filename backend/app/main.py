@@ -19,12 +19,14 @@ from app.middleware.security import SecurityMiddleware
 logger = logging.getLogger(__name__)
 
 def _run_migrations() -> None:
+    """Upgrade the configured Alembic database to the latest revision."""
     backend_dir = Path(__file__).resolve().parents[1]
     config = Config(str(backend_dir / "alembic.ini"))
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     command.upgrade(config, "head")
 
 async def run_database_migrations() -> None:
+    """Run synchronous Alembic upgrades in a worker thread and log migration failures."""
     try:
         await asyncio.to_thread(_run_migrations)
     except Exception:
@@ -36,6 +38,7 @@ async def run_database_migrations() -> None:
 
 
 async def _interview_reminder_worker() -> None:
+    """Send pending interview reminders once per minute until the task is cancelled."""
     from app.core.database import async_session_factory
     from app.services.interview_reminders import send_interview_reminders
 
@@ -51,6 +54,7 @@ async def _interview_reminder_worker() -> None:
 
 
 async def _interview_expiry_worker() -> None:
+    """Expire overdue interviews every five minutes until the task is cancelled."""
     from app.core.database import async_session_factory
     from app.services.interview_expiry import expire_overdue_interviews
 
@@ -67,10 +71,12 @@ async def _interview_expiry_worker() -> None:
 
 # Check whether Mailpit is already running before starting a local one.
 def is_port_in_use(port: int) -> bool:
+    """Return whether localhost accepts a TCP connection on the specified port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
 async def _cancel_task(task: asyncio.Task | None) -> None:
+    """Cancel and await a task when present, swallowing its expected cancellation."""
     if task is None:
         return
     task.cancel()
@@ -83,6 +89,7 @@ async def _cancel_task(task: asyncio.Task | None) -> None:
 # Application startup and shutdown lifecycle.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Migrate the database, ingest enabled chatbot knowledge, start workers, and stop them on shutdown."""
     await run_database_migrations()
     from app.chatbot.chatbot_config import load_config
     from app.chatbot.rag.ingest import ingest_knowledge

@@ -483,7 +483,7 @@ def test_role_prompts_are_separated_and_page_context_ranks_related_help() -> Non
         page_route="/company/applicants",
     )
     assert results
-    assert results[0].id == "company-applicants-pipeline"
+    assert results[0].id == "company-hiring-pipeline"
 
 
 def test_output_rejects_external_or_unapproved_routes() -> None:
@@ -846,8 +846,8 @@ def test_eval_corpus_has_required_categories_and_size() -> None:
     counts = {kind: sum(record["kind"] == kind for record in records) for kind in {
         "in_scope", "out_of_scope", "injection", "credential"
     }}
-    assert len(records) >= 88
-    assert counts == {"in_scope": 48, "out_of_scope": 15, "injection": 15, "credential": 10}
+    assert len(records) >= 97
+    assert counts == {"in_scope": 57, "out_of_scope": 15, "injection": 15, "credential": 10}
 
 
 @pytest.mark.anyio

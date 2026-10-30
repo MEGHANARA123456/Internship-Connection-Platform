@@ -51,20 +51,24 @@ ABUSE_PATTERNS = (re.compile(r"\b(kill|hurt|threaten)\b.{0,30}\b(recruiter|appli
 
 
 def detect_injection(text: str) -> bool:
+    """Return whether text matches a known instruction-override or prompt-exfiltration pattern."""
     return any(pattern.search(text) for pattern in INJECTION_PATTERNS)
 
 
 def detect_account_specific(text: str) -> bool:
+    """Detect first-person account-data requests, excluding general how-to questions."""
     if re.search(r"\bhow (?:do|can|should) i\b|\bhow to\b|\bsteps to\b", text, re.I):
         return False
     return any(pattern.search(text) for pattern in ACCOUNT_PATTERNS)
 
 
 def detect_cross_account_request(text: str) -> bool:
+    """Return whether text asks for another person's or a broad set of users' private data."""
     return bool(PRIVATE_CROSS_ACCOUNT_PATTERN.search(text))
 
 
 def is_chatbot_capability_question(text: str) -> bool:
+    """Recognize questions about chatbot capabilities that mention supported sensitive topics."""
     return bool(
         re.search(r"\b(can|does|will)\b.{0,30}\b(chatbot|assistant)\b", text, re.I)
         and re.search(r"\b(cover letter|resume|account data)\b", text, re.I)
@@ -72,6 +76,7 @@ def is_chatbot_capability_question(text: str) -> bool:
 
 
 def is_role_capability_question(text: str) -> bool:
+    """Recognize questions asking what the current user can do or their platform role."""
     return bool(
         re.search(r"\bwhat is my role\b", text, re.I)
         or re.search(
@@ -83,10 +88,12 @@ def is_role_capability_question(text: str) -> bool:
 
 
 def detect_abuse(text: str) -> bool:
+    """Detect requests to harm, threaten, or kill a platform participant."""
     return any(pattern.search(text) for pattern in ABUSE_PATTERNS)
 
 
 def output_is_safe(answer: str, allowed_routes: set[str]) -> bool:
+    """Reject oversized, secret-bearing, markup-bearing, external-link, or unapproved-route output."""
     if (
         len(answer.split()) > 150
         or contains_secret(answer)

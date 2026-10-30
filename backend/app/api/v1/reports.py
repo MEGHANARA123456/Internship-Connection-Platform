@@ -21,6 +21,7 @@ async def submit_report(
     user: Annotated[User, Depends(get_current_user)],
     db: DbSession,
 ) -> Report:
+    """Create and persist a report from the submitted report details."""
     report = Report(
         reporter_id=user.id,
         reported_user_id=data.reported_user_id,

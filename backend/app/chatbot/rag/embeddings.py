@@ -10,6 +10,7 @@ QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 @lru_cache(maxsize=1)
 def _embedding_model(model_name: str):
+    """Load and cache one local CPU embedding model, reporting a clear missing-dependency error."""
     try:
         from fastembed import TextEmbedding
     except ImportError as error:
@@ -21,6 +22,7 @@ def _embedding_model(model_name: str):
 
 
 def embed_texts(texts: list[str], model_name: str, *, queries: bool = False) -> list[list[float]]:
+    """Embed text in order, prefixing search queries and returning ordinary float lists."""
     if not texts:
         return []
     model = _embedding_model(model_name)

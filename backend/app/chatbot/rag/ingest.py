@@ -22,6 +22,7 @@ CHUNK_OVERLAP = 50
 
 
 def _front_matter(raw: str) -> tuple[dict[str, str], str]:
+    """Parse required title/audience/route metadata and the Markdown body; reject unsupported audiences."""
     if not raw.startswith("---\n"):
         raise ValueError("Knowledge file must start with YAML front matter.")
     _, header, body = raw.split("---", 2)
@@ -39,6 +40,7 @@ def _front_matter(raw: str) -> tuple[dict[str, str], str]:
 
 
 def _heading_sections(body: str) -> list[tuple[str, str]]:
+    """Split Markdown into non-empty heading sections, using Overview when no heading exists."""
     matches = list(HEADING_PATTERN.finditer(body))
     if not matches:
         return [("Overview", body)]
@@ -54,6 +56,7 @@ def _heading_sections(body: str) -> list[tuple[str, str]]:
 
 
 def _chunks_for_file(path: Path, root: Path) -> list[dict[str, str | int]]:
+    """Create overlapping word-bounded chunks with source metadata, hashes, and token counts."""
     values, body = _front_matter(path.read_text(encoding="utf-8"))
     chunks: list[dict[str, str | int]] = []
     source_path = path.relative_to(root).as_posix()
@@ -88,6 +91,7 @@ def _chunks_for_file(path: Path, root: Path) -> list[dict[str, str | int]]:
 
 
 def _embed_with_retries(texts: list[str], model_name: str) -> list[list[float]]:
+    """Embed a batch with up to three attempts, logging failures and increasing sleep delays."""
     for attempt in range(1, 4):
         try:
             return embed_texts(texts, model_name)
@@ -100,6 +104,7 @@ def _embed_with_retries(texts: list[str], model_name: str) -> list[list[float]]:
 
 
 async def ingest_knowledge(config: ChatbotConfig | None = None) -> dict[str, int]:
+    """Index changed knowledge chunks, delete stale rows, and commit all corpus updates atomically."""
     settings = config or load_config()
     root = settings.kb_path.resolve()
     if not root.is_dir():
@@ -187,6 +192,7 @@ async def ingest_knowledge(config: ChatbotConfig | None = None) -> dict[str, int
 
 
 async def _main() -> None:
+    """Skip ingestion when RAG is disabled; otherwise index configured knowledge and print counts."""
     config = load_config()
     if not config.rag_enabled:
         logger.info("RAG is disabled; knowledge ingestion skipped.")

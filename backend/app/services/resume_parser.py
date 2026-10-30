@@ -51,6 +51,7 @@ UNIVERSITY_PATTERNS = [
 
 
 def extract_skills_from_text(text: str) -> list[str]:
+    """Find taxonomy skills using boundary-aware matching and return unique names alphabetically."""
     found_skills = set()
     lowered = text.lower()
 
@@ -74,6 +75,7 @@ def extract_skills_from_text(text: str) -> list[str]:
 
 
 def extract_education_from_text(text: str) -> dict[str, Any]:
+    """Extract the first recognized university and major plus a graduation year in the supported range."""
     university = None
     major = None
     graduation_year = None
@@ -117,6 +119,7 @@ def extract_education_from_text(text: str) -> dict[str, Any]:
 
 
 def extract_summary_bio(text: str) -> str | None:
+    """Return up to 500 characters from a detected summary/profile/objective section, if substantial."""
     # Look for Summary / Profile / Objective section
     match = re.search(r"(?i)(?:summary|profile|objective|about me)\s*[:\n\-]\s*([^\n]+(?:\n[^\n]+){1,3})", text)
     if match:
@@ -127,6 +130,7 @@ def extract_summary_bio(text: str) -> str | None:
 
 
 def parse_resume_pdf(pdf_path: str | Path) -> dict[str, Any]:
+    """Parse PDF text into skills, education, bio, and raw-text length; use empty fields if no text is found."""
     text = extract_text_from_pdf(pdf_path)
     if not text:
         return {

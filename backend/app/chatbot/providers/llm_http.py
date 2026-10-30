@@ -15,6 +15,7 @@ logger = logging.getLogger("internsphere.chatbot")
 
 
 def _extract_json_object(content: str) -> dict[str, object]:
+    """Parse the first complete JSON object, tolerating optional Markdown code fences."""
     text = content.strip()
     if text.startswith("```"):
         lines = text.splitlines()
@@ -56,9 +57,11 @@ def _extract_json_object(content: str) -> dict[str, object]:
 
 class LLMHTTPProvider:
     def __init__(self, config: ChatbotConfig):
+        """Store provider configuration for subsequent completion requests."""
         self._config = config
 
     async def rewrite(self, payload: ProviderPayload) -> ProviderResult:
+        """Send redacted, untrusted-context-wrapped input and validate the model's JSON answer."""
         passages = [
             {
                 "id": item.id,
@@ -164,5 +167,6 @@ class LLMHTTPProvider:
             raise RuntimeError("Chatbot answer provider request failed.") from error
 
     def _post(self, request: Request) -> bytes:
+        """Perform the blocking HTTP request and cap the response body at 256 KB."""
         with urlopen(request, timeout=self._config.timeout_seconds) as response:
             return response.read(256_000)

@@ -67,6 +67,10 @@ class ChatAskRequest(BaseModel):
     @field_validator("history", mode="before")
     @classmethod
     def _normalize_history(cls, value):
+        """Trim and truncate turn content, dropping invalid or blank dicts and blank turns.
+
+        Malformed-role dicts remain for Pydantic validation; list results are capped at four.
+        """
         if not isinstance(value, list):
             return value
         invalid_roles = [
@@ -79,14 +83,21 @@ class ChatAskRequest(BaseModel):
 
         cleaned = []
         for item in value:
-            if isinstance(item, dict) and isinstance(item.get("content"), str):
-                item = {
-                    **item,
-                    "content": item["content"].strip()[:MAX_HISTORY_CHARS],
-                }
-                if not item["content"]:
+            if isinstance(item, dict):
+                content = item.get("content")
+                if not isinstance(content, str):
                     continue
-            cleaned.append(item)
+                trimmed = content.strip()[:MAX_HISTORY_CHARS]
+                if not trimmed:
+                    continue
+                cleaned.append({**item, "content": trimmed})
+            elif isinstance(item, ChatTurn):
+                trimmed = item.content.strip()[:MAX_HISTORY_CHARS]
+                if not trimmed:
+                    continue
+                cleaned.append(ChatTurn(role=item.role, content=trimmed))
+            else:
+                cleaned.append(item)
         return cleaned[-MAX_HISTORY_TURNS:]
 
 

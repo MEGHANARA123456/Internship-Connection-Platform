@@ -6,22 +6,26 @@ import { SkillQuizModal } from './SkillQuizModal'
 import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../../api/client', () => ({
-  api: { get: vi.fn(), post: vi.fn() },
+  api: { get: vi.fn(), post: vi.fn(), put: vi.fn() },
 }))
 
 afterEach(() => vi.clearAllMocks())
 
 describe('server-graded skill assessment', () => {
+  const topic = { id: 'python', name: 'Python', icon: '🐍' }
+  const questions = Array.from({ length: 10 }, (_, index) => ({
+    id: index + 1,
+    prompt: `Question ${index + 1}`,
+    options: ['Option A', 'Option B', 'Option C', 'Option D'],
+    difficulty: index < 4 ? 'EASY' : index < 8 ? 'MEDIUM' : 'HARD',
+    subtopic: 'fundamentals',
+    question_type: 'SINGLE' as const,
+  }))
+
   it('shows a countdown and withholds correct answers and explanations until server submission', async () => {
-    const questions = Array.from({ length: 10 }, (_, index) => ({
-      id: index + 1,
-      prompt: `Question ${index + 1}`,
-      options: ['Option A', 'Option B', 'Option C', 'Option D'],
-      difficulty: index < 4 ? 'EASY' : index < 8 ? 'MEDIUM' : 'HARD',
-      subtopic: 'fundamentals',
-      question_type: 'SINGLE' as const,
-    }))
-    vi.mocked(api.get).mockResolvedValue({ data: [{ id: 'python', name: 'Python', icon: '🐍' }] } as never)
+    vi.mocked(api.get).mockImplementation((url) => Promise.resolve({
+      data: url === '/skills/topics' ? [topic] : null,
+    }) as never)
     vi.mocked(api.post)
       .mockResolvedValueOnce({
         data: {
@@ -30,6 +34,9 @@ describe('server-graded skill assessment', () => {
           started_at: new Date().toISOString(),
           expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
           duration_seconds: 900,
+          remaining_seconds: 900,
+          resumed: false,
+          answers: null,
           questions,
         },
       } as never)
@@ -92,5 +99,65 @@ describe('server-graded skill assessment', () => {
       title: 'Verified Python Specialist',
       level: 'Advanced',
     })))
+    expect(await screen.findByText(/Badge expires on/)).toBeInTheDocument()
+  })
+
+  it('offers resume and restores saved answers and server remaining time', async () => {
+    const activeAttempt = {
+      attempt_id: 82,
+      topic: 'python',
+      started_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 112_000).toISOString(),
+      duration_seconds: 900,
+      remaining_seconds: 112,
+      resumed: true,
+      answers: [0, ...Array(9).fill(null)],
+      questions,
+    }
+    vi.mocked(api.get).mockImplementation((url) => Promise.resolve({
+      data: url === '/skills/topics' ? [topic] : activeAttempt,
+    }) as never)
+
+    render(<MemoryRouter><SkillQuizModal isOpen onClose={vi.fn()} /></MemoryRouter>)
+
+    const resume = await screen.findByRole('button', { name: /Resume \(01:52 left\)/ })
+    fireEvent.click(resume)
+
+    expect(await screen.findByText('Question 2')).toBeInTheDocument()
+    expect(screen.getByLabelText('Time remaining')).toHaveTextContent('01:52')
+    fireEvent.click(screen.getByRole('button', { name: 'Previous' }))
+    expect(await screen.findByText('Question 1')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Option A' }).className).toContain('border-indigo-600')
+    expect(api.get).toHaveBeenCalledWith('/skills/assessments/active', { params: { topic: 'python' } })
+  })
+
+  it('shows the exact next-available time from a structured cooldown error', async () => {
+    const retryAt = '2026-10-30T14:35:00Z'
+    vi.mocked(api.get).mockImplementation((url) => Promise.resolve({
+      data: url === '/skills/topics' ? [topic] : null,
+    }) as never)
+    vi.mocked(api.post).mockRejectedValue({
+      response: {
+        data: {
+          detail: {
+            code: 'COOLDOWN',
+            next_available_at: retryAt,
+            detail: 'You can retake this topic 24 hours after your previous attempt.',
+          },
+        },
+      },
+    })
+
+    render(<MemoryRouter><SkillQuizModal isOpen onClose={vi.fn()} /></MemoryRouter>)
+    fireEvent.click(await screen.findByRole('button', { name: /Start Assessment/ }))
+
+    const formattedRetryAt = new Date(retryAt).toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+    expect(await screen.findByRole('alert')).toHaveTextContent(`Available on ${formattedRetryAt}.`)
   })
 })

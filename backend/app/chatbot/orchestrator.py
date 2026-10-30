@@ -19,6 +19,7 @@ class Intent:
 
 
 def _internship_id(message: str) -> int | None:
+    """Extract a positive signed-32-bit internship/posting/role identifier, if present."""
     match = re.search(r"\b(?:internship|posting|role)\s*#?\s*(\d+)\b", message, re.I)
     if not match:
         return None
@@ -51,6 +52,7 @@ def classify_intent(message: str, role: str) -> Intent:
             return Intent("live_data", "admin_audit_events")
 
     def live_or_both(name: str, args: tuple[tuple[str, int], ...] = ()) -> Intent:
+        """Select live-data routing and include docs when the wording asks for explanation too."""
         combined = re.search(
             r"\b(and also|also explain|and explain|and how|and what|what does .* mean|along with)\b",
             text,

@@ -10,6 +10,7 @@ from app.models import StudentProfile
 
 
 async def clear_university_campus(apply: bool) -> int:
+    """Count matching placeholder university values and optionally replace them with empty strings."""
     async with async_session_factory() as db:
         count = await db.scalar(
             select(func.count())
@@ -34,6 +35,7 @@ async def clear_university_campus(apply: bool) -> int:
 
 
 def main() -> None:
+    """Parse the optional --apply flag and run the placeholder-university cleanup."""
     parser = argparse.ArgumentParser(
         description="Clear the temporary Google sign-up university value."
     )

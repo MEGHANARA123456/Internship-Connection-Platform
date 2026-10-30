@@ -20,6 +20,7 @@ STORAGE_FILE = os.path.join(STORAGE_DIR, "mailpit_messages.json")
 
 
 def load_messages_from_disk():
+    """Restore the mailbox list from its JSON storage file, logging and ignoring read/parse failures."""
     global MESSAGES
     try:
         if os.path.exists(STORAGE_FILE):
@@ -30,6 +31,7 @@ def load_messages_from_disk():
 
 
 def save_messages_to_disk():
+    """Persist at most the 200 newest mailbox messages, logging and ignoring filesystem failures."""
     try:
         os.makedirs(STORAGE_DIR, exist_ok=True)
         with open(STORAGE_FILE, "w", encoding="utf-8") as f:
@@ -62,6 +64,7 @@ class SendEmailPayload(BaseModel):
     HTML: str | None = None
 
 def extract_otp(text: str) -> str | None:
+    """Return the first standalone six-digit code in text, or ``None`` when none is present."""
     # Looks for a 6-digit numeric OTP code
     match = re.search(r"\b([0-9]{6})\b", text)
     return match.group(1) if match else None
@@ -69,6 +72,7 @@ def extract_otp(text: str) -> str | None:
 
 @mailpit_app.post("/api/v1/send")
 async def send_message(payload: SendEmailPayload):
+    """Normalize a send payload, store it newest-first with an optional OTP, and return its generated ID."""
     msg_id = f"msg-{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).isoformat()
 
@@ -114,6 +118,7 @@ async def get_messages(
     to: str | None = Query(None),
     limit: int = 100,
 ):
+    """Filter mailbox summaries by recipient, subject, or body and include aggregate recipient counts."""
     filtered = MESSAGES
     filter_email = (to or search or "").strip().lower()
 
@@ -155,6 +160,7 @@ async def get_messages(
 
 @mailpit_app.get("/api/v1/message/{msg_id}")
 async def get_message(msg_id: str):
+    """Return the complete stored message with this ID, or raise HTTP 404."""
     for m in MESSAGES:
         if m["ID"] == msg_id:
             return m
@@ -163,6 +169,7 @@ async def get_message(msg_id: str):
 
 @mailpit_app.delete("/api/v1/messages")
 async def clear_messages():
+    """Remove all in-memory mailbox messages and persist the empty mailbox."""
     global MESSAGES
     MESSAGES.clear()
     save_messages_to_disk()
@@ -171,6 +178,7 @@ async def clear_messages():
 
 @mailpit_app.delete("/api/v1/message/{msg_id}")
 async def delete_message(msg_id: str):
+    """Remove every stored message with the requested ID and persist the remaining mailbox."""
     global MESSAGES
     MESSAGES = [m for m in MESSAGES if m["ID"] != msg_id]
     save_messages_to_disk()
@@ -181,6 +189,7 @@ async def delete_message(msg_id: str):
 @mailpit_app.get("/", response_class=HTMLResponse)
 @mailpit_app.get("/index.html", response_class=HTMLResponse)
 async def web_ui():
+    """Serve the standalone mailbox web interface, which fetches and refreshes messages through the API."""
     html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -798,6 +807,7 @@ async def web_ui():
 
 
 def start_mailpit_service(host: str = "0.0.0.0", port: int = 8025):
+    """Run the Mailpit-compatible FastAPI application with Uvicorn on the requested host and port."""
     import uvicorn
     uvicorn.run(mailpit_app, host=host, port=port, log_level="warning")
 

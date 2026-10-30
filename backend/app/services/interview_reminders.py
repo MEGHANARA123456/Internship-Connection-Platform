@@ -10,6 +10,7 @@ async def send_interview_reminders(
     db: AsyncSession,
     now: datetime | None = None,
 ) -> int:
+    """Notify students once for each scheduled interview entering the 24-hour or 1-hour reminder window."""
     current_time = now or datetime.now(timezone.utc)
     reminders_sent = 0
     for hours, sent_field in (

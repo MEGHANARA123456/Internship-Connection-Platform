@@ -10,7 +10,7 @@ except ImportError:
     class StrEnum(str, Enum):
         pass
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, false, func, true
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, false, func, text, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -383,10 +383,21 @@ class SkillQuestion(Base):
 
 class SkillAttempt(Base):
     __tablename__ = "skill_attempts"
+    __table_args__ = (
+        Index(
+            "uq_skill_attempts_active_student_topic",
+            "student_id",
+            "topic",
+            unique=True,
+            postgresql_where=text("status = 'IN_PROGRESS'"),
+            sqlite_where=text("status = 'IN_PROGRESS'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     topic: Mapped[str] = mapped_column(String(100), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="IN_PROGRESS", server_default="IN_PROGRESS")
     question_ids: Mapped[list[int]] = mapped_column(JSON)
     question_snapshots: Mapped[list[dict[str, object]]] = mapped_column(JSON)
     option_orders: Mapped[list[list[int]]] = mapped_column(JSON)

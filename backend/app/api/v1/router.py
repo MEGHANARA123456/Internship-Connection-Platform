@@ -64,6 +64,7 @@ api_router.include_router(chatbot_router)
 
 @api_router.get("/health", tags=["health"])
 async def health_check() -> dict[str, str]:
+    """Return the API health status."""
     return {"status": "ok"}
 
 
@@ -72,6 +73,7 @@ async def navigation_counts(
     user: Annotated[User, Depends(get_current_user)],
     db: DbSession,
 ) -> dict[str, int]:
+    """Compute navigation badge counts for the authenticated user according to their role."""
     unread_notifications = await db.scalar(
         select(func.count(Notification.id)).where(
             Notification.user_id == user.id,
@@ -123,6 +125,7 @@ async def navigation_counts(
 
 @api_router.get("/student/me", tags=["student"])
 async def student_me(user: Annotated[User, Depends(require_roles(UserRole.STUDENT))], db: DbSession) -> dict[str, Any]:
+    """Return the authenticated student?s identity and display name from the available profile."""
     student = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
     name = student.full_name if student else None
     if not name and user.email:
@@ -134,6 +137,7 @@ async def student_me(user: Annotated[User, Depends(require_roles(UserRole.STUDEN
 
 @api_router.get("/students/me/nav-counts", tags=["student"])
 async def student_nav_counts(user: Annotated[User, Depends(require_roles(UserRole.STUDENT))], db: DbSession) -> dict[str, int]:
+    """Return student navigation counts for new invitations, application updates, and saved internships."""
     invites_new = await db.scalar(
         select(func.count(Notification.id)).where(
             Notification.user_id == user.id,
@@ -159,6 +163,7 @@ async def student_nav_counts(user: Annotated[User, Depends(require_roles(UserRol
 
 @api_router.get("/company/dashboard", tags=["company"])
 async def company_dashboard(user: Annotated[User, Depends(require_roles(UserRole.COMPANY))], db: DbSession) -> dict[str, Any]:
+    """Return the authenticated company?s identity and profile display name for its dashboard."""
     company = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
     name = company.company_name if company else None
     if not name and user.email:
@@ -173,11 +178,13 @@ async def company_overview(
     user: Annotated[User, Depends(require_roles(UserRole.COMPANY))],
     db: DbSession,
 ) -> dict[str, Any]:
+    """Aggregate hiring KPIs and recent-period data for the authenticated company dashboard."""
     now = datetime.now(timezone.utc)
     week_start = now - timedelta(days=7)
     review_cutoff = now - timedelta(days=3)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     async def count(statement: Any) -> int:
+        """Return the integer result of a scalar count query, treating an empty result as zero."""
         return int(await db.scalar(statement) or 0)
 
     total_internships = await count(
@@ -300,6 +307,7 @@ async def company_overview(
 
 @api_router.get("/admin/dashboard", tags=["admin"])
 async def admin_dashboard(user: Annotated[User, Depends(require_roles(UserRole.ADMIN))]) -> dict[str, Any]:
+    """Return the authenticated administrator?s identity and display name for the admin dashboard."""
     local_part = user.email.split("@")[0]
     words = "".join(c if c.isalpha() else " " for c in local_part).split()
     name = " ".join(words).title() if words else local_part.title()

@@ -27,6 +27,7 @@ class UserAdminResponse(BaseModel):
     @computed_field
     @property
     def email_verification_required(self) -> bool:
+        """Report whether this user's role requires email verification under current settings."""
         role = self.role.value if hasattr(self.role, "value") else str(self.role)
         settings = get_settings()
         if role == "COMPANY":
@@ -41,6 +42,7 @@ class AdminCreate(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password_strength(cls, password: str) -> str:
+        """Require at least one alphabetic character and one digit without altering the password."""
         if not any(character.isalpha() for character in password) or not any(character.isdigit() for character in password):
             raise ValueError("Password must contain at least one letter and one digit")
         return password

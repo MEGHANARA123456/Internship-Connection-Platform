@@ -38,6 +38,7 @@ company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]# type: 
 
 
 def _display_internship_title(title: str) -> str:
+    """Format a stored internship identifier as a title for display."""
     return title.replace("_", " ").replace("-", " ").title()
 
 
@@ -46,6 +47,7 @@ def _status_notification_text(
     company_name: str,
     internship_title: str,
 ) -> tuple[str, str, str]:
+    """Build the subject, plain-text body, and HTML body for an application status notification."""
     status_text = status.replace("_", " ").title()
     title = "Offer update" if status == "SELECTED" else "Application status update"
     body = f"Your application for {internship_title} at {company_name} is now {status_text}."
@@ -73,6 +75,7 @@ TRANSITIONS = {
 
 
 def _response_time_hours(applied_at: datetime, response_at: datetime) -> float:
+    """Calculate response latency in hours, normalizing naive datetimes as UTC and clamping negative values to zero."""
     if applied_at.tzinfo is None:
         applied_at = applied_at.replace(tzinfo=timezone.utc)
     if response_at.tzinfo is None:
@@ -81,6 +84,7 @@ def _response_time_hours(applied_at: datetime, response_at: datetime) -> float:
 
 
 def _application_search_filter(search: str | None):
+    """Add the supported text-search conditions to an application query."""
     tokens = re.findall(r"[a-z0-9]+", (search or "").casefold())
     if not tokens:
         return None
@@ -94,14 +98,17 @@ def _application_search_filter(search: str | None):
 
 
 def application_transition_allowed(current: str, target: str) -> bool:
+    """Return whether the application status transition is permitted by the workflow."""
     return target in TRANSITIONS.get(current, set())
 
 
 def allowed_next_statuses(current: str) -> list[str]:
+    """Return the statuses that may follow the supplied application status."""
     return sorted(TRANSITIONS.get(current, set()))
 
 
 def allowed_actions_for_status(current: str) -> list[str]:
+    """Return the company actions available for an application in its current status."""
     action_by_status = {
         "UNDER_REVIEW": "MOVE_TO_REVIEW",
         "SHORTLISTED": "SHORTLIST",
@@ -117,6 +124,7 @@ def allowed_actions_for_status(current: str) -> list[str]:
 
 
 def _already_applied_response(application: Application) -> JSONResponse:
+    """Create the conflict response used when the student has already applied to the internship."""
     status_label = application.status.replace("_", " ").title()
     blocker = {
         "code": "ALREADY_APPLIED",
@@ -136,6 +144,7 @@ def _already_applied_response(application: Application) -> JSONResponse:
 
 
 def _is_application_unique_violation(exc: IntegrityError) -> bool:
+    """Identify database integrity errors caused by the application uniqueness constraint."""
     original = exc.orig
     constraint_name = getattr(getattr(original, "diag", None), "constraint_name", None)
     if constraint_name == "uq_application_student_internship":
@@ -160,6 +169,7 @@ async def serialize(
     include_match: bool = False,
     include_verified_badges: bool = False,
 ) -> dict:
+    """Serialize an application and its related internship/company data for API responses."""
     student = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == application.student_id))
     resume = await db.scalar(select(Resume).where(Resume.student_id == application.student_id))
     internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id))
@@ -254,6 +264,7 @@ async def application_eligibility(
     user: student_only,
     db: DbSession,
 ) -> dict:
+    """Check whether the authenticated student may apply to the requested internship and report any eligibility blockers."""
     internship = await db.scalar(select(Internship).where(Internship.id == internship_id))
     if internship is None:
         raise HTTPException(404, "Internship not found")
@@ -266,6 +277,7 @@ async def application_eligibility(
 
 @router.post("/internships/{internship_id}", response_model=ApplicationResponse, status_code=201)
 async def apply(internship_id: int, data: ApplicationCreate, user: student_only, db: DbSession) -> dict | JSONResponse:
+    """Create an application for an eligible student, rejecting duplicate or otherwise ineligible submissions."""
     student_id = user.id
     notifications = []
     try:
@@ -401,6 +413,7 @@ async def get_application_timeline(
     user: Annotated[User, Depends(get_current_user)],
     db: DbSession,
 ) -> dict:
+    """Return the chronological event history for the selected application."""
     application = await db.scalar(select(Application).where(Application.id == application_id))
     if application is None:
         raise HTTPException(404, "Application not found")
@@ -589,6 +602,7 @@ async def student_dashboard(
     status: str | None = Query(default=None),
     search: str | None = Query(default=None, max_length=100),
 ) -> dict:
+    """Summarize the authenticated student?s applications and related dashboard metrics."""
     applications_query = select(Application).where(Application.student_id == user.id)
     if status and status.upper() != "ALL":
         applications_query = applications_query.where(Application.status == status.upper())
@@ -630,6 +644,7 @@ async def student_dashboard(
 
 @router.get("/company", response_model=list[ApplicationResponse])
 async def list_all_company_applications(user: company_only, db: DbSession) -> list[dict]:
+    """Load applications belonging to internships owned by the authenticated company."""
     applications = await db.scalars(
         select(Application)
         .join(Internship, Application.internship_id == Internship.id)
@@ -659,6 +674,7 @@ async def search_company_applications(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> dict:
+    """Search the authenticated company?s applications using the supported filters."""
     query = (
         select(Application)
         .join(Internship, Application.internship_id == Internship.id)
@@ -751,6 +767,7 @@ async def search_company_applications(
 
 @router.get("/internships/{internship_id}", response_model=list[ApplicationResponse])
 async def company_applications(internship_id: int, user: company_only, db: DbSession) -> list[dict]:
+    """Return the authenticated company?s applications with the requested listing and filter options."""
     internship = await db.scalar(select(Internship).where(Internship.id == internship_id, Internship.company_id == user.id))
     if internship is None: raise HTTPException(404, "Internship not found")
     applications = await db.scalars(select(Application).where(Application.internship_id == internship_id).order_by(Application.created_at.desc()))
@@ -762,6 +779,7 @@ async def company_applications(internship_id: int, user: company_only, db: DbSes
 
 @router.post("/{application_id}/viewed")
 async def mark_application_viewed(application_id: int, user: company_only, db: DbSession) -> dict:
+    """Mark an application as viewed by its owning company."""
     application = await db.scalar(
         select(Application)
         .join(Internship, Application.internship_id == Internship.id)
@@ -776,6 +794,7 @@ async def mark_application_viewed(application_id: int, user: company_only, db: D
 
 @router.get("/{application_id}/tracking")
 async def get_application_tracking(application_id: int, user: student_only, db: DbSession) -> dict:
+    """Return the authenticated student?s status and event tracking for an application."""
     application = await db.scalar(select(Application).where(Application.id == application_id, Application.student_id == user.id))
     if application is None:
         raise HTTPException(404, "Application not found")
@@ -909,6 +928,7 @@ async def bulk_update_status(
     user: company_only,
     db: DbSession,
 ) -> dict:
+    """Apply a requested status update to multiple company-owned applications and report per-item outcomes."""
     if not data.application_ids:
         return {"updated_count": 0, "success_ids": [], "failed_ids": []}
 
@@ -970,6 +990,7 @@ async def bulk_update_status(
 
 @router.patch("/{application_id}/status", response_model=ApplicationResponse)
 async def update_status(application_id: int, data: ApplicationStatusUpdate, background_tasks: BackgroundTasks, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict:
+    """Change an application to an allowed status for an internship owned by the authenticated company."""
     application = await db.scalar(select(Application).where(Application.id == application_id))
     if application is None: raise HTTPException(404, "Application not found")
     internship = await db.scalar(select(Internship).where(Internship.id == application.internship_id))
@@ -1034,31 +1055,37 @@ async def update_status(application_id: int, data: ApplicationStatusUpdate, back
 
 @router.patch("/{application_id}/review", response_model=ApplicationResponse)
 async def mark_under_review(application_id: int, background_tasks: BackgroundTasks, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict:
+    """Move an eligible application into the under-review status."""
     return await update_status(application_id, ApplicationStatusUpdate(status="UNDER_REVIEW"), background_tasks, user, db)
 
 
 @router.patch("/{application_id}/shortlist", response_model=ApplicationResponse)
 async def mark_shortlist(application_id: int, background_tasks: BackgroundTasks, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict:
+    """Move an eligible application into the shortlisted status."""
     return await update_status(application_id, ApplicationStatusUpdate(status="SHORTLISTED"), background_tasks, user, db)
 
 
 @router.patch("/{application_id}/select", response_model=ApplicationResponse)
 async def mark_select(application_id: int, background_tasks: BackgroundTasks, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict:
+    """Select an eligible application and record the selection status."""
     return await update_status(application_id, ApplicationStatusUpdate(status="SELECTED"), background_tasks, user, db)
 
 
 @router.patch("/{application_id}/reject", response_model=ApplicationResponse)
 async def mark_reject(application_id: int, background_tasks: BackgroundTasks, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict:
+    """Reject an eligible application and record the rejection status."""
     return await update_status(application_id, ApplicationStatusUpdate(status="REJECTED"), background_tasks, user, db)
 
 
 @router.patch("/{application_id}/withdraw", response_model=ApplicationResponse)
 async def mark_withdraw(application_id: int, background_tasks: BackgroundTasks, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict:
+    """Withdraw the authenticated student?s application when withdrawal is allowed."""
     return await update_status(application_id, ApplicationStatusUpdate(status="WITHDRAWN"), background_tasks, user, db)
 
 
 @router.post("/{application_id}/accept-offer", response_model=ApplicationResponse)
 async def accept_offer(application_id: int, data: OfferAcceptance, user: student_only, db: DbSession) -> dict:
+    """Accept the offer associated with the authenticated student?s application when permitted."""
     application = await db.scalar(select(Application).where(Application.id == application_id))
     if application is None or application.student_id != user.id:
         raise HTTPException(404, "Application not found")

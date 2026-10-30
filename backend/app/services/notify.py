@@ -32,6 +32,7 @@ async def notify(
     application_id: int | None = None,
     defer_delivery: bool = False,
 ) -> Notification | None:
+    """Persist a notification, optionally queue email, and dispatch it unless delivery is deferred."""
     if notification_type in BLOCKED_NOTIFICATION_TYPES or _CODE_PATTERN.search(title) or _CODE_PATTERN.search(body):
         logger.warning(
             "Blocked notification containing a sensitive code for user %s (type %s)",
@@ -73,6 +74,7 @@ async def notify(
 
 
 async def dispatch_notification(notification: Notification) -> None:
+    """Send a persisted notification payload to its recipient over the WebSocket manager."""
     from app.api.v1.ws import manager
 
     await manager.send_personal_message(

@@ -37,20 +37,24 @@ student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]  # type
 
 
 def _range_start(range_value: str) -> datetime | None:
+    """Convert a supported day-range value to a UTC start time; return no cutoff for the all-time range."""
     if range_value == "all":
         return None
     return datetime.now(timezone.utc) - timedelta(days=int(range_value))
 
 
 def _range_filter(query: Any, column: Any, start: datetime | None) -> Any:
+    """Add a lower-bound filter to a query when a start time is supplied."""
     return query.where(column >= start) if start is not None else query
 
 
 def _skills(value: str | None) -> list[str]:
+    """Split a comma-separated skills field into non-empty, whitespace-trimmed entries."""
     return [skill.strip() for skill in (value or "").split(",") if skill.strip()]
 
 
 def _elapsed_seconds(start: datetime, end: datetime) -> float:
+    """Return the elapsed seconds between datetimes, treating naive values as UTC."""
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
     if end.tzinfo is None:
@@ -611,6 +615,7 @@ async def admin_user_growth(
             label = period_start.strftime("%Y-%m")
 
         async def _count_role(role: UserRole) -> int:
+            """Count users of one role whose creation time falls within the current reporting period."""
             return int(
                 await db.scalar(
                     select(func.count(User.id))

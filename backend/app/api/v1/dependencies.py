@@ -19,6 +19,7 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 async def get_current_user_optional(token: Annotated[str | None, Depends(oauth2_scheme_optional)], db: DbSession) -> User | None:
+    """Resolve an active user from an optional access token, returning None when authentication is absent or invalid."""
     if not token:
         return None
     try:
@@ -32,6 +33,7 @@ async def get_current_user_optional(token: Annotated[str | None, Depends(oauth2_
 
 
 async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: DbSession) -> User:
+    """Resolve an active user from a required access token or raise an authentication error."""
     try:
         payload = decode_token(token)
         if payload.get("type") != "access" or not payload.get("sub"):
@@ -45,7 +47,9 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: Db
 
 
 def require_roles(*roles: UserRole):
+    """Build a dependency that rejects authenticated users whose role is not in the allowed set."""
     async def dependency(user: Annotated[User, Depends(get_current_user)]) -> User:
+        """Return the authenticated user when its role is allowed; otherwise raise a forbidden response."""
         if user.role not in roles:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
         return user

@@ -29,6 +29,7 @@ company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))]
 
 
 def _is_external_url(value: str | None) -> bool:
+    """Return whether a value is an absolute HTTP or HTTPS URL with a network location."""
     if not value:
         return False
     parsed = urlsplit(value)
@@ -36,6 +37,7 @@ def _is_external_url(value: str | None) -> bool:
 
 
 async def get_conversation(conversation_id: int, user: User, db: DbSession) -> Conversation:
+    """Load a conversation only when the current user is one of its participants; otherwise return not found."""
     conversation = await db.scalar(select(Conversation).where(Conversation.id == conversation_id, or_(Conversation.student_id == user.id, Conversation.company_id == user.id)))
     if conversation is None: raise HTTPException(404, "Conversation not found")
     return conversation
@@ -43,6 +45,7 @@ async def get_conversation(conversation_id: int, user: User, db: DbSession) -> C
 
 @router.post("/conversations/with/{other_user_id}", status_code=201)
 async def start_conversation(other_user_id: int, user: participant, db: DbSession) -> dict[str, int]:
+    """Find or create a conversation with another eligible user and return its identifier."""
     other_user = await db.get(User, other_user_id)
     if other_user is None:
         raise HTTPException(404, "Target user not found")
@@ -61,11 +64,13 @@ async def start_conversation(other_user_id: int, user: participant, db: DbSessio
 
 @router.post("/conversations", status_code=201)
 async def create_conversation(data: ConversationCreate, user: participant, db: DbSession) -> dict[str, int]:
+    """Start a conversation with the participant specified in the request."""
     return await start_conversation(data.participant_id, user, db)
 
 
 @router.get("/contacts")
 async def list_contacts(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[dict]:
+    """List the contacts available to the current student or company user."""
     contact_ids: set[int] = set()
     if user.role == UserRole.STUDENT:
         applied_company_ids = await db.scalars(
@@ -215,6 +220,7 @@ async def list_recommended_contacts(user: Annotated[User, Depends(get_current_us
 
 @router.get("/conversations")
 async def list_conversations(user: participant, db: DbSession) -> list[dict]:
+    """List the current user?s conversations with participant and latest-message details."""
     conversations = (await db.scalars(select(Conversation).where(or_(Conversation.student_id == user.id, Conversation.company_id == user.id)))).all()
     result = []
     for conv in conversations:
@@ -260,6 +266,7 @@ async def list_conversations(user: participant, db: DbSession) -> list[dict]:
 
 @router.get("/conversations/{conversation_id}/messages", response_model=list[MessageResponse])
 async def list_messages(conversation_id: int, user: participant, db: DbSession) -> list[Message]:
+    """Return messages from a conversation the current user is allowed to access."""
     await get_conversation(conversation_id, user, db)
     await db.execute(update(Message).where(Message.conversation_id == conversation_id, Message.sender_id != user.id, Message.read_at.is_(None)).values(read_at=datetime.now(timezone.utc)))
     await db.commit()
@@ -268,6 +275,7 @@ async def list_messages(conversation_id: int, user: participant, db: DbSession) 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageResponse, status_code=201)
 async def send_message(conversation_id: int, data: MessageCreate, user: participant, db: DbSession) -> Message:
+    """Add a message to an accessible conversation and return the created message."""
     conversation = await get_conversation(conversation_id, user, db)
     message = Message(conversation_id=conversation.id, sender_id=user.id, body=data.body)
     db.add(message)
@@ -302,6 +310,7 @@ async def send_message(conversation_id: int, data: MessageCreate, user: particip
 
 @router.post("/applications/{application_id}/interviews", response_model=InterviewResponse, status_code=201)
 async def schedule_interview(application_id: int, data: InterviewCreate, user: Annotated[User, Depends(require_roles(UserRole.COMPANY))], db: DbSession) -> dict:# type: ignore
+    """Schedule an interview for an application the current company may manage, subject to its application status."""
     application = await db.scalar(select(Application).join(Internship, Application.internship_id == Internship.id).where(Application.id == application_id, Internship.company_id == user.id))
     if application is None: raise HTTPException(404, "Application not found")
     
@@ -424,6 +433,7 @@ async def schedule_interview(application_id: int, data: InterviewCreate, user: A
 
 @router.get("/applications/{application_id}/interviews", response_model=list[InterviewResponse])
 async def list_interviews(application_id: int, user: participant, db: DbSession) -> list[Interview]:
+    """List interviews associated with an application the current user is authorized to access."""
     from app.services.interview_expiry import expire_overdue_interviews
 
     await expire_overdue_interviews(db)
@@ -440,6 +450,7 @@ async def list_application_notes(
     user: company_only,
     db: DbSession,
 ) -> list[ApplicationNote]:
+    """List notes for an application owned by the authenticated company."""
     owns_application = await db.scalar(
         select(Application.id)
         .join(Internship, Application.internship_id == Internship.id)
@@ -461,6 +472,7 @@ async def create_application_note(
     user: company_only,
     db: DbSession,
 ) -> ApplicationNote:
+    """Add a company note to an application owned by the authenticated company."""
     owns_application = await db.scalar(
         select(Application.id)
         .join(Internship, Application.internship_id == Internship.id)
@@ -482,6 +494,7 @@ async def create_application_note(
 @router.get("/interviews/my", response_model=list[InterviewResponse])
 @router.get("/interviews", response_model=list[InterviewResponse])
 async def list_my_interviews(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[dict]:
+    """List interviews visible to the authenticated student or company user."""
     from app.services.interview_expiry import expire_overdue_interviews
 
     await expire_overdue_interviews(db)
@@ -520,6 +533,7 @@ async def list_my_interviews(user: Annotated[User, Depends(get_current_user)], d
 
 @router.get("/company/interviews")
 async def list_company_interviews(user: company_only, db: DbSession) -> list[dict]:
+    """Return interviews associated with the authenticated company?s applications."""
     from app.services.interview_expiry import expire_overdue_interviews
 
     await expire_overdue_interviews(db)
@@ -565,6 +579,7 @@ async def list_company_interviews(user: company_only, db: DbSession) -> list[dic
 
 @router.patch("/interviews/{interview_id}", response_model=InterviewResponse)
 async def update_interview(interview_id: int, data: InterviewUpdate, user: participant, db: DbSession) -> Interview:
+    """Update an interview the current user is authorized to manage and return the saved record."""
     interview = await db.scalar(select(Interview).where(Interview.id == interview_id))
     if interview is None: raise HTTPException(404, "Interview not found")
     application = await db.scalar(select(Application).where(Application.id == interview.application_id))
@@ -661,6 +676,7 @@ async def update_interview_feedback(
     user: company_only,
     db: DbSession,
 ) -> InterviewFeedbackResponse:
+    """Save feedback for a completed interview and return the resulting feedback summary."""
     interview = await db.scalar(
         select(Interview)
         .join(Application, Application.id == Interview.application_id)
@@ -694,6 +710,7 @@ async def update_interview_feedback(
 
 @router.get("/notifications", response_model=list[NotificationResponse])
 async def notifications(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> list[NotificationResponse]:
+    """List notifications for the current user, including relevant email/application links."""
     items = list(await db.scalars(select(Notification).where(Notification.user_id == user.id).order_by(Notification.created_at.desc())))
     visible_items = [
         item
@@ -740,6 +757,7 @@ async def notifications(user: Annotated[User, Depends(get_current_user)], db: Db
 @router.post("/notifications/read-all", status_code=204)
 @router.patch("/notifications/read-all", status_code=204)
 async def mark_all_notifications_read(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> None:
+    """Mark all unread notifications belonging to the current user as read."""
     await db.execute(
         update(Notification)
         .where(Notification.user_id == user.id, Notification.read_at.is_(None))
@@ -751,6 +769,7 @@ async def mark_all_notifications_read(user: Annotated[User, Depends(get_current_
 @router.post("/notifications/{notification_id}/read", status_code=204)
 @router.patch("/notifications/{notification_id}/read", status_code=204)
 async def mark_notification_read(notification_id: int, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> None:
+    """Mark the specified notification as read when it belongs to the current user."""
     notification = await db.scalar(select(Notification).where(Notification.id == notification_id, Notification.user_id == user.id))
     if notification is None: raise HTTPException(404, "Notification not found")
     notification.read_at = datetime.now(timezone.utc); await db.commit()

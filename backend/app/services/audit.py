@@ -42,6 +42,7 @@ AUDIT_ACTION_LABELS = {
 
 
 def audit_action_label(action: str) -> str:
+    """Convert a known audit action to its display label, or title-case an unknown action."""
     normalized = action.strip().lower().replace(" ", "_")
     if normalized in AUDIT_ACTION_LABELS:
         return AUDIT_ACTION_LABELS[normalized]
@@ -63,6 +64,7 @@ async def get_recent_admin_audit_events(
     actor: User,
     limit: int = 5,
 ) -> list[AuditEventSummary]:
+    """Return up to ten newest audit entries; reject callers who are not admins."""
     if actor.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     rows = (await db.execute(

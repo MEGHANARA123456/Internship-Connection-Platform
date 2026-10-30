@@ -26,6 +26,7 @@ SECRET_CONTEXTS = (
 
 
 def _is_luhn_card(value: str) -> bool:
+    """Validate a 13–19 digit candidate with the Luhn checksum."""
     digits = re.sub(r"\D", "", value)
     if not 13 <= len(digits) <= 19:
         return False
@@ -42,6 +43,7 @@ def _is_luhn_card(value: str) -> bool:
 
 
 def contains_secret(text: str) -> bool:
+    """Return whether text matches a secret context, PII pattern, or checksum-valid card number."""
     if any(pattern.search(text) for pattern in SECRET_CONTEXTS):
         return True
     for name, pattern in REDACTIONS:
@@ -52,6 +54,7 @@ def contains_secret(text: str) -> bool:
 
 
 def redact(text: str) -> str:
+    """Replace recognized credentials and personal identifiers with stable placeholder labels."""
     result = text
     result = re.sub(r"\b(?:password|passwd|pwd)\s*(?:is|:|=)\s*\S+", "[PASSWORD]", result, flags=re.I)
     result = re.sub(

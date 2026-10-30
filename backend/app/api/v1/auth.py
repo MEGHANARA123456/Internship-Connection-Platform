@@ -57,6 +57,7 @@ RESEND_VERIFICATION_MESSAGE = "If an account exists and still needs verification
 
 
 def _check_verification_resend_limit(email: str, ip: str) -> int:
+    """Check the verification-email resend limits for the email address and client IP, returning the retry delay if limited."""
     now = time.monotonic()
     keys = (f"email:{hashlib.sha256(email.encode()).hexdigest()}", f"ip:{ip}")
     retry_after = 0
@@ -81,6 +82,7 @@ logger = logging.getLogger(__name__)
 
 
 def _is_expired(dt: datetime | None) -> bool:
+    """Return whether an optional expiration datetime has passed, interpreting naive values as UTC."""
     if dt is None:
         return True
     if dt.utcoffset() is None:
@@ -136,6 +138,7 @@ async def verify_google_credential(
 async def issue_tokens(
     user: User, db: DbSession, *, record_first_login: bool = False, commit: bool = True
 ) -> TokenResponse:
+    """Issue access and refresh tokens for a user and optionally record first-login metadata."""
     settings = get_settings()
     is_first_login = record_first_login and user.first_login_at is None
     if is_first_login:
@@ -194,6 +197,7 @@ async def create_user(
     *,
     require_verification: bool = True,
 ) -> User:
+    """Validate credentials and create a user account, optionally requiring email verification."""
     clean_email = validate_email_format(email)
     if await db.scalar(select(User).where(User.email == clean_email)):
         raise HTTPException(status_code=409, detail="Email is already registered")
@@ -261,6 +265,7 @@ async def create_user(
 
 @router.post("/check-email")
 async def check_email(data: CheckEmailRequest, db: DbSession) -> dict[str, Any]:
+    """Report whether an email address can be registered and include the validation classification when available."""
     try:
         clean_email = validate_email_format(str(data.email))
         result = validate_organization_email(clean_email) if data.role and data.role.upper() == "COMPANY" else validate_student_email(clean_email)
@@ -276,6 +281,7 @@ async def check_email(data: CheckEmailRequest, db: DbSession) -> dict[str, Any]:
 #registraion_student
 @router.post("/register/student", response_model=UserResponse, status_code=201)
 async def register_student(data: StudentRegister, background_tasks: BackgroundTasks, db: DbSession) -> User:
+    """Register a student account and its initial student profile."""
     try:
         email_result = validate_student_email(str(data.email))
     except ValueError as exc:
@@ -294,6 +300,7 @@ async def register_student(data: StudentRegister, background_tasks: BackgroundTa
 #register_company
 @router.post("/register/company", response_model=UserResponse, status_code=201)
 async def register_company(data: CompanyRegister, background_tasks: BackgroundTasks, db: DbSession) -> User:
+    """Register a company account and its initial company profile."""
     try:
         clean_email = validate_organization_email(str(data.email)).email
     except ValueError as exc:
@@ -323,6 +330,7 @@ async def register_company(data: CompanyRegister, background_tasks: BackgroundTa
 #mfa_setup
 @router.post("/mfa/setup-totp", response_model=MFATotpSetupResponse)
 async def setup_totp(user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict[str, str]:
+    """Create an authenticator-app TOTP secret and provisioning URI for the current user."""
     secret = pyotp.random_base32()
     user.mfa_type = "TOTP"
     user.mfa_secret = secret
@@ -337,6 +345,7 @@ async def setup_totp(user: Annotated[User, Depends(get_current_user)], db: DbSes
 
 @router.post("/mfa/verify-totp")
 async def verify_totp(data: MFATotpVerifyRequest, user: Annotated[User, Depends(get_current_user)], db: DbSession) -> dict[str, Any]:
+    """Verify the submitted TOTP code and enable authenticator-based MFA for the user."""
     if not user.mfa_secret:
         raise HTTPException(status_code=400, detail="Authenticator setup is not complete. Please enable TOTP first.")
 
@@ -354,6 +363,7 @@ async def verify_totp(data: MFATotpVerifyRequest, user: Annotated[User, Depends(
 
 @router.post("/login", response_model=TokenResponse | MFALoginChallengeResponse)
 async def login(data: LoginRequest, db: DbSession) -> Any:
+    """Authenticate the supplied credentials, enforcing account status and returning tokens or an MFA challenge."""
     clean_email = str(data.email).strip().lower()
     user = await db.scalar(select(User).where(User.email == clean_email))
     
@@ -725,6 +735,7 @@ async def google_auth(data: GoogleAuthRequest, db: DbSession) -> TokenResponse:
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(data: RefreshRequest, db: DbSession) -> TokenResponse:
+    """Rotate a valid refresh token and return the replacement token pair."""
     try:
         payload = decode_token(data.refresh_token)
         if payload.get("type") != "refresh":
@@ -763,6 +774,7 @@ async def refresh(data: RefreshRequest, db: DbSession) -> TokenResponse:
 
 @router.post("/logout", status_code=204)
 async def logout(data: LogoutRequest, db: DbSession) -> None:
+    """Revoke the presented refresh token when one is supplied."""
     try:
         payload = decode_token(data.refresh_token)
         token = await db.scalar(select(RefreshToken).where(RefreshToken.jti == payload.get("jti")))
@@ -774,6 +786,7 @@ async def logout(data: LogoutRequest, db: DbSession) -> None:
 
 @router.get("/verify/{token}")
 async def verify_email(token: str, db: DbSession) -> dict[str, str]:
+    """Consume an email-verification token and mark its associated account verified."""
     now = datetime.now(timezone.utc)
     digest = hashlib.sha256(token.encode()).hexdigest()
     token_row = await db.scalar(
@@ -825,6 +838,7 @@ async def verify_email(token: str, db: DbSession) -> dict[str, str]:
 
 @router.post("/forgot-password")
 async def forgot_password(data: ForgotPasswordRequest, background_tasks: BackgroundTasks, db: DbSession) -> dict[str, str]:
+    """Start password recovery for a matching account by dispatching the reset verification details."""
     clean_email = str(data.email).strip().lower()
     user = await db.scalar(select(User).where(User.email == clean_email))
     if user is None:
@@ -894,6 +908,7 @@ async def forgot_password(data: ForgotPasswordRequest, background_tasks: Backgro
 
 @router.post("/verify-otp")
 async def verify_otp(data: VerifyOtpRequest, db: DbSession) -> dict[str, str]:
+    """Validate a password-reset OTP and mark the recovery challenge as verified."""
     user = await db.scalar(select(User).where(User.email == str(data.email).strip().lower()))
     if (
         user is None
@@ -906,6 +921,7 @@ async def verify_otp(data: VerifyOtpRequest, db: DbSession) -> dict[str, str]:
 
 @router.post("/reset-password")
 async def reset_password(data: ResetPasswordRequest, background_tasks: BackgroundTasks, db: DbSession) -> dict[str, str]:
+    """Set a new password after the account?s password-reset challenge has been validated."""
     code = (data.otp or data.token or "").strip()
     if not code:
         raise HTTPException(status_code=400, detail="Verification code or reset token is required")
@@ -947,6 +963,7 @@ async def change_password(
     background_tasks: BackgroundTasks,
     db: DbSession,
 ) -> dict[str, str]:
+    """Change the authenticated user?s password after checking the current password and new value."""
     if not await verify_password_async(data.current_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
     
@@ -971,6 +988,7 @@ async def resend_verification(
     db: DbSession,
     request: Request,
 ) -> dict[str, str]:
+    """Resend an email-verification message subject to the per-email and per-IP rate limits."""
     clean_email = str(data.email).strip().lower()
     ip = _client_ip(request, get_settings().trusted_proxies)
     retry_after = _check_verification_resend_limit(clean_email, ip)

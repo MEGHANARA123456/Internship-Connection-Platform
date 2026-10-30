@@ -15,6 +15,7 @@ LOCAL_CORS_ORIGIN = re.compile(
 )
 
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Log an unhandled request error and return a generic 500 with allowed-origin CORS headers."""
     logger.exception("Unhandled request exception", extra={"path": request.url.path, "method": request.method})
     
     headers = {}

@@ -38,15 +38,18 @@ _JOB_KEYWORD_STOPWORDS = {
 
 
 def _tokens(value: str) -> list[str]:
+    """Split case-folded text into Unicode alphanumeric tokens, excluding underscores."""
     return re.findall(r"[^\W_]+", value.casefold())
 
 
 def _canonical_skill(skill: str) -> str:
+    """Normalize a skill to its canonical alias-group label when one is defined."""
     normalized = " ".join(_tokens(skill))
     return _ALIAS_TO_CANONICAL.get(normalized, normalized)
 
 
 def _skill_variants(skill: str) -> list[list[str]]:
+    """Return unique token sequences for a skill and all aliases in its canonical group."""
     normalized = " ".join(_tokens(skill))
     canonical = _ALIAS_TO_CANONICAL.get(normalized)
     variants = [normalized]
@@ -59,6 +62,7 @@ def _skill_variants(skill: str) -> list[list[str]]:
 
 
 def _contains_tokens(candidate_tokens: list[str], phrase: list[str]) -> bool:
+    """Match a token phrase directly or as a compact concatenation of nearby candidate tokens."""
     width = len(phrase)
     if not width:
         return False
@@ -77,6 +81,7 @@ def _contains_tokens(candidate_tokens: list[str], phrase: list[str]) -> bool:
 
 
 def _contains_skill(candidate_tokens: list[str], skill: str) -> bool:
+    """Check candidate tokens against a skill's aliases, expanding single-token aliases as needed."""
     variants = _skill_variants(skill)
     if len(_tokens(skill)) == 1:
         token = _tokens(skill)[0]
@@ -87,6 +92,7 @@ def _contains_skill(candidate_tokens: list[str], skill: str) -> bool:
 
 
 def _title_keywords(job_title: str) -> list[str]:
+    """Return unique title tokens longer than two characters after common job words are removed."""
     return list(dict.fromkeys(
         token for token in _tokens(job_title)
         if len(token) > 2 and token not in _JOB_KEYWORD_STOPWORDS
@@ -94,6 +100,7 @@ def _title_keywords(job_title: str) -> list[str]:
 
 
 def _fallback_keywords(job_title: str, job_description: str) -> list[str]:
+    """Extract at most 20 unique non-stopword tokens from the title and description."""
     return list(dict.fromkeys(
         token
         for token in _tokens(f"{job_title} {job_description}")
@@ -102,6 +109,7 @@ def _fallback_keywords(job_title: str, job_description: str) -> list[str]:
 
 
 def _eligibility_ratio(eligibility_data: Any) -> float | None:
+    """Normalize supported boolean, fraction/percent, or matched-versus-required eligibility data to 0–1."""
     if isinstance(eligibility_data, bool):
         return float(eligibility_data)
     if isinstance(eligibility_data, (int, float)):
@@ -208,6 +216,7 @@ def compute_explicit_eligibility_fit(
 
 
 async def get_student_resume_text(db: AsyncSession, student_id: int) -> str:
+    """Load extracted text from the student's stored PDF resume, or return an empty string if unavailable."""
     resume = await db.scalar(select(Resume).where(Resume.student_id == student_id))
     if resume is None:
         return ""
@@ -226,6 +235,7 @@ def compute_match(
     job_skills: list[str],
     eligibility_data: Any = None,
 ) -> dict[str, Any]:
+    """Score profile/resume overlap with role requirements, returning component scores and match explanations."""
     student_skills = [skill.strip() for skill in (student_skills or []) if skill and skill.strip()]
     resume_text = resume_text or ""
     job_title = job_title or ""
@@ -331,6 +341,7 @@ def compute_ats_score(
     job_description: str,
     job_skills: list[str],
 ) -> dict[str, Any]:
+    """Extend the match result with strengths and resume/skill suggestions using fixed content heuristics."""
     match = compute_match(student_skills, resume_text, job_title, job_description, job_skills)
     suggestions = []
     if match["missing_skills"]:
@@ -361,6 +372,7 @@ def compute_match_score_fast(
     job_description: str = "",
     eligibility_data: Any = None,
 ) -> dict[str, Any]:
+    """Compatibility wrapper that forwards inputs to the full match calculation."""
     return compute_match(
         student_skills,
         resume_text,
@@ -382,6 +394,7 @@ def generate_tailored_pitch(
     company_name: str,
     job_description: str,
 ) -> str:
+    """Build a two-paragraph role/company pitch using education and up to four skills; name, bio, and description are unused."""
     skills_text = ", ".join(skills[:4]) if skills else "modern software development technologies"
     first_paragraph = (
         f"I am writing to express my strong interest in the {job_title} role at {company_name}. "
@@ -400,6 +413,7 @@ def generate_tailored_pitch(
 
 
 def generate_mock_interview_questions(job_title: str, industry: str, skills: list[str]) -> list[dict[str, Any]]:
+    """Create five fixed technical, design, and behavioral prompts, using defaults when skills are absent."""
     skill_list = [s.strip() for s in skills if s.strip()] or ["Python", "Problem Solving", "Web Architecture"]
     
     questions = [
@@ -438,6 +452,7 @@ def generate_mock_interview_questions(job_title: str, industry: str, skills: lis
 
 
 def evaluate_mock_interview_answer(question: str, answer: str, rubric: str) -> dict[str, Any]:
+    """Return templated feedback based only on answer word count; the question and rubric do not affect scoring."""
     cleaned = answer.strip()
     word_count = len(cleaned.split())
     

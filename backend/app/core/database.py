@@ -11,5 +11,6 @@ async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 # Dependency for FastAPI: yields a database session for each request.
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Yield a request-scoped async session, closing it when the dependency ends."""
     async with async_session_factory() as session:
         yield session

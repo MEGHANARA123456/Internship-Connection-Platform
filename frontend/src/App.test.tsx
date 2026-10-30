@@ -233,8 +233,8 @@ describe('platform shell', () => {
         <CurrentLocation />
       </MemoryRouter>,
     )
-    fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'student@example.com' } })
-    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'valid-password' } })
+    fireEvent.change(await screen.findByLabelText('Email address'), { target: { value: 'student@example.com' } })
+    fireEvent.change(await screen.findByLabelText('Password'), { target: { value: 'valid-password' } })
     fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
 
     expect(await screen.findByRole('heading', { name: 'Interviews & Meetings' })).toBeTruthy()

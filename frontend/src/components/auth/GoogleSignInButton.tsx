@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { AlertCircle } from 'lucide-react'
-import { routes } from '../../lib/routes'
+import { resolvePostLoginTarget } from '../../lib/postLoginTarget'
 
 declare global {
   interface Window {
@@ -37,6 +37,7 @@ export function GoogleSignInButton({
   keepSignedIn = false,
 }: GoogleSignInButtonProps) {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const setSession = useAuthStore((state) => state.setSession)
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
@@ -70,13 +71,8 @@ export function GoogleSignInButton({
       refreshTokenExpiresIn: data.refresh_token_expires_in ?? null,
     }, keepSignedIn ? 'local' : 'session')
 
-    if (data.role === 'ADMIN') {
-      navigate(routes.admin)
-    } else if (data.role === 'COMPANY') {
-      navigate(routes.companyJobs())
-    } else {
-      navigate(routes.opportunities)
-    }
+    const target = resolvePostLoginTarget(data.role, searchParams.get('next'))
+    navigate(target)
   }
 
   // Initialize Google Identity Services when its async script becomes available.
