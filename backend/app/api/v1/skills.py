@@ -594,7 +594,7 @@ async def _assert_unique_prompt(
 
 
 @router.get("/topics")
-async def list_assessment_topics(user: student_only, db: DbSession) -> list[dict[str, str]]:
+async def list_assessment_topics(user: student_only, db: DbSession) -> list[dict[str, Any]]:
     """List the configured assessment topics and their available question counts."""
     rows = (await db.execute(
         select(SkillQuestion.topic, SkillQuestion.difficulty, func.count(SkillQuestion.id))
