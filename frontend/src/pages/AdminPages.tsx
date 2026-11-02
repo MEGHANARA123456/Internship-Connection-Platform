@@ -45,6 +45,7 @@ import { useAuthStore } from '../store/auth'
 import { KpiCard } from '../components/dashboard/KpiCard'
 import { confirmAction, showToast } from '../lib/feedback'
 import { routes } from '../lib/routes'
+import { AdminSkillTopicsPanel } from './admin/AdminSkillTopicsPanel'
 
 // --- 1. Admin Dashboard ---
 
@@ -1841,6 +1842,8 @@ export function AdminSkillAssessmentsPage() {
           />
         </label>
       </header>
+
+      <AdminSkillTopicsPanel />
 
       {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">{error}</p>}
       {success && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">{success}</p>}

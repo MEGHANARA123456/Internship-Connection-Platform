@@ -381,6 +381,23 @@ class SkillQuestion(Base):
     )
 
 
+class SkillTopic(Base):
+    __tablename__ = "skill_topics"
+
+    slug: Mapped[str] = mapped_column(String(100), primary_key=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    icon: Mapped[str] = mapped_column(String(80), nullable=False, default="✦")
+    badge_title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
 class SkillAttempt(Base):
     __tablename__ = "skill_attempts"
     __table_args__ = (

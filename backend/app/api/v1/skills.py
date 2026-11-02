@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -20,7 +20,7 @@ from starlette.responses import StreamingResponse
 from fastapi.responses import JSONResponse
 
 from app.api.v1.dependencies import DbSession, require_roles
-from app.models import Internship, Notification, SkillAttempt, SkillBadge, SkillLearningResource, SkillQuestion, User, UserRole
+from app.models import Internship, Notification, SkillAttempt, SkillBadge, SkillLearningResource, SkillQuestion, SkillTopic, User, UserRole
 from app.services.audit import write_audit
 from app.services.skill_badges import badge_matches_skill
 
@@ -189,6 +189,24 @@ class SkillLearningResourceUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     url: str | None = Field(default=None, min_length=1, max_length=1000)
     active: bool | None = None
+
+
+class SkillTopicUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=150)
+    description: str | None = Field(default=None, max_length=2000)
+    icon: str | None = Field(default=None, min_length=1, max_length=80)
+    badge_title: str | None = Field(default=None, min_length=1, max_length=255)
+    active: bool | None = None
+
+    @field_validator("name", "icon", "badge_title")
+    @classmethod
+    def trim_topic_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("This value cannot be blank")
+        return trimmed
 
 
 def _utc(value: datetime) -> datetime:
@@ -605,8 +623,16 @@ async def list_assessment_topics(user: student_only, db: DbSession) -> list[dict
     counts_by_topic: dict[str, dict[str, int]] = {}
     for topic, difficulty, count in rows:
         counts_by_topic.setdefault(str(topic), {})[str(difficulty).upper()] = int(count)
+    topic_metadata = {
+        topic.slug: topic
+        for topic in await db.scalars(select(SkillTopic))
+    }
     topics = []
-    for topic, counts in counts_by_topic.items():
+    for topic in sorted(counts_by_topic):
+        metadata = topic_metadata.get(topic)
+        if metadata is not None and not metadata.active:
+            continue
+        counts = counts_by_topic.get(topic, {})
         missing = [
             f"{required - counts.get(difficulty, 0)} more active {difficulty.lower()} question(s)"
             for difficulty, required in ASSESSMENT_MIX.items()
@@ -614,13 +640,15 @@ async def list_assessment_topics(user: student_only, db: DbSession) -> list[dict
         ]
         topics.append({
             "id": topic,
-            "name": TOPIC_INFO.get(topic, {}).get("name", topic.replace("-", " ").replace("_", " ").title()),
-            "icon": TOPIC_INFO.get(topic, {}).get("icon", "✦"),
-            "description": TOPIC_INFO.get(topic, {}).get("description", "Show what you know and build a verified skill."),
+            "name": metadata.name if metadata else defaults.get("name", topic.replace("-", " ").replace("_", " ").title()),
+            "icon": metadata.icon if metadata else defaults.get("icon", "✦"),
+            "description": metadata.description if metadata else defaults.get("description", "Show what you know and build a verified skill."),
+            "badge_title": metadata.badge_title if metadata else defaults.get("badge_title", f"Verified {topic.title()} Specialist"),
             "question_counts": {
                 difficulty.lower(): counts.get(difficulty, 0)
                 for difficulty in ASSESSMENT_MIX
             },
+            "active": True,
             "available": not missing,
             "unavailable_reason": None if not missing else "Add " + ", ".join(missing) + " to enable this topic.",
             "question_count": ASSESSMENT_QUESTION_COUNT,
@@ -638,6 +666,9 @@ async def start_assessment(
 ) -> dict[str, Any]:
     """Resume an eligible in-progress attempt or create a randomized timed assessment for the student."""
     student_id = user.id
+    topic_metadata = await db.get(SkillTopic, data.topic)
+    if topic_metadata is not None and not topic_metadata.active:
+        raise HTTPException(409, "This assessment topic is inactive")
     await db.scalar(select(User).where(User.id == student_id).with_for_update())
     now = datetime.now(timezone.utc)
     active_attempt = await db.scalar(
@@ -944,11 +975,12 @@ async def submit_assessment(
         )
 
     if passed:
+        topic_metadata = await db.get(SkillTopic, attempt.topic)
         topic_info = TOPIC_INFO.get(attempt.topic, {})
         badge = SkillBadge(
             student_id=user.id,
             topic=attempt.topic,
-            title=topic_info.get("badge_title", f"Verified {attempt.topic.title()} Specialist"),
+            title=topic_metadata.badge_title if topic_metadata else topic_info.get("badge_title", f"Verified {attempt.topic.title()} Specialist"),
             level=_badge_level(weighted_percentage),
             score=score,
             attempt_id=attempt.id,
@@ -1483,9 +1515,15 @@ async def get_skill_assessment_stats(user: admin_only, db: DbSession) -> list[di
             credit, _, _ = _answer_credit(answer, snapshot, order)
             tally[1] += 1
             tally[0] += credit
-    topics = sorted(set(TOPIC_INFO) | {question.topic for question in questions})
+    topic_metadata = {
+        topic.slug: topic
+        for topic in await db.scalars(select(SkillTopic))
+    }
+    topics = sorted(set(TOPIC_INFO) | {question.topic for question in questions} | set(topic_metadata))
     stats = []
     for topic in topics:
+        metadata = topic_metadata.get(topic)
+        defaults = TOPIC_INFO.get(topic, {})
         topic_attempts = attempts_by_topic.get(topic, [])
         topic_questions = [question for question in questions if question.topic == topic]
         active_by_difficulty = {
@@ -1521,6 +1559,11 @@ async def get_skill_assessment_stats(user: admin_only, db: DbSession) -> list[di
         )[:5]
         stats.append({
             "topic": topic,
+            "name": metadata.name if metadata else defaults.get("name", topic.replace("-", " ").replace("_", " ").title()),
+            "description": metadata.description if metadata else defaults.get("description", "Show what you know and build a verified skill."),
+            "icon": metadata.icon if metadata else defaults.get("icon", "✦"),
+            "badge_title": metadata.badge_title if metadata else defaults.get("badge_title", f"Verified {topic.title()} Specialist"),
+            "active": metadata.active if metadata else True,
             "attempts": len(topic_attempts),
             "pass_rate": (
                 round(100 * sum(bool(attempt.passed) for attempt in topic_attempts) / len(topic_attempts))
@@ -1554,3 +1597,180 @@ async def get_skill_assessment_stats(user: admin_only, db: DbSession) -> list[di
             ],
         })
     return stats
+
+
+@router.get("/admin/topics")
+async def list_admin_skill_topics(user: admin_only, db: DbSession) -> list[dict[str, Any]]:
+    """Return persisted topic metadata with question-pool and attempt analytics."""
+    stats = await get_skill_assessment_stats(user, db)
+    await write_audit(
+        db,
+        user,
+        "admin_viewed_skill_topics",
+        "skill_topic",
+        None,
+        metadata={"topic_count": len(stats)},
+    )
+    await db.commit()
+    return stats
+
+
+@router.patch("/admin/topics/{topic}")
+async def update_admin_skill_topic(
+    topic: str,
+    data: SkillTopicUpdate,
+    user: admin_only,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Create or update a topic's display metadata and availability."""
+    slug = topic.strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,99}", slug):
+        raise HTTPException(422, "Topic slug must use lowercase letters, numbers, '-' or '_'")
+    metadata = await db.get(SkillTopic, slug)
+    if metadata is None:
+        defaults = TOPIC_INFO.get(slug, {})
+        metadata = SkillTopic(
+            slug=slug,
+            name=defaults.get("name", slug.replace("-", " ").replace("_", " ").title()),
+            description=defaults.get("description", "Show what you know and build a verified skill."),
+            icon=defaults.get("icon", "✦"),
+            badge_title=defaults.get("badge_title", f"Verified {slug.title()} Specialist"),
+            active=True,
+        )
+        db.add(metadata)
+    changes = data.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        setattr(metadata, field, value)
+    await db.flush()
+    await write_audit(
+        db,
+        user,
+        "skill_topic_updated",
+        "skill_topic",
+        None,
+        metadata={"topic": slug, "fields": sorted(changes), "active": metadata.active},
+    )
+    await db.commit()
+    await db.refresh(metadata)
+    return {
+        "topic": metadata.slug,
+        "name": metadata.name,
+        "description": metadata.description,
+        "icon": metadata.icon,
+        "badge_title": metadata.badge_title,
+        "active": metadata.active,
+        "updated_at": metadata.updated_at,
+    }
+
+
+@router.get("/admin/topics/{topic}")
+async def get_admin_skill_topic(
+    topic: str,
+    user: admin_only,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Return one topic's analytics without exposing question answer keys."""
+    slug = topic.strip().lower()
+    topic_stats = next(
+        (item for item in await get_skill_assessment_stats(user, db) if item["topic"] == slug),
+        None,
+    )
+    if topic_stats is None:
+        raise HTTPException(404, "Skill topic not found")
+    await write_audit(
+        db,
+        user,
+        "admin_viewed_skill_topic",
+        "skill_topic",
+        None,
+        metadata={"topic": slug},
+    )
+    await db.commit()
+    return topic_stats
+
+
+@router.get("/admin/topics/{topic}/attempts")
+async def list_admin_skill_topic_attempts(
+    topic: str,
+    user: admin_only,
+    db: DbSession,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> dict[str, Any]:
+    """Return a paginated, answer-key-free attempt history for a topic."""
+    slug = topic.strip().lower()
+    query = select(SkillAttempt, User.email).join(User, User.id == SkillAttempt.student_id).where(
+        SkillAttempt.topic == slug
+    )
+    total = int(await db.scalar(
+        select(func.count(SkillAttempt.id)).where(SkillAttempt.topic == slug)
+    ) or 0)
+    rows = (await db.execute(
+        query.order_by(SkillAttempt.started_at.desc(), SkillAttempt.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )).all()
+    await write_audit(
+        db,
+        user,
+        "admin_viewed_skill_topic_attempts",
+        "skill_topic",
+        None,
+        metadata={"page": page, "page_size": page_size},
+    )
+    await db.commit()
+    return {
+        "items": [
+            {
+                "id": attempt.id,
+                "student_id": attempt.student_id,
+                "student_email": email,
+                "topic": attempt.topic,
+                "status": attempt.status,
+                "score": attempt.weighted_percentage,
+                "passed": attempt.passed,
+                "started_at": attempt.started_at,
+                "submitted_at": attempt.submitted_at,
+            }
+            for attempt, email in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+@router.get("/admin/attempts/{attempt_id}")
+async def get_admin_skill_attempt(
+    attempt_id: int,
+    user: admin_only,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Return safe attempt analytics for an administrator's attempt drill-down."""
+    attempt = await db.get(SkillAttempt, attempt_id)
+    if attempt is None:
+        raise HTTPException(404, "Assessment attempt not found")
+    student = await db.get(User, attempt.student_id)
+    await write_audit(
+        db,
+        user,
+        "admin_viewed_skill_attempt",
+        "skill_attempt",
+        attempt.id,
+        metadata={"topic": attempt.topic},
+    )
+    await db.commit()
+    return {
+        "id": attempt.id,
+        "student_id": attempt.student_id,
+        "student_email": student.email if student else None,
+        "topic": attempt.topic,
+        "status": attempt.status,
+        "score": attempt.weighted_percentage,
+        "passed": attempt.passed,
+        "level": attempt.level,
+        "percentile": attempt.percentile,
+        "subtopic_scores": attempt.subtopic_scores or {},
+        "started_at": attempt.started_at,
+        "submitted_at": attempt.submitted_at,
+    }
