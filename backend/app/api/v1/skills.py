@@ -22,6 +22,12 @@ from fastapi.responses import JSONResponse
 from app.api.v1.dependencies import DbSession, require_roles
 from app.models import Internship, Notification, SkillAttempt, SkillBadge, SkillLearningResource, SkillQuestion, SkillTopic, User, UserRole
 from app.services.audit import write_audit
+from app.services.question_import import (
+    MAX_IMPORT_FILE_SIZE,
+    build_question_import_template_csv,
+    build_question_import_template_xlsx,
+    parse_question_import_file,
+)
 from app.services.skill_badges import badge_matches_skill
 
 
@@ -92,6 +98,9 @@ class SkillQuestionCreate(BaseModel):
     difficulty: str = "MEDIUM"
     question_type: str = "SINGLE"
     source: str = Field(default="InternSphere curated assessment bank", max_length=500)
+    resource_title: str | None = None
+    resource_url: str | None = None
+    resource_subtopic: str | None = None
     active: bool = True
 
     @field_validator("topic", "prompt", "explanation")
@@ -162,6 +171,14 @@ class SkillQuestionCreate(BaseModel):
         if not result:
             raise ValueError("Source cannot be blank")
         return result
+
+    @field_validator("resource_title", "resource_url", "resource_subtopic")
+    @classmethod
+    def validate_optional_resource(cls, value: str | None) -> str | None:
+        """Accept optional learning-resource fields only when they are supplied as a complete set."""
+        if value is None:
+            return None
+        return value.strip()
 
 
 class SkillQuestionUpdate(BaseModel):
@@ -638,6 +655,7 @@ async def list_assessment_topics(user: student_only, db: DbSession) -> list[dict
             for difficulty, required in ASSESSMENT_MIX.items()
             if counts.get(difficulty, 0) < required
         ]
+        defaults = TOPIC_INFO.get(topic, {})
         topics.append({
             "id": topic,
             "name": metadata.name if metadata else defaults.get("name", topic.replace("-", " ").replace("_", " ").title()),
@@ -1171,9 +1189,28 @@ async def create_skill_question(
     values = data.model_dump()
     if values["correct_index"] is None:
         values["correct_index"] = values["correct_answers"][0]
+    resource_title = values.pop("resource_title", None)
+    resource_url = values.pop("resource_url", None)
+    resource_subtopic = values.pop("resource_subtopic", None)
     question = SkillQuestion(**values)
     db.add(question)
     await db.flush()
+    if resource_title is not None or resource_url is not None:
+        if not (resource_title and resource_url):
+            raise HTTPException(422, "Both resource title and URL are required when adding a learning resource")
+        resource_subtopic = (resource_subtopic or data.subtopic).strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", resource_subtopic):
+            raise HTTPException(422, "Resource subtopic must use lowercase letters, numbers, '-' or '_'")
+        resource_url = _validated_resource_url(resource_url)
+        resource = SkillLearningResource(
+            topic=data.topic.strip().lower(),
+            subtopic=resource_subtopic,
+            title=resource_title.strip(),
+            url=resource_url,
+            created_by_user_id=user.id,
+        )
+        db.add(resource)
+        await db.flush()
     await write_audit(
         db,
         user,
@@ -1287,78 +1324,145 @@ async def delete_skill_question(
     await db.commit()
 
 
+@router.get("/admin/questions/import/template")
+async def download_question_import_template(
+    format: str = "csv",
+) -> StreamingResponse:
+    """Download a starter CSV or XLSX import template with example rows."""
+    format_name = (format or "csv").strip().lower()
+    if format_name == "xlsx":
+        workbook = build_question_import_template_xlsx()
+        if workbook is None:
+            raise HTTPException(415, "XLSX template is unavailable because openpyxl is not installed")
+        return StreamingResponse(
+            iter([workbook]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": 'attachment; filename="skill-question-template.xlsx"'},
+        )
+    csv_bytes = build_question_import_template_csv()
+    return StreamingResponse(
+        iter([csv_bytes]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="skill-question-template.csv"'},
+    )
+
+
 @router.post("/admin/questions/import")
 async def import_skill_questions(
     user: admin_only,
     db: DbSession,
+    partial: bool = False,
     file: UploadFile = File(...),
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Parse and validate a question-bank import before creating its skill questions."""
-    if not (file.filename or "").lower().endswith(".csv"):
-        raise HTTPException(415, "Upload a CSV file")
-    raw = await file.read(2 * 1024 * 1024 + 1)
-    if len(raw) > 2 * 1024 * 1024:
-        raise HTTPException(413, "CSV file exceeds the 2 MB limit")
+    if not file.filename:
+        raise HTTPException(422, "A file is required for the import.")
+    raw = await file.read()
+    if len(raw) > MAX_IMPORT_FILE_SIZE:
+        raise HTTPException(413, "Question import file exceeds the 2 MB limit")
     try:
-        text = raw.decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(text))
-        required = {"topic", "prompt", "options", "explanation", "difficulty"}
-        if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
-            raise ValueError("CSV headers must include topic,prompt,options,correct_index,explanation,difficulty")
-        rows = list(reader)
-    except (UnicodeDecodeError, csv.Error, ValueError) as error:
-        raise HTTPException(422, f"Invalid CSV: {error}") from error
-    if not rows:
-        raise HTTPException(422, "CSV contains no questions")
+        result = parse_question_import_file(file.filename, raw)
+    except ValueError as error:
+        message = str(error)
+        status_code = 415 if "Supported formats" in message or "Unsupported file type" in message else 422
+        raise HTTPException(status_code, message) from error
 
-    questions: list[SkillQuestion] = []
+    if not result["rows"]:
+        raise HTTPException(422, "The uploaded file contains no question rows")
+
+    valid_questions: list[SkillQuestion] = []
+    created_resources: list[SkillLearningResource] = []
     seen_prompts: set[tuple[str, str]] = set()
-    for row_number, row in enumerate(rows, start=2):
+
+    for item in result["rows"]:
+        row_number = item["row"]
+        row = item["data"]
+        if item["errors"]:
+            result["errors"].extend({"row": row_number, "field": error["field"], "message": error["message"]} for error in item["errors"])
+            continue
+
         try:
-            raw_options = row["options"].strip()
-            options = json.loads(raw_options) if raw_options.startswith("[") else raw_options.split("|")
-            raw_correct_answers = row.get("correct_answers", "").strip()
-            correct_answers = json.loads(raw_correct_answers) if raw_correct_answers else None
-            raw_correct_index = row.get("correct_index", "").strip()
             model = SkillQuestionCreate(
                 topic=row["topic"],
                 subtopic=row.get("subtopic") or "fundamentals",
                 prompt=row["prompt"],
-                options=options,
-                correct_index=int(raw_correct_index) if raw_correct_index else None,
-                correct_answers=correct_answers,
-                explanation=row["explanation"],
-                difficulty=row["difficulty"] or "MEDIUM",
+                options=row["options"],
+                correct_index=row.get("correct_index"),
+                correct_answers=row.get("correct_answers"),
+                explanation=row.get("explanation") or "",
+                difficulty=row.get("difficulty") or "MEDIUM",
                 question_type=row.get("question_type") or "SINGLE",
-                source=row.get("source") or "Admin CSV import",
-                active=row.get("active", "true").strip().lower() not in {"0", "false", "no", "off"},
+                source=row.get("source") or "Admin bulk import",
+                resource_title=row.get("resource_title"),
+                resource_url=row.get("resource_url"),
+                resource_subtopic=row.get("resource_subtopic"),
+                active=row.get("active", True),
             )
             _validate_question(model.options, model.correct_index, model.correct_answers, model.question_type)
-            values = model.model_dump()
-            if values["correct_index"] is None:
-                values["correct_index"] = values["correct_answers"][0]
+            if model.correct_index is None:
+                if not model.correct_answers:
+                    raise HTTPException(422, "A valid correct answer is required")
+                model.correct_index = model.correct_answers[0]
             key = (model.topic, model.prompt.casefold())
             if key in seen_prompts:
-                raise HTTPException(409, "Duplicate topic and prompt in this CSV")
+                result["skipped_duplicates"] += 1
+                continue
             seen_prompts.add(key)
             await _assert_unique_prompt(db, model.topic, model.prompt)
-            questions.append(SkillQuestion(**values))
-        except (KeyError, TypeError, ValueError, HTTPException) as error:
-            detail = error.detail if isinstance(error, HTTPException) else str(error)
-            raise HTTPException(422, f"CSV row {row_number}: {detail}") from error
+            values = model.model_dump()
+            values.pop("resource_title", None)
+            values.pop("resource_url", None)
+            values.pop("resource_subtopic", None)
+            question = SkillQuestion(**values)
+            valid_questions.append(question)
+            if model.resource_title and model.resource_url:
+                created_resources.append(SkillLearningResource(
+                    topic=model.topic,
+                    subtopic=(model.resource_subtopic or model.subtopic).strip().lower(),
+                    title=model.resource_title.strip(),
+                    url=_validated_resource_url(model.resource_url),
+                    created_by_user_id=user.id,
+                ))
+        except (TypeError, ValueError, HTTPException) as error:
+            result["errors"].append({
+                "row": row_number,
+                "field": "question",
+                "message": error.detail if isinstance(error, HTTPException) else str(error),
+            })
 
-    db.add_all(questions)
+    if result["errors"] and not partial:
+        result["imported"] = 0
+        raise HTTPException(422, "One or more question rows are invalid. Review the row errors and try again.")
+
+    if not valid_questions:
+        result["imported"] = 0
+        return result
+
+    db.add_all(valid_questions)
     await db.flush()
+    for resource in created_resources:
+        existing = await db.scalar(
+            select(SkillLearningResource.id).where(
+                SkillLearningResource.topic == resource.topic,
+                SkillLearningResource.subtopic == resource.subtopic,
+                SkillLearningResource.url == resource.url,
+            )
+        )
+        if existing is None:
+            db.add(resource)
+    await db.flush()
+    audit_target = valid_questions[0].id if valid_questions else None
     await write_audit(
         db,
         user,
         "skill_questions_imported",
         "skill_question",
-        questions[0].id,
-        metadata={"count": len(questions), "topics": sorted({question.topic for question in questions})},
+        audit_target,
+        metadata={"count": len(valid_questions), "topics": sorted({question.topic for question in valid_questions})},
     )
     await db.commit()
-    return {"imported": len(questions)}
+    result["imported"] = len(valid_questions)
+    return result
 
 
 def _validated_resource_url(url: str) -> str:

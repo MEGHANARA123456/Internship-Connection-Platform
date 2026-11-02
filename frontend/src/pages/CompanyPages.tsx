@@ -94,11 +94,10 @@ export function CompanyPortalShell() {
         onClick={() => setDrawerOpen(false)}
         title={compact ? label : undefined}
         aria-current={selected ? 'page' : undefined}
-        className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
-          selected
+        className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${selected
             ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300'
             : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-        }`}
+          }`}
       >
         <Icon className="h-4 w-4 shrink-0" />
         {!compact && <span className="min-w-0 flex-1 truncate">{label}</span>}
@@ -266,7 +265,8 @@ export function CompanyOverviewPage() {
               ? 'Future interviews in SCHEDULED or RESCHEDULED status.'
               : `Current ${label.toLowerCase()} count.`)}
           />
-        ))}
+          )
+        })}
       </div>
       <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <Card className="bg-white p-5 dark:bg-slate-900">
@@ -736,7 +736,7 @@ export function CompanyJobsPage() {
       await api.post(`/internships/${jobId}/submit`)
       fetchJobs()
     } catch {
-      showToast('Failed to submit internship for approval.', 'error')
+      showToast('Failed to submit internship for approval,not approved yet.', 'error')
     } finally {
       setSubmittingId(null)
     }
@@ -782,11 +782,10 @@ export function CompanyJobsPage() {
       />
 
       {companyProfile && companyProfile.verification_status !== 'VERIFIED' && (
-        <div role="status" className={`mb-6 flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${
-          companyProfile.verification_status === 'REJECTED'
+        <div role="status" className={`mb-6 flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${companyProfile.verification_status === 'REJECTED'
             ? 'border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200'
             : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200'
-        }`}>
+          }`}>
           <div>
             <p className="text-sm font-semibold">
               {companyProfile.verification_status === 'REJECTED' ? 'Company verification needs attention' : 'Company verification is pending'}
@@ -1559,22 +1558,20 @@ export function JobApplicantsPage() {
           <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-800 p-0.5 bg-slate-100 dark:bg-slate-800 text-xs">
             <button
               onClick={() => setViewMode('kanban')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${
-                viewMode === 'kanban'
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${viewMode === 'kanban'
                   ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-              }`}
+                }`}
             >
               <Kanban className="w-3.5 h-3.5" />
               Kanban
             </button>
             <button
               onClick={() => setViewMode('table')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${
-                viewMode === 'table'
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${viewMode === 'table'
                   ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-              }`}
+                }`}
             >
               <LayoutList className="w-3.5 h-3.5" />
               Table
@@ -1654,11 +1651,10 @@ export function JobApplicantsPage() {
             <button
               type="button"
               onClick={() => setMobileStageFilter('ALL')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-colors cursor-pointer ${
-                mobileStageFilter === 'ALL'
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-colors cursor-pointer ${mobileStageFilter === 'ALL'
                   ? 'bg-indigo-600 text-white shadow-2xs'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-              }`}
+                }`}
             >
               All Stages ({applicants.length})
             </button>
@@ -1669,11 +1665,10 @@ export function JobApplicantsPage() {
                   key={s.id}
                   type="button"
                   onClick={() => setMobileStageFilter(s.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-colors flex items-center gap-1.5 cursor-pointer ${
-                    mobileStageFilter === s.id
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-colors flex items-center gap-1.5 cursor-pointer ${mobileStageFilter === s.id
                       ? 'bg-indigo-600 text-white shadow-2xs'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                  }`}
+                    }`}
                 >
                   <span>{s.title}</span>
                   <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/10 dark:bg-white/10 font-bold">{count}</span>
@@ -1690,90 +1685,87 @@ export function JobApplicantsPage() {
                   key={stage.id}
                   onDragOver={handleDragOver}
                   onDrop={(e) => handleDrop(e, stage.id)}
-                  className={`w-[86vw] sm:w-[320px] md:w-auto shrink-0 md:shrink snap-center rounded-2xl border-t-4 border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 p-3 min-h-[500px] flex flex-col space-y-3 transition-colors ${
-                    stage.color
-                  }`}
+                  className={`w-[86vw] sm:w-[320px] md:w-auto shrink-0 md:shrink snap-center rounded-2xl border-t-4 border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/60 p-3 min-h-[500px] flex flex-col space-y-3 transition-colors ${stage.color
+                    }`}
                 >
-                {/* Column Header */}
-                <div className="flex items-center justify-between pb-2 border-b border-slate-200/80 dark:border-slate-800">
-                  <span className="text-xs font-bold tracking-tight">{stage.title}</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">
-                    {stageApps.length}
-                  </span>
-                </div>
+                  {/* Column Header */}
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-200/80 dark:border-slate-800">
+                    <span className="text-xs font-bold tracking-tight">{stage.title}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">
+                      {stageApps.length}
+                    </span>
+                  </div>
 
-                {/* Column Cards */}
-                <div className="space-y-2.5 flex-1 overflow-y-auto">
-                  {stageApps.length === 0 ? (
-                    <div className="h-32 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-center text-[11px] text-slate-400 dark:text-slate-500 text-center p-2">
-                      Drop here to move
-                    </div>
-                  ) : (
-                    stageApps.map((app) => {
-                      const isSelected = selectedAppIds.has(app.id)
-                      return (
-                        <div
-                          key={app.id}
-                          draggable
-                          onDragStart={(e) => handleDragStart(e, app.id)}
-                          className={`group relative bg-white dark:bg-slate-800/90 rounded-xl p-3 border shadow-2xs hover:shadow-md transition-all cursor-grab active:cursor-grabbing ${
-                            draggedAppId === app.id ? 'opacity-40 scale-95' : ''
-                          } ${
-                            isSelected
-                              ? 'border-indigo-500 ring-2 ring-indigo-500/20'
-                              : 'border-slate-200/90 dark:border-slate-700 hover:border-indigo-400'
-                          }`}
-                        >
-                          {/* Top Row: Checkbox & Name */}
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => toggleSelectApp(app.id)}
-                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                              />
-                              <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                                {app.student_name || `Applicant #${app.student_id}`}
-                              </h4>
+                  {/* Column Cards */}
+                  <div className="space-y-2.5 flex-1 overflow-y-auto">
+                    {stageApps.length === 0 ? (
+                      <div className="h-32 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-center text-[11px] text-slate-400 dark:text-slate-500 text-center p-2">
+                        Drop here to move
+                      </div>
+                    ) : (
+                      stageApps.map((app) => {
+                        const isSelected = selectedAppIds.has(app.id)
+                        return (
+                          <div
+                            key={app.id}
+                            draggable
+                            onDragStart={(e) => handleDragStart(e, app.id)}
+                            className={`group relative bg-white dark:bg-slate-800/90 rounded-xl p-3 border shadow-2xs hover:shadow-md transition-all cursor-grab active:cursor-grabbing ${draggedAppId === app.id ? 'opacity-40 scale-95' : ''
+                              } ${isSelected
+                                ? 'border-indigo-500 ring-2 ring-indigo-500/20'
+                                : 'border-slate-200/90 dark:border-slate-700 hover:border-indigo-400'
+                              }`}
+                          >
+                            {/* Top Row: Checkbox & Name */}
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => toggleSelectApp(app.id)}
+                                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                />
+                                <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                                  {app.student_name || `Applicant #${app.student_id}`}
+                                </h4>
+                              </div>
+                              <GripVertical className="w-3.5 h-3.5 text-slate-300 dark:text-slate-600 opacity-0 group-hover:opacity-100 transition-opacity" />
                             </div>
-                            <GripVertical className="w-3.5 h-3.5 text-slate-300 dark:text-slate-600 opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </div>
 
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 truncate">
-                            {app.student_university || 'Student'}
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {(app.student_skills ?? []).slice(0, 5).map((skill: string) => <span key={skill} title={skill} className="max-w-24 truncate rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">{skill}</span>)}
-                            {(app.student_skills?.length ?? 0) > 5 && <span title={app.student_skills.join(', ')} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">+{app.student_skills.length - 5} more</span>}
-                            {app.match_score != null && <span title={app.match_explanation || undefined} className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">{Math.round(app.match_score)}% match</span>}
-                            {(app.verified_badges ?? []).map((badge: { id: number; topic: string; title: string; level: string }) => <span key={badge.id} title={`${badge.title} · ${badge.level}`} className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">Verified: {badge.topic}</span>)}
-                          </div>
-
-                          {app.cover_note && (
-                            <p className="text-[10px] text-slate-600 dark:text-slate-300 line-clamp-2 bg-slate-50 dark:bg-slate-900/80 p-1.5 rounded mt-2 border border-slate-100 dark:border-slate-800">
-                              "{app.cover_note}"
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 truncate">
+                              {app.student_university || 'Student'}
                             </p>
-                          )}
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {(app.student_skills ?? []).slice(0, 5).map((skill: string) => <span key={skill} title={skill} className="max-w-24 truncate rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">{skill}</span>)}
+                              {(app.student_skills?.length ?? 0) > 5 && <span title={app.student_skills.join(', ')} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">+{app.student_skills.length - 5} more</span>}
+                              {app.match_score != null && <span title={app.match_explanation || undefined} className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">{Math.round(app.match_score)}% match</span>}
+                              {(app.verified_badges ?? []).map((badge: { id: number; topic: string; title: string; level: string }) => <span key={badge.id} title={`${badge.title} · ${badge.level}`} className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">Verified: {badge.topic}</span>)}
+                            </div>
 
-                          <div className="mt-3 flex justify-end border-t border-slate-100 pt-2 dark:border-slate-700/60">
-                            <CandidateActions
-                              item={app}
-                              onReview={() => setReviewApplicant(app)}
-                              onNotes={() => void openApplicantNotes(app)}
-                              onMoveToReview={() => void handleUpdateStatus(app.id, 'UNDER_REVIEW')}
-                              onShortlist={() => void handleUpdateStatus(app.id, 'SHORTLISTED')}
-                              onSchedule={() => setActiveInterviewApp(app)}
-                              onSelect={() => void handleUpdateStatus(app.id, 'SELECTED')}
-                              onReject={() => void handleUpdateStatus(app.id, 'REJECTED')}
-                              disabled={updatingApplicationId === app.id}
-                            />
+                            {app.cover_note && (
+                              <p className="text-[10px] text-slate-600 dark:text-slate-300 line-clamp-2 bg-slate-50 dark:bg-slate-900/80 p-1.5 rounded mt-2 border border-slate-100 dark:border-slate-800">
+                                "{app.cover_note}"
+                              </p>
+                            )}
+
+                            <div className="mt-3 flex justify-end border-t border-slate-100 pt-2 dark:border-slate-700/60">
+                              <CandidateActions
+                                item={app}
+                                onReview={() => setReviewApplicant(app)}
+                                onNotes={() => void openApplicantNotes(app)}
+                                onMoveToReview={() => void handleUpdateStatus(app.id, 'UNDER_REVIEW')}
+                                onShortlist={() => void handleUpdateStatus(app.id, 'SHORTLISTED')}
+                                onSchedule={() => setActiveInterviewApp(app)}
+                                onSelect={() => void handleUpdateStatus(app.id, 'SELECTED')}
+                                onReject={() => void handleUpdateStatus(app.id, 'REJECTED')}
+                                disabled={updatingApplicationId === app.id}
+                              />
+                            </div>
                           </div>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
+                        )
+                      })
+                    )}
+                  </div>
                 </div>
               )
             })}
@@ -1807,9 +1799,8 @@ export function JobApplicantsPage() {
                 return (
                   <tr
                     key={app.id}
-                    className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors ${
-                      isSelected ? 'bg-indigo-50/40 dark:bg-indigo-950/30' : ''
-                    }`}
+                    className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors ${isSelected ? 'bg-indigo-50/40 dark:bg-indigo-950/30' : ''
+                      }`}
                   >
                     <td className="p-3.5">
                       <input
@@ -2154,39 +2145,39 @@ export function CompanyProfilePage() {
               You have reached the five-document limit.
             </p>
           ) : (
-          <div className="flex flex-col gap-2 border-t border-slate-200 pt-3 sm:flex-row dark:border-slate-700">
-            <div className="relative flex-1">
-              <button
-                type="button"
-                aria-label="Document type to add"
-                aria-haspopup="menu"
-                aria-expanded={documentTypeMenuOpen}
-                onClick={() => setDocumentTypeMenuOpen((open) => !open)}
-                className="flex h-9 w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-              >
-                {documentTypeToAdd.replaceAll('_', ' ').toLowerCase().replace(/^\w/, (letter) => letter.toUpperCase())}
-                <ChevronDown className="h-3.5 w-3.5" />
-              </button>
-              {documentTypeMenuOpen && (
-                <div role="menu" aria-label="Document types" className="absolute left-0 top-full z-20 mt-1 w-full rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
-                  {[
-                    ['BUSINESS_REGISTRATION', 'Business registration'],
-                    ['GST_OR_PAN', 'GST or PAN'],
-                    ['AUTHORIZATION_LETTER', 'Authorization letter'],
-                    ['OTHER', 'Other'],
-                  ].map(([value, label]) => (
-                    <button key={value} type="button" role="menuitem" onClick={() => { setDocumentTypeToAdd(value); setDocumentTypeMenuOpen(false) }} className="w-full rounded-md px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
+            <div className="flex flex-col gap-2 border-t border-slate-200 pt-3 sm:flex-row dark:border-slate-700">
+              <div className="relative flex-1">
+                <button
+                  type="button"
+                  aria-label="Document type to add"
+                  aria-haspopup="menu"
+                  aria-expanded={documentTypeMenuOpen}
+                  onClick={() => setDocumentTypeMenuOpen((open) => !open)}
+                  className="flex h-9 w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                >
+                  {documentTypeToAdd.replaceAll('_', ' ').toLowerCase().replace(/^\w/, (letter) => letter.toUpperCase())}
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+                {documentTypeMenuOpen && (
+                  <div role="menu" aria-label="Document types" className="absolute left-0 top-full z-20 mt-1 w-full rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                    {[
+                      ['BUSINESS_REGISTRATION', 'Business registration'],
+                      ['GST_OR_PAN', 'GST or PAN'],
+                      ['AUTHORIZATION_LETTER', 'Authorization letter'],
+                      ['OTHER', 'Other'],
+                    ].map(([value, label]) => (
+                      <button key={value} type="button" role="menuitem" onClick={() => { setDocumentTypeToAdd(value); setDocumentTypeMenuOpen(false) }} className="w-full rounded-md px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                <UploadCloud className="h-3.5 w-3.5" /> Add document (max 5 MB)
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className="sr-only" aria-label="Add verification document" onChange={(event) => uploadVerificationDocument(documentTypeToAdd, event.target.files?.[0])} />
+              </label>
             </div>
-            <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
-              <UploadCloud className="h-3.5 w-3.5" /> Add document (max 5 MB)
-              <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className="sr-only" aria-label="Add verification document" onChange={(event) => uploadVerificationDocument(documentTypeToAdd, event.target.files?.[0])} />
-            </label>
-          </div>
           )}
         </CardContent>
       </Card>

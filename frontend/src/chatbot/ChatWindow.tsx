@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowDown, ArrowUp, Bot, Trash2, X } from 'lucide-react'
+import { ArrowUp, Bot, Minus, Trash2, X } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
 import { MessageList } from './MessageList'
 import { greetingForRole, suggestedQuestionsForPage } from './suggestions'
@@ -112,7 +112,7 @@ export function ChatWindow({ messages, typing, error, role, page, mode, online, 
             {!online ? 'Offline' : statusDisabled ? 'Disabled' : statusError ? 'Unavailable' : statusChecking ? 'Checking' : mode === 'retrieval' ? 'Help online' : 'Online'}
           </span>
           <button type="button" onClick={onClear} aria-label="Start a new conversation" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-slate-800"><Trash2 className="h-4 w-4" /></button>
-          <button type="button" onClick={onClose} aria-label="Minimize chat" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-slate-800"><ArrowDown className="h-4 w-4" /></button>
+          <button type="button" onClick={onClose} aria-label="Minimize chat" title="Minimize chat" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-slate-800"><Minus className="h-4 w-4" /></button>
           <button type="button" onClick={onClose} aria-label="Close chat" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-slate-800"><X className="h-4 w-4" /></button>
         </div>
       </header>

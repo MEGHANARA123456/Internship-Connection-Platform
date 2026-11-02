@@ -14,6 +14,7 @@ from app.main import app
 from app.models import SkillAttempt, SkillBadge, SkillQuestion, User, UserRole
 from app.models.base import Base
 from app.api.v1.skills import _badge_level
+from app.services.question_import import parse_question_import_file
 from app.services.skill_badges import apply_verified_badge_boost
 
 
@@ -494,3 +495,21 @@ def test_assessment_level_boundaries() -> None:
     assert _badge_level(60) == "Intermediate"
     assert _badge_level(79.99) == "Intermediate"
     assert _badge_level(80) == "Advanced"
+
+
+def test_question_import_parser_accepts_alias_headers_and_validates_bad_rows() -> None:
+    csv_payload = b"""topic,question,choices,answer,explanation,difficulty,question_type\npython,What is the capital of France?,\"Paris|Berlin|Rome\",0,France is a country in Europe,medium,SINGLE\npython,This row is invalid,\"One|Two\",9,Missing valid answer,medium,SINGLE\n"""
+    parsed = parse_question_import_file("questions.csv", csv_payload)
+
+    assert len(parsed["rows"]) == 2
+    assert parsed["rows"][0]["data"]["topic"] == "python"
+    assert parsed["rows"][0]["data"]["prompt"] == "What is the capital of France?"
+    assert parsed["rows"][0]["data"]["options"] == ["Paris", "Berlin", "Rome"]
+    assert parsed["rows"][1]["errors"]
+    assert any(error["field"] == "correct_index" for error in parsed["rows"][1]["errors"])
+
+    json_payload = b'{"questions":[{"topic":"react","question":"Which hook tracks state?","options":["useMemo","useState","useEffect"],"answer":"B","explanation":"useState manages component state.","difficulty":"easy","question_type":"SINGLE"}]}'
+    parsed_json = parse_question_import_file("questions.json", json_payload)
+
+    assert len(parsed_json["rows"]) == 1
+    assert parsed_json["rows"][0]["data"]["correct_index"] == 1

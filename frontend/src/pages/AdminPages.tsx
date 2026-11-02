@@ -176,7 +176,7 @@ export function AdminDashboardPage() {
       {/* KPI Metrics Grid */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
         {[
-          { label: 'Total users', value: stats.usersCount, caption: `${stats.studentsCount} students · ${stats.companiesCount} companies`, href: routes.adminUsers(), icon: <Users className="h-4 w-4" />, info: 'Total accounts currently registered.' },
+          { label: 'Total users', value: stats.usersCount, caption: <><Link to={routes.adminStudents()} onClick={(event) => event.stopPropagation()} className="underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">{stats.studentsCount} students</Link> · <Link to={routes.adminCompanies} onClick={(event) => event.stopPropagation()} className="underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">{stats.companiesCount} companies</Link></>, href: routes.adminUsers(), icon: <Users className="h-4 w-4" />, info: 'Total accounts currently registered.' },
           { label: 'Verifications', value: stats.unverifiedCompanies, caption: 'Pending review', href: routes.adminVerifications, icon: <ShieldCheck className="h-4 w-4" />, info: 'Company profiles awaiting verification.' },
           { label: 'Job queue', value: stats.pendingJobs, caption: 'Pending approval', href: routes.adminModeration, icon: <Briefcase className="h-4 w-4" />, info: 'Internships awaiting moderation.' },
           { label: 'Disputes', value: stats.openReports, caption: stats.openReports ? 'Open reports' : 'No open reports', href: routes.adminReports(), icon: <AlertTriangle className="h-4 w-4" />, info: 'Reports currently in the open state.' },
@@ -689,7 +689,7 @@ export function AdminUsersPage() {
                 {filtered.map((u) => (
                   <tr key={u.id} className="cursor-pointer hover:bg-slate-50/50 dark:hover:bg-slate-800/50" onClick={() => openUserDetail(u.id)}>
                     <td className="p-3.5 font-medium text-slate-900 dark:text-slate-100">#{u.id}</td>
-                    <td className="p-3.5 font-semibold text-slate-800 dark:text-slate-200">{u.email}</td>
+                    <td className="p-3.5 font-semibold text-slate-800 dark:text-slate-200">{u.email}{u.role === 'STUDENT' && <Link to={routes.adminStudentDetail(u.id)} onClick={(event) => event.stopPropagation()} className="ml-2 text-[11px] font-semibold text-indigo-700 hover:underline dark:text-indigo-300">View profile</Link>}{u.role === 'COMPANY' && <Link to={routes.adminCompanyDetail(u.id)} onClick={(event) => event.stopPropagation()} className="ml-2 text-[11px] font-semibold text-indigo-700 hover:underline dark:text-indigo-300">View profile</Link>}</td>
                     <td className="p-3.5 text-center">
                       <UserTablePill tone={u.role === 'STUDENT' ? 'emerald' : u.role === 'COMPANY' ? 'indigo' : 'purple'}>{u.role}</UserTablePill>
                     </td>
@@ -1631,6 +1631,53 @@ export function AdminSkillAssessmentsPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [importPartial, setImportPartial] = useState(true)
+  const [importStatus, setImportStatus] = useState<{ imported: number; errors: Array<{ row?: number; field?: string; message?: string }> }>({ imported: 0, errors: [] })
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
+
+  const fieldClassName = (field: string, baseClass: string) => `${baseClass} ${validationErrors[field] ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-500/20' : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-500/20'}`
+  const ACCEPTED_IMPORT_TYPES = '.csv,.tsv,.txt,.json,.xlsx,.xls,.ods'
+
+  const clearFieldError = (field: string) => {
+    setValidationErrors((current) => {
+      if (!current[field]) return current
+      const next = { ...current }
+      delete next[field]
+      return next
+    })
+  }
+
+  const validateQuestionDraft = (nextDraft: typeof draft = draft) => {
+    const nextErrors: Record<string, string> = {}
+    if (!nextDraft.topic.trim()) nextErrors.topic = 'Topic is required.'
+    if (!nextDraft.subtopic.trim()) nextErrors.subtopic = 'Subtopic is required.'
+    if (!nextDraft.prompt.trim()) nextErrors.prompt = 'Question prompt is required.'
+    const optionLines = nextDraft.options.split(/\r?\n/).map((option) => option.trim()).filter(Boolean)
+    if (optionLines.length < 2) nextErrors.options = 'Add at least two answer options.'
+    if (!nextDraft.explanation.trim()) nextErrors.explanation = 'Explanation is required.'
+    if (nextDraft.question_type === 'MULTI') {
+      const indexes = nextDraft.correct_answers.split(',').map((value) => Number(value.trim())).filter((value) => Number.isInteger(value))
+      if (indexes.length === 0) nextErrors.correct_answers = 'Provide at least one valid correct-answer index.'
+    } else {
+      const indexValue = Number(nextDraft.correct_index)
+      if (!Number.isInteger(indexValue) || indexValue < 0 || indexValue >= optionLines.length) {
+        nextErrors.correct_index = 'Correct index must match one of the listed options.'
+      }
+    }
+    if (!nextDraft.source.trim()) nextErrors.source = 'Source is required.'
+    setValidationErrors(nextErrors)
+    return Object.keys(nextErrors).length === 0
+  }
+
+  const validateResourceDraft = (nextResourceDraft: typeof resourceDraft = resourceDraft) => {
+    const nextErrors: Record<string, string> = {}
+    if (!nextResourceDraft.topic.trim()) nextErrors.topic = 'Topic is required.'
+    if (!nextResourceDraft.title.trim()) nextErrors.title = 'Resource title is required.'
+    if (!nextResourceDraft.url.trim()) nextErrors.url = 'Resource URL is required.'
+    else if (!/^https?:\/\//i.test(nextResourceDraft.url.trim())) nextErrors.url = 'Use a valid http:// or https:// URL.'
+    setValidationErrors(nextErrors)
+    return Object.keys(nextErrors).length === 0
+  }
 
   const load = async () => {
     setLoading(true)
@@ -1657,6 +1704,7 @@ export function AdminSkillAssessmentsPage() {
   const resetDraft = () => {
     setDraft(EMPTY_SKILL_QUESTION)
     setEditingId(null)
+    setValidationErrors({})
   }
 
   const beginEdit = (question: AdminSkillQuestion) => {
@@ -1678,9 +1726,11 @@ export function AdminSkillAssessmentsPage() {
 
   const saveQuestion = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    setSaving(true)
     setError('')
     setSuccess('')
+    if (!validateQuestionDraft()) return
+
+    setSaving(true)
     const options = draft.options.split(/\r?\n/).map((option) => option.trim()).filter(Boolean)
     const payload = {
       topic: draft.topic.trim(),
@@ -1740,34 +1790,46 @@ export function AdminSkillAssessmentsPage() {
     }
   }
 
-  const importCsv = async (file: File | undefined) => {
+  const importQuestions = async (file: File | undefined) => {
     if (!file) return
     setError('')
     setSuccess('')
     const payload = new FormData()
     payload.append('file', file)
     try {
-      const response = await api.post('/skills/admin/questions/import', payload, {
+      const response = await api.post(`/skills/admin/questions/import${importPartial ? '?partial=true' : ''}`, payload, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
-      setSuccess(`${response.data.imported} questions imported and audit logged.`)
+      const imported = Number(response.data?.imported ?? 0)
+      const errors = Array.isArray(response.data?.errors) ? response.data.errors : []
+      if (errors.length > 0) {
+        setError(`${imported} questions were imported. ${errors.length} row(s) were skipped. Review the import results below.`)
+      } else {
+        setSuccess(`${imported} questions imported and audit logged.`)
+      }
+      setImportStatus({ imported, errors })
       await load()
     } catch (requestError) {
-      console.error('Unable to import skill assessment CSV.', requestError)
+      console.error('Unable to import skill assessment questions.', requestError)
       const detail = (requestError as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : 'CSV import failed. Check the headers, options, and answer index.')
+      const fallback = 'Question import failed. Check the file format, headers, options, and answer index.'
+      const message = typeof detail === 'string' ? detail : fallback
+      setError(message)
+      setImportStatus({ imported: 0, errors: [] })
     }
   }
 
   const resetResourceDraft = () => {
     setResourceDraft({ topic: '', subtopic: 'general', title: '', url: '' })
     setEditingResourceId(null)
+    setValidationErrors({})
   }
 
   const saveResource = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setError('')
     setSuccess('')
+    if (!validateResourceDraft()) return
     try {
       if (editingResourceId == null) {
         await api.post('/skills/admin/resources', resourceDraft)
@@ -1821,6 +1883,15 @@ export function AdminSkillAssessmentsPage() {
   const topics = Array.from(new Set(questions.map((question) => question.topic))).sort()
   const visibleQuestions = questions.filter((question) => !topicFilter || question.topic === topicFilter)
 
+  const downloadTemplate = async (format: 'csv' | 'xlsx' = 'csv') => {
+    try {
+      await downloadAuthenticatedFile(`/skills/admin/questions/import/template?format=${format}`, format === 'xlsx' ? 'skill-question-template.xlsx' : 'skill-question-template.csv')
+    } catch (requestError) {
+      console.error('Unable to download the import template.', requestError)
+      setError('The import template could not be downloaded.')
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1828,54 +1899,84 @@ export function AdminSkillAssessmentsPage() {
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Skill assessments</h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage server-graded question banks, imports, activation, and topic results.</p>
         </div>
-        <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
-          <Upload className="h-4 w-4" /> Import CSV
-          <input
-            type="file"
-            accept=".csv,text/csv"
-            className="sr-only"
-            aria-label="Import assessment questions from CSV"
-            onChange={(event) => {
-              void importCsv(event.target.files?.[0])
-              event.target.value = ''
-            }}
-          />
-        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => void downloadTemplate('csv')}>Download template</Button>
+          <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+            <Upload className="h-4 w-4" /> Import questions
+            <input
+              type="file"
+              accept={ACCEPTED_IMPORT_TYPES}
+              className="sr-only"
+              aria-label="Import assessment questions from a supported file type"
+              onChange={(event) => {
+                void importQuestions(event.target.files?.[0])
+                event.target.value = ''
+              }}
+            />
+          </label>
+          <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+            <input type="checkbox" checked={importPartial} onChange={(event) => setImportPartial(event.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+            Import valid rows only
+          </label>
+        </div>
       </header>
 
       <AdminSkillTopicsPanel />
 
       {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">{error}</p>}
       {success && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">{success}</p>}
+      {importStatus.errors.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="font-semibold">Import review</span>
+            <span>{importStatus.imported} imported</span>
+          </div>
+          <ul className="list-disc space-y-1 pl-5 text-xs">
+            {importStatus.errors.slice(0, 8).map((rowError, index) => (
+              <li key={`${rowError.row ?? 'row'}-${rowError.field ?? 'field'}-${index}`}>
+                {rowError.row != null ? `Row ${rowError.row}: ` : ''}{rowError.message || rowError.field || 'Unknown validation issue'}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <section aria-label="Assessment topic statistics" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {stats.map((item) => (
-          <Card key={item.topic} className="space-y-2 p-4 dark:bg-slate-900">
-            <h2 className="font-semibold text-slate-900 dark:text-white">{item.topic}</h2>
-            <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
-              <span>{item.attempts} attempts</span><span>{item.pass_rate}% passed</span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Average score: {item.average_score == null ? '—' : `${item.average_score}%`}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{item.active_questions} active questions</p>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Pools: {Object.entries(item.difficulty_pool_sizes).map(([difficulty, count]) => `${difficulty.toLowerCase()} ${count}`).join(' · ')}
-            </p>
-            {item.bank_warnings.map((warning) => (
-              <p key={warning} className="rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">{warning}</p>
-            ))}
-            {item.weakest_subtopics.length > 0 && (
-              <p className="text-[11px] text-slate-600 dark:text-slate-300">
-                Weakest: {item.weakest_subtopics.map((subtopic) => `${subtopic.subtopic} ${subtopic.average_percentage}%`).join(' · ')}
+        {stats.map((item) => {
+          const ready = item.bank_warnings.length === 0
+          return (
+            <Card key={item.topic} className="space-y-2 p-4 dark:bg-slate-900">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="font-semibold text-slate-900 dark:text-white">{item.topic}</h2>
+                <span
+                  className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${ready ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300' : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300'}`}
+                  title={ready ? 'Bank is ready for assessment use.' : item.bank_warnings.join(' • ')}
+                >
+                  {ready ? 'Ready' : 'Not ready'}
+                </span>
+              </div>
+              <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
+                <span>{item.attempts} attempts</span><span>{item.pass_rate}% passed</span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Average score: {item.average_score == null ? '—' : `${item.average_score}%`}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">{item.active_questions} active questions</p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Pools: {Object.entries(item.difficulty_pool_sizes).map(([difficulty, count]) => `${difficulty.toLowerCase()} ${count}`).join(' · ')}
               </p>
-            )}
-            {item.hardest_questions[0] && (
-              <p className="line-clamp-2 text-[11px] text-slate-600 dark:text-slate-300">
-                Hardest: {item.hardest_questions[0].prompt}
-                {item.hardest_questions[0].correct_rate != null ? ` (${item.hardest_questions[0].correct_rate}% correct)` : ' (not attempted)'}
-              </p>
-            )}
-          </Card>
-        ))}
+              {item.weakest_subtopics.length > 0 && (
+                <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                  Weakest: {item.weakest_subtopics.map((subtopic) => `${subtopic.subtopic} ${subtopic.average_percentage}%`).join(' · ')}
+                </p>
+              )}
+              {item.hardest_questions[0] && (
+                <p className="line-clamp-2 text-[11px] text-slate-600 dark:text-slate-300">
+                  Hardest: {item.hardest_questions[0].prompt}
+                  {item.hardest_questions[0].correct_rate != null ? ` (${item.hardest_questions[0].correct_rate}% correct)` : ' (not attempted)'}
+                </p>
+              )}
+            </Card>
+          )
+        })}
       </section>
 
       <Card className="p-4 dark:bg-slate-900">
@@ -1886,11 +1987,33 @@ export function AdminSkillAssessmentsPage() {
         <form onSubmit={(event) => void saveQuestion(event)} className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
             Topic ID
-            <input required value={draft.topic} onChange={(event) => setDraft((current) => ({ ...current, topic: event.target.value }))} placeholder="python" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+            <input
+              required
+              value={draft.topic}
+              aria-invalid={Boolean(validationErrors.topic)}
+              onChange={(event) => {
+                setDraft((current) => ({ ...current, topic: event.target.value }))
+                clearFieldError('topic')
+              }}
+              placeholder="python"
+              className={fieldClassName('topic', 'h-10 w-full rounded-lg bg-white px-3 text-sm dark:bg-slate-800')}
+            />
+            {validationErrors.topic && <span className="text-[11px] font-medium text-rose-600">{validationErrors.topic}</span>}
           </label>
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
             Subtopic ID
-            <input required value={draft.subtopic} onChange={(event) => setDraft((current) => ({ ...current, subtopic: event.target.value }))} placeholder="async-io" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+            <input
+              required
+              value={draft.subtopic}
+              aria-invalid={Boolean(validationErrors.subtopic)}
+              onChange={(event) => {
+                setDraft((current) => ({ ...current, subtopic: event.target.value }))
+                clearFieldError('subtopic')
+              }}
+              placeholder="async-io"
+              className={fieldClassName('subtopic', 'h-10 w-full rounded-lg bg-white px-3 text-sm dark:bg-slate-800')}
+            />
+            {validationErrors.subtopic && <span className="text-[11px] font-medium text-rose-600">{validationErrors.subtopic}</span>}
           </label>
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
             Difficulty
@@ -1902,28 +2025,88 @@ export function AdminSkillAssessmentsPage() {
           </label>
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300 md:col-span-2">
             Question
-            <Textarea required rows={2} value={draft.prompt} onChange={(event) => setDraft((current) => ({ ...current, prompt: event.target.value }))} />
+            <Textarea
+              required
+              rows={2}
+              value={draft.prompt}
+              error={validationErrors.prompt}
+              onChange={(event) => {
+                setDraft((current) => ({ ...current, prompt: event.target.value }))
+                clearFieldError('prompt')
+              }}
+            />
           </label>
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
             Answer options (one per line)
-            <Textarea required rows={4} value={draft.options} onChange={(event) => setDraft((current) => ({ ...current, options: event.target.value }))} />
+            <Textarea
+              required
+              rows={4}
+              value={draft.options}
+              error={validationErrors.options}
+              onChange={(event) => {
+                setDraft((current) => ({ ...current, options: event.target.value }))
+                clearFieldError('options')
+              }}
+            />
           </label>
           <div className="space-y-3">
             <label className="block space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
               {draft.question_type === 'MULTI' ? 'Correct option indexes (comma separated)' : 'Correct option index (starting at 0)'}
               {draft.question_type === 'MULTI' ? (
-                <input required value={draft.correct_answers} onChange={(event) => setDraft((current) => ({ ...current, correct_answers: event.target.value }))} placeholder="0, 2" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+                <input
+                  required
+                  value={draft.correct_answers}
+                  aria-invalid={Boolean(validationErrors.correct_answers)}
+                  onChange={(event) => {
+                    setDraft((current) => ({ ...current, correct_answers: event.target.value }))
+                    clearFieldError('correct_answers')
+                  }}
+                  placeholder="0, 2"
+                  className={fieldClassName('correct_answers', 'h-10 w-full rounded-lg bg-white px-3 text-sm dark:bg-slate-800')}
+                />
               ) : (
-                <input required type="number" min={0} value={draft.correct_index} onChange={(event) => setDraft((current) => ({ ...current, correct_index: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+                <input
+                  required
+                  type="number"
+                  min={0}
+                  value={draft.correct_index}
+                  aria-invalid={Boolean(validationErrors.correct_index)}
+                  onChange={(event) => {
+                    setDraft((current) => ({ ...current, correct_index: event.target.value }))
+                    clearFieldError('correct_index')
+                  }}
+                  className={fieldClassName('correct_index', 'h-10 w-full rounded-lg bg-white px-3 text-sm dark:bg-slate-800')}
+                />
               )}
+              {validationErrors.correct_index && <span className="mt-1 block text-[11px] font-medium text-rose-600">{validationErrors.correct_index}</span>}
+              {validationErrors.correct_answers && <span className="mt-1 block text-[11px] font-medium text-rose-600">{validationErrors.correct_answers}</span>}
             </label>
             <label className="block space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
               Explanation
-              <Textarea required rows={3} value={draft.explanation} onChange={(event) => setDraft((current) => ({ ...current, explanation: event.target.value }))} />
+              <Textarea
+                required
+                rows={3}
+                value={draft.explanation}
+                error={validationErrors.explanation}
+                onChange={(event) => {
+                  setDraft((current) => ({ ...current, explanation: event.target.value }))
+                  clearFieldError('explanation')
+                }}
+              />
             </label>
             <label className="block space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
               Source
-              <input required value={draft.source} onChange={(event) => setDraft((current) => ({ ...current, source: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+              <input
+                required
+                value={draft.source}
+                aria-invalid={Boolean(validationErrors.source)}
+                onChange={(event) => {
+                  setDraft((current) => ({ ...current, source: event.target.value }))
+                  clearFieldError('source')
+                }}
+                className={fieldClassName('source', 'h-10 w-full rounded-lg bg-white px-3 text-sm dark:bg-slate-800')}
+              />
+              {validationErrors.source && <span className="mt-1 block text-[11px] font-medium text-rose-600">{validationErrors.source}</span>}
             </label>
           </div>
           <div className="flex flex-wrap gap-2 md:col-span-2">
@@ -1972,19 +2155,62 @@ export function AdminSkillAssessmentsPage() {
         <form onSubmit={(event) => void saveResource(event)} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
             Topic ID
-            <input required disabled={editingResourceId != null} value={resourceDraft.topic} onChange={(event) => setResourceDraft((current) => ({ ...current, topic: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800" />
+            <input
+              required
+              disabled={editingResourceId != null}
+              value={resourceDraft.topic}
+              aria-invalid={Boolean(validationErrors.topic)}
+              onChange={(event) => {
+                setResourceDraft((current) => ({ ...current, topic: event.target.value }))
+                clearFieldError('topic')
+              }}
+              className={fieldClassName('topic', 'h-10 w-full rounded-lg bg-white px-3 text-sm disabled:opacity-60 dark:bg-slate-800')}
+            />
+            {validationErrors.topic && <span className="text-[11px] font-medium text-rose-600">{validationErrors.topic}</span>}
           </label>
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
             Subtopic ID
-            <input required disabled={editingResourceId != null} value={resourceDraft.subtopic} onChange={(event) => setResourceDraft((current) => ({ ...current, subtopic: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800" />
+            <input
+              required
+              disabled={editingResourceId != null}
+              value={resourceDraft.subtopic}
+              aria-invalid={Boolean(validationErrors.subtopic)}
+              onChange={(event) => {
+                setResourceDraft((current) => ({ ...current, subtopic: event.target.value }))
+                clearFieldError('subtopic')
+              }}
+              className={fieldClassName('subtopic', 'h-10 w-full rounded-lg bg-white px-3 text-sm disabled:opacity-60 dark:bg-slate-800')}
+            />
+            {validationErrors.subtopic && <span className="text-[11px] font-medium text-rose-600">{validationErrors.subtopic}</span>}
           </label>
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
             Title
-            <input required value={resourceDraft.title} onChange={(event) => setResourceDraft((current) => ({ ...current, title: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+            <input
+              required
+              value={resourceDraft.title}
+              aria-invalid={Boolean(validationErrors.title)}
+              onChange={(event) => {
+                setResourceDraft((current) => ({ ...current, title: event.target.value }))
+                clearFieldError('title')
+              }}
+              className={fieldClassName('title', 'h-10 w-full rounded-lg bg-white px-3 text-sm dark:bg-slate-800')}
+            />
+            {validationErrors.title && <span className="text-[11px] font-medium text-rose-600">{validationErrors.title}</span>}
           </label>
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
             HTTPS / HTTP URL
-            <input required type="url" value={resourceDraft.url} onChange={(event) => setResourceDraft((current) => ({ ...current, url: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+            <input
+              required
+              type="url"
+              value={resourceDraft.url}
+              aria-invalid={Boolean(validationErrors.url)}
+              onChange={(event) => {
+                setResourceDraft((current) => ({ ...current, url: event.target.value }))
+                clearFieldError('url')
+              }}
+              className={fieldClassName('url', 'h-10 w-full rounded-lg bg-white px-3 text-sm dark:bg-slate-800')}
+            />
+            {validationErrors.url && <span className="text-[11px] font-medium text-rose-600">{validationErrors.url}</span>}
           </label>
           <div className="flex gap-2 sm:col-span-2 lg:col-span-4">
             <Button type="submit" variant="primary" size="sm">{editingResourceId == null ? 'Add resource' : 'Save resource'}</Button>
