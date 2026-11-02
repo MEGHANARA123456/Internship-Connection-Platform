@@ -53,6 +53,8 @@ const quickLinks: Record<Exclude<NavigationRole, 'GUEST'>, Array<{ label: string
     { label: 'Skill assessments', url: routes.adminSkills },
     { label: 'Verifications', url: routes.adminVerifications },
     { label: 'Users', url: routes.adminUsers() },
+    { label: 'Students', url: routes.adminStudents() },
+    { label: 'Companies', url: routes.adminCompanies },
     { label: 'Audit Logs', url: routes.adminAuditLogs() },
   ],
 }

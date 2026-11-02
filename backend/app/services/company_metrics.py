@@ -3,7 +3,7 @@
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Application, Interview, Internship
@@ -11,6 +11,75 @@ from app.models import Application, Interview, Internship
 WITHDRAWN_STATUS = "WITHDRAWN"
 OFFER_STATUSES = ("SELECTED", "ACCEPTED")
 SCHEDULED_INTERVIEW_STATUSES = ("SCHEDULED", "RESCHEDULED")
+
+
+async def get_company_metrics_batch(
+    db: AsyncSession,
+    company_ids: list[int],
+) -> dict[int, dict[str, int]]:
+    """Return canonical company KPI counts for multiple companies with grouped queries."""
+    if not company_ids:
+        return {}
+    metrics: dict[int, dict[str, int]] = {
+        company_id: {
+            "total_roles": 0,
+            "active_roles": 0,
+            "total_applicants": 0,
+            "withdrawn_count": 0,
+            "shortlisted": 0,
+            "offers": 0,
+            "interviews_scheduled": 0,
+        }
+        for company_id in company_ids
+    }
+    role_rows = (await db.execute(
+        select(
+            Internship.company_id,
+            func.count(Internship.id),
+            func.sum(case(
+                (and_(Internship.status == "PUBLISHED", Internship.deadline >= date.today()), 1),
+                else_=0,
+            )),
+        )
+        .where(Internship.company_id.in_(company_ids))
+        .group_by(Internship.company_id)
+    )).all()
+    for company_id, total_roles, active_roles in role_rows:
+        metrics[int(company_id)]["total_roles"] = int(total_roles or 0)
+        metrics[int(company_id)]["active_roles"] = int(active_roles or 0)
+
+    status_rows = (await db.execute(
+        select(Internship.company_id, Application.status, func.count(Application.id))
+        .join(Application, Application.internship_id == Internship.id)
+        .where(Internship.company_id.in_(company_ids))
+        .group_by(Internship.company_id, Application.status)
+    )).all()
+    for company_id, status, count in status_rows:
+        row = metrics[int(company_id)]
+        if status == WITHDRAWN_STATUS:
+            row["withdrawn_count"] = int(count)
+            continue
+        row["total_applicants"] += int(count)
+        if status == "SHORTLISTED":
+            row["shortlisted"] += int(count)
+        if status in OFFER_STATUSES:
+            row["offers"] += int(count)
+
+    now = datetime.now(timezone.utc)
+    interview_rows = (await db.execute(
+        select(Internship.company_id, func.count(Interview.id))
+        .join(Application, Application.internship_id == Internship.id)
+        .join(Interview, Interview.application_id == Application.id)
+        .where(
+            Internship.company_id.in_(company_ids),
+            Interview.status.in_(SCHEDULED_INTERVIEW_STATUSES),
+            Interview.scheduled_at > now,
+        )
+        .group_by(Internship.company_id)
+    )).all()
+    for company_id, count in interview_rows:
+        metrics[int(company_id)]["interviews_scheduled"] = int(count)
+    return metrics
 
 
 async def get_company_metrics(

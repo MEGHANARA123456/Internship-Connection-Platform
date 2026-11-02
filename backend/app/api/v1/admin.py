@@ -2,19 +2,48 @@
 # Admin-only endpoints for managing users, reports, and system-wide operations.
 # -----------------------------------------------------------------------------
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from sqlalchemy import String, cast, exists, func, or_, select
+from sqlalchemy import String, case, cast, exists, func, or_, select
+from sqlalchemy.sql import ColumnElement
 
 from app.api.v1.dependencies import DbSession, require_roles
 from app.core.config import get_settings
 from app.core.security import hash_password_async
-from app.models import Application, AuditLog, CompanyDocument, CompanyProfile, Internship, Report, User, UserRole
+from app.models import (
+    Application,
+    AuditLog,
+    CompanyDocument,
+    CompanyProfile,
+    Internship,
+    Interview,
+    Report,
+    SkillAttempt,
+    SkillBadge,
+    User,
+    UserRole,
+)
 from app.models.user import StudentProfile
 from app.schemas.admin import (
+    AdminCompanyDetail,
+    AdminCompanyDocument,
+    AdminCompanyListItem,
+    AdminCompanyMetrics,
+    AdminCompanyPosting,
+    AdminCompanyProfile,
+    AdminDetailAccount,
+    AdminPage,
+    AdminSkillAttempt,
+    AdminSkillBadge,
+    AdminStudentApplication,
+    AdminStudentDetail,
+    AdminStudentInterview,
+    AdminStudentListItem,
+    AdminStudentProfile,
+    AdminVerificationEvent,
     AdminCreate,
     AdminUserDeletionRequest,
     AuditLogResponse,
@@ -31,6 +60,7 @@ from app.schemas.admin import (
     CompanyProfileBrief,
 )
 from app.services.audit import write_audit
+from app.services.company_metrics import get_company_metrics, get_company_metrics_batch
 from app.services.account_deletion import erase_user
 from app.services.email_validation import validate_email_format
 from app.services.mail import send_dev_email
@@ -56,6 +86,84 @@ def _get_ip(request: Request) -> str | None:
     if request.client:
         return request.client.host
     return None
+
+
+def _escaped_search_term(term: str) -> str:
+    """Escape SQL LIKE metacharacters so admin search treats them literally."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _search_words(query: str, fields: tuple[ColumnElement[Any], ...]) -> list[ColumnElement[bool]]:
+    """Require each query word to match at least one of the searchable fields."""
+    words = query.strip()[:100].split()
+    return [
+        or_(*(field.ilike(f"%{_escaped_search_term(word)}%", escape="\\") for field in fields))
+        for word in words
+    ]
+
+
+async def _audit_filter_usage(
+    db: Any,
+    actor: User,
+    action: str,
+    filter_names: list[str],
+) -> None:
+    """Record which filters were used without retaining search text or filter values."""
+    await write_audit(
+        db,
+        actor=actor,
+        action=action,
+        metadata={"filters": sorted(set(filter_names))},
+    )
+    await db.commit()
+
+
+async def _audit_detail_view(
+    db: Any,
+    actor: User,
+    action: str,
+    target_type: str,
+    target_id: int,
+    request: Request,
+) -> None:
+    """Audit sensitive detail views at most once per admin, target, and five minutes."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+    recent = await db.scalar(
+        select(AuditLog.id)
+        .where(
+            AuditLog.actor_id == actor.id,
+            AuditLog.action == action,
+            AuditLog.target_type == target_type,
+            AuditLog.target_id == target_id,
+            AuditLog.created_at >= cutoff,
+        )
+        .limit(1)
+    )
+    if recent is not None:
+        return
+    await write_audit(
+        db,
+        actor=actor,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        metadata={"user_id": target_id},
+        ip_address=_get_ip(request),
+    )
+    await db.commit()
+
+
+def _admin_account(user: User) -> AdminDetailAccount:
+    """Return only the account fields allowed in admin detail views."""
+    return AdminDetailAccount(
+        user_id=user.id,
+        email=user.email,
+        is_active=user.is_active,
+        is_verified=user.is_verified,
+        mfa_enabled=user.mfa_enabled,
+        suspended_at=user.suspended_at,
+        created_at=user.created_at,
+    )
 
 
 # ── Dashboard ────────────────────────────────────────────────────────────────
@@ -101,6 +209,248 @@ async def search_users(
     if not include_suspended:
         query = query.where(User.suspended_at.is_(None))
     return list(await db.scalars(query))
+
+
+@router.get("/students", response_model=AdminPage[AdminStudentListItem])
+async def list_admin_students(
+    db: DbSession,
+    user: admin_user,
+    request: Request,
+    q: str | None = Query(None, max_length=100),
+    verified: bool | None = None,
+    suspended: bool | None = None,
+    graduation_year: int | None = None,
+    university: str | None = Query(None, max_length=100),
+    created: str | None = Query(None, pattern="^this_month$"),
+    sort: str = "created_at",
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> AdminPage[AdminStudentListItem]:
+    """Return paginated students; counts are aggregated by grouped subqueries to avoid N+1 queries."""
+    app_counts = (
+        select(Application.student_id.label("student_id"), func.count(Application.id).label("count"))
+        .group_by(Application.student_id)
+        .subquery()
+    )
+    badge_counts = (
+        select(SkillBadge.student_id.label("student_id"), func.count(SkillBadge.id).label("count"))
+        .where(SkillBadge.expires_at > datetime.now(timezone.utc))
+        .group_by(SkillBadge.student_id)
+        .subquery()
+    )
+    query = (
+        select(
+            User,
+            StudentProfile,
+            func.coalesce(app_counts.c.count, 0).label("applications_count"),
+            func.coalesce(badge_counts.c.count, 0).label("badges_count"),
+        )
+        .outerjoin(StudentProfile, StudentProfile.user_id == User.id)
+        .outerjoin(app_counts, app_counts.c.student_id == User.id)
+        .outerjoin(badge_counts, badge_counts.c.student_id == User.id)
+        .where(User.role == UserRole.STUDENT)
+    )
+    count_query = (
+        select(func.count(User.id))
+        .outerjoin(StudentProfile, StudentProfile.user_id == User.id)
+        .where(User.role == UserRole.STUDENT)
+    )
+    if q and q.strip():
+        conditions = _search_words(
+            q,
+            (StudentProfile.full_name, User.email, StudentProfile.university, StudentProfile.major, StudentProfile.skills),
+        )
+        query = query.where(*conditions)
+        count_query = count_query.where(*conditions)
+    if verified is not None:
+        query = query.where(User.is_verified.is_(verified))
+        count_query = count_query.where(User.is_verified.is_(verified))
+    if suspended is not None:
+        condition = User.suspended_at.is_not(None) if suspended else User.suspended_at.is_(None)
+        query = query.where(condition)
+        count_query = count_query.where(condition)
+    if graduation_year is not None:
+        query = query.where(StudentProfile.graduation_year == graduation_year)
+        count_query = count_query.where(StudentProfile.graduation_year == graduation_year)
+    if university and university.strip():
+        university_condition = StudentProfile.university.ilike(
+            f"%{_escaped_search_term(university.strip()[:100])}%", escape="\\"
+        )
+        query = query.where(university_condition)
+        count_query = count_query.where(university_condition)
+    if created == "this_month":
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        query = query.where(User.created_at >= month_start)
+        count_query = count_query.where(User.created_at >= month_start)
+
+    sort_fields: dict[str, ColumnElement[Any]] = {
+        "created_at": User.created_at,
+        "full_name": StudentProfile.full_name,
+        "email": User.email,
+        "university": StudentProfile.university,
+        "major": StudentProfile.major,
+        "graduation_year": StudentProfile.graduation_year,
+        "applications_count": func.coalesce(app_counts.c.count, 0),
+        "badges_count": func.coalesce(badge_counts.c.count, 0),
+    }
+    if sort not in sort_fields:
+        raise HTTPException(422, detail="Unsupported student sort field")
+    sort_column = sort_fields[sort]
+    query = query.order_by(
+        (sort_column.asc() if order == "asc" else sort_column.desc()),
+        User.id.asc(),
+    ).offset((page - 1) * page_size).limit(page_size)
+    rows = (await db.execute(query)).all()
+    total = int(await db.scalar(count_query) or 0)
+    filter_names = [
+        key for key, value in {
+            "q": q,
+            "verified": verified,
+            "suspended": suspended,
+            "graduation_year": graduation_year,
+            "university": university,
+            "created": created,
+        }.items() if value is not None and value != ""
+    ]
+    await _audit_filter_usage(db, user, "admin_listed_students", filter_names)
+    items = [
+        AdminStudentListItem(
+            user_id=account.id,
+            full_name=profile.full_name if profile else None,
+            email=account.email,
+            university=profile.university if profile else None,
+            major=profile.major if profile else None,
+            graduation_year=profile.graduation_year if profile else None,
+            skills=[skill.strip() for skill in (profile.skills or "").split(",") if skill.strip()][:3] if profile else [],
+            is_verified=account.is_verified,
+            suspended_at=account.suspended_at,
+            created_at=account.created_at,
+            applications_count=int(applications_count),
+            badges_count=int(badges_count),
+            avatar_url=profile.avatar_url if profile else None,
+        )
+        for account, profile, applications_count, badges_count in rows
+    ]
+    return AdminPage(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.get("/students/{user_id}", response_model=AdminStudentDetail)
+async def get_admin_student_detail(
+    user_id: int,
+    db: DbSession,
+    user: admin_user,
+    request: Request,
+) -> AdminStudentDetail:
+    """Return a student detail view without credentials, assessment answers, or question snapshots."""
+    student = await db.get(User, user_id)
+    if student is None or student.role != UserRole.STUDENT:
+        raise HTTPException(404, detail="Student not found")
+    await _audit_detail_view(db, user, "admin_viewed_student", "user", user_id, request)
+    profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user_id))
+
+    applications_total = int(await db.scalar(
+        select(func.count(Application.id)).where(Application.student_id == user_id)
+    ) or 0)
+    application_rows = (await db.execute(
+        select(
+            Application.id,
+            Application.status,
+            Internship.title,
+            Internship.company_id,
+            CompanyProfile.company_name,
+            Application.created_at,
+        )
+        .join(Internship, Internship.id == Application.internship_id)
+        .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
+        .where(Application.student_id == user_id)
+        .order_by(Application.created_at.desc(), Application.id.desc())
+        .limit(50)
+    )).all()
+    interviews = (await db.execute(
+        select(
+            Interview.scheduled_at,
+            Interview.status,
+            Internship.title,
+            CompanyProfile.company_name,
+        )
+        .join(Application, Application.id == Interview.application_id)
+        .join(Internship, Internship.id == Application.internship_id)
+        .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
+        .where(Application.student_id == user_id)
+        .order_by(Interview.scheduled_at.desc(), Interview.id.desc())
+    )).all()
+    attempts = list(await db.scalars(
+        select(SkillAttempt)
+        .where(SkillAttempt.student_id == user_id, SkillAttempt.submitted_at.is_not(None))
+        .order_by(SkillAttempt.submitted_at.desc(), SkillAttempt.id.desc())
+        .limit(20)
+    ))
+    badges = list(await db.scalars(
+        select(SkillBadge)
+        .where(SkillBadge.student_id == user_id)
+        .order_by(SkillBadge.earned_at.desc(), SkillBadge.id.desc())
+    ))
+    audit_rows = list(await db.scalars(
+        select(AuditLog)
+        .where(AuditLog.target_type == "user", AuditLog.target_id == user_id)
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(10)
+    ))
+    now = datetime.now(timezone.utc)
+    return AdminStudentDetail(
+        account=_admin_account(student),
+        profile=AdminStudentProfile(
+            full_name=profile.full_name,
+            university=profile.university,
+            major=profile.major,
+            graduation_year=profile.graduation_year,
+            bio=profile.bio,
+            skills=profile.skills,
+            institution_email=profile.institution_email,
+            avatar_url=profile.avatar_url,
+            show_verified_badges=profile.show_verified_badges,
+        ) if profile else None,
+        applications=[
+            AdminStudentApplication(
+                id=row.id,
+                internship_title=row.title,
+                company_name=row.company_name or f"Company #{row.company_id}",
+                status=row.status,
+                created_at=row.created_at,
+            ) for row in application_rows
+        ],
+        applications_total=applications_total,
+        interviews=[
+            AdminStudentInterview(
+                date=row.scheduled_at,
+                status=row.status,
+                internship_title=row.title,
+                company_name=row.company_name or "Company",
+            ) for row in interviews
+        ],
+        assessment_attempts=[
+            AdminSkillAttempt(
+                topic=attempt.topic,
+                score=attempt.weighted_percentage if attempt.weighted_percentage is not None else attempt.score,
+                passed=attempt.passed,
+                submitted_at=attempt.submitted_at,
+            ) for attempt in attempts if attempt.submitted_at is not None
+        ],
+        badges=[
+            AdminSkillBadge(
+                topic=badge.topic,
+                title=badge.title,
+                level=badge.level,
+                score=badge.score,
+                issued_at=badge.earned_at,
+                expires_at=badge.expires_at,
+                valid=badge.expires_at > now,
+            ) for badge in badges
+        ],
+        recent_audit_events=[AuditLogResponse.model_validate(row) for row in audit_rows],
+    )
 
 
 @router.post("/admins", response_model=UserAdminResponse, status_code=201)
@@ -359,7 +709,7 @@ async def company_verification_documents(
 
 @router.get("/companies/{user_id}/documents/{document_id}/download")
 async def download_company_verification_document(
-    user_id: int, document_id: int, db: DbSession, user: admin_user
+    user_id: int, document_id: int, db: DbSession, user: admin_user, request: Request
 ) -> FileResponse:
     """Return the stored verification document file, or a not-found response when it is unavailable."""
     document = await db.scalar(
@@ -373,6 +723,16 @@ async def download_company_verification_document(
     path = company_document_path(document.stored_filename)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Company document file not found")
+    await write_audit(
+        db,
+        actor=user,
+        action="admin_downloaded_company_document",
+        target_type="company",
+        target_id=user_id,
+        metadata={"company_user_id": user_id, "document_id": document_id},
+        ip_address=_get_ip(request),
+    )
+    await db.commit()
     return FileResponse(path, media_type=document.content_type, filename=document.original_filename)
 
 
@@ -412,45 +772,270 @@ async def pending_verifications(db: DbSession, user: admin_user) -> list[dict]:
     return result
 
 
-@router.get("/companies", response_model=list[CompanyListItem])
+@router.get(
+    "/companies",
+    response_model=AdminPage[AdminCompanyListItem] | list[CompanyListItem],
+)
 async def list_all_companies(
     db: DbSession,
     user: admin_user,
-    search: str | None = None,
-    verification_status: str | None = None,
-) -> list[dict]:
-    """List all company profiles with posting counts."""
-    query = select(CompanyProfile).order_by(CompanyProfile.id.desc())
-    if search:
-        query = query.where(CompanyProfile.company_name.ilike(f"%{search}%"))
+    q: str | None = Query(None, max_length=100),
+    search: str | None = Query(None, max_length=100),
+    verification_status: str | None = Query(None, pattern="^(PENDING|VERIFIED|REJECTED)$"),
+    created: str | None = Query(None, pattern="^this_month$"),
+    sort: str = "created_at",
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    page: int | None = Query(None, ge=1),
+    page_size: int | None = Query(None, ge=1, le=100),
+) -> AdminPage[AdminCompanyListItem] | list[CompanyListItem]:
+    """Return paginated company rows with grouped role/applicant counts and a legacy array fallback."""
+    query_text = q if q is not None else search
+    role_counts = (
+        select(
+            Internship.company_id.label("company_id"),
+            func.count(Internship.id).label("posting_count"),
+            func.sum(case(
+                (
+                    (Internship.status == "PUBLISHED") & (Internship.deadline >= date.today()),
+                    1,
+                ),
+                else_=0,
+            )).label("active_roles"),
+        )
+        .group_by(Internship.company_id)
+        .subquery()
+    )
+    applicant_counts = (
+        select(
+            Internship.company_id.label("company_id"),
+            func.count(Application.id).label("total_applicants"),
+        )
+        .join(Application, Application.internship_id == Internship.id)
+        .where(Application.status != "WITHDRAWN")
+        .group_by(Internship.company_id)
+        .subquery()
+    )
+    query = (
+        select(
+            CompanyProfile,
+            User,
+            func.coalesce(role_counts.c.posting_count, 0).label("posting_count"),
+            func.coalesce(role_counts.c.active_roles, 0).label("active_roles"),
+            func.coalesce(applicant_counts.c.total_applicants, 0).label("total_applicants"),
+        )
+        .join(User, User.id == CompanyProfile.user_id)
+        .outerjoin(role_counts, role_counts.c.company_id == CompanyProfile.user_id)
+        .outerjoin(applicant_counts, applicant_counts.c.company_id == CompanyProfile.user_id)
+        .where(User.role == UserRole.COMPANY)
+    )
+    count_query = (
+        select(func.count(CompanyProfile.id))
+        .join(User, User.id == CompanyProfile.user_id)
+        .where(User.role == UserRole.COMPANY)
+    )
+    if query_text and query_text.strip():
+        conditions = _search_words(
+            query_text,
+            (
+                CompanyProfile.company_name,
+                CompanyProfile.industry,
+                CompanyProfile.location,
+                CompanyProfile.recruiter_contact_name,
+                CompanyProfile.recruiter_contact_email,
+            ),
+        )
+        query = query.where(*conditions)
+        count_query = count_query.where(*conditions)
     if verification_status:
         query = query.where(CompanyProfile.verification_status == verification_status)
-    profiles = list(await db.scalars(query))
+        count_query = count_query.where(CompanyProfile.verification_status == verification_status)
+    if created == "this_month":
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        query = query.where(User.created_at >= month_start)
+        count_query = count_query.where(User.created_at >= month_start)
 
-    # Batch fetch posting counts
-    company_user_ids = [p.user_id for p in profiles]
-    posting_counts: dict[int, int] = {}
-    if company_user_ids:
-        rows = (await db.execute(
-            select(Internship.company_id, func.count(Internship.id))
-            .where(Internship.company_id.in_(company_user_ids))
-            .group_by(Internship.company_id)
-        )).all()
-        posting_counts = {r[0]: r[1] for r in rows}
+    sort_fields: dict[str, ColumnElement[Any]] = {
+        "created_at": User.created_at,
+        "company_name": CompanyProfile.company_name,
+        "industry": CompanyProfile.industry,
+        "location": CompanyProfile.location,
+        "verification_status": CompanyProfile.verification_status,
+        "posting_count": func.coalesce(role_counts.c.posting_count, 0),
+        "active_roles": func.coalesce(role_counts.c.active_roles, 0),
+        "total_applicants": func.coalesce(applicant_counts.c.total_applicants, 0),
+    }
+    if sort not in sort_fields:
+        raise HTTPException(422, detail="Unsupported company sort field")
+    sort_column = sort_fields[sort]
+    query = query.order_by(
+        (sort_column.asc() if order == "asc" else sort_column.desc()),
+        CompanyProfile.user_id.asc(),
+    )
+    total = int(await db.scalar(count_query) or 0)
+    legacy_response = page is None and page_size is None
+    effective_page = page or 1
+    effective_page_size = page_size or 20
+    if not legacy_response:
+        query = query.offset((effective_page - 1) * effective_page_size).limit(effective_page_size)
+    company_rows = list(await db.execute(query))
 
-    return [
-        CompanyListItem(
-            id=p.id,
-            user_id=p.user_id,
-            company_name=p.company_name,
-            industry=p.industry,
-            website=p.website,
-            verification_status=p.verification_status,
-            verification_note=p.verification_note,
-            posting_count=posting_counts.get(p.user_id, 0),
+    user_ids = [profile.user_id for profile, _, _, _, _ in company_rows]
+    metrics_by_company = await get_company_metrics_batch(db, user_ids)
+    filter_names = [
+        key for key, value in {
+            "q": query_text,
+            "verification_status": verification_status,
+            "created": created,
+        }.items() if value is not None and value != ""
+    ]
+    await _audit_filter_usage(db, user, "admin_listed_companies", filter_names)
+    if legacy_response:
+        return [
+            CompanyListItem(
+                id=profile.id,
+                user_id=profile.user_id,
+                company_name=profile.company_name,
+                industry=profile.industry,
+                website=profile.website,
+                verification_status=profile.verification_status,
+                verification_note=profile.verification_note,
+                posting_count=int(postings),
+            )
+            for profile, _, postings, _, _ in company_rows
+        ]
+    return AdminPage(
+        items=[
+            AdminCompanyListItem(
+                user_id=profile.user_id,
+                company_name=profile.company_name,
+                industry=profile.industry,
+                location=profile.location,
+                company_size=profile.company_size,
+                verification_status=profile.verification_status,
+                posting_count=int(postings),
+                active_roles=metrics_by_company.get(profile.user_id, {}).get("active_roles", 0),
+                total_applicants=metrics_by_company.get(profile.user_id, {}).get("total_applicants", 0),
+                created_at=account.created_at,
+                suspended_at=account.suspended_at,
+            )
+            for profile, account, postings, active_roles, applicants in company_rows
+        ],
+        total=total,
+        page=effective_page,
+        page_size=effective_page_size,
+    )
+
+
+@router.get("/companies/{user_id}", response_model=AdminCompanyDetail)
+async def get_admin_company_detail(
+    user_id: int,
+    db: DbSession,
+    user: admin_user,
+    request: Request,
+) -> AdminCompanyDetail:
+    """Return company profile, canonical metrics, moderation history, documents, and postings."""
+    account = await db.get(User, user_id)
+    if account is None or account.role != UserRole.COMPANY:
+        raise HTTPException(404, detail="Company not found")
+    profile = await db.scalar(
+        select(CompanyProfile).where(CompanyProfile.user_id == user_id)
+    )
+    if profile is None:
+        raise HTTPException(404, detail="Company profile not found")
+    await _audit_detail_view(db, user, "admin_viewed_company", "company", user_id, request)
+
+    documents = list(await db.scalars(
+        select(CompanyDocument)
+        .where(CompanyDocument.company_id == user_id)
+        .order_by(CompanyDocument.created_at.desc(), CompanyDocument.id.desc())
+    ))
+    postings_total = int(await db.scalar(
+        select(func.count(Internship.id)).where(Internship.company_id == user_id)
+    ) or 0)
+    postings_rows = (await db.execute(
+        select(
+            Internship,
+            func.count(case((Application.status != "WITHDRAWN", Application.id))).label("applicant_count"),
         )
-        for p in profiles
-    ] # type: ignore
+        .outerjoin(Application, Application.internship_id == Internship.id)
+        .where(Internship.company_id == user_id)
+        .group_by(Internship.id)
+        .order_by(Internship.created_at.desc(), Internship.id.desc())
+        .limit(50)
+    )).all()
+    metric_values = await get_company_metrics(db, user_id)
+    verification_rows = list(await db.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.target_type == "company",
+            AuditLog.target_id == user_id,
+            AuditLog.action.in_(("company_verified", "company_rejected")),
+        )
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+    ))
+    recent_audit_rows = list(await db.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.target_id == user_id,
+            AuditLog.target_type.in_(("company", "user")),
+        )
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(10)
+    ))
+    return AdminCompanyDetail(
+        account=_admin_account(account),
+        profile=AdminCompanyProfile(
+            company_name=profile.company_name,
+            industry=profile.industry,
+            website=profile.website,
+            description=profile.description,
+            company_size=profile.company_size,
+            location=profile.location,
+            recruiter_contact_name=profile.recruiter_contact_name,
+            recruiter_contact_phone=profile.recruiter_contact_phone,
+            recruiter_contact_email=profile.recruiter_contact_email,
+            verification_status=profile.verification_status,
+            verification_note=profile.verification_note,
+        ),
+        documents=[
+            AdminCompanyDocument(
+                id=document.id,
+                document_type=document.document_type,
+                original_filename=document.original_filename,
+                file_size=document.file_size,
+                uploaded_at=document.created_at,
+            ) for document in documents
+        ],
+        postings=[
+            AdminCompanyPosting(
+                id=posting.id,
+                title=posting.title,
+                status=posting.status,
+                deadline=posting.deadline,
+                applicant_count=int(applicant_count),
+                created_at=posting.created_at,
+            ) for posting, applicant_count in postings_rows
+        ],
+        postings_total=postings_total,
+        metrics=AdminCompanyMetrics(
+            active_roles=metric_values["active_roles"],
+            total_internships=metric_values["total_roles"],
+            total_applicants=metric_values["total_applicants"],
+            shortlisted=metric_values["shortlisted"],
+            interviews_scheduled=metric_values["interviews_scheduled"],
+            offers=metric_values["offers"],
+        ),
+        verification_history=[
+            AdminVerificationEvent(
+                action=event.action,
+                actor_email=event.actor_email,
+                date=event.created_at,
+                reason=(event.metadata_ or {}).get("reason"),
+            ) for event in verification_rows
+        ],
+        recent_audit_events=[AuditLogResponse.model_validate(row) for row in recent_audit_rows],
+    )
 
 
 @router.post("/companies/{user_id}/verification")

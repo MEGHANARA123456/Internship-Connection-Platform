@@ -347,8 +347,8 @@ const KPI_CONFIG: Record<AnalyticsKind, KpiCardConfig[]> = {
   ],
   admin: [
     { label: 'Users signed up', key: 'users_signed_up', href: routes.adminUsers({ created: 'this_month' }), icon: <Users className="h-4 w-4" />, info: 'Accounts created since the start of the current UTC month.', sampleUnit: 'users' },
-    { label: 'Student signups', key: 'student_signups', href: routes.adminUsers({ role: 'student', created: 'this_month' }), icon: <Users className="h-4 w-4" />, info: 'Student accounts created this UTC calendar month.', sampleUnit: 'students' },
-    { label: 'Company signups', key: 'company_signups', href: routes.adminUsers({ role: 'company', created: 'this_month' }), icon: <Briefcase className="h-4 w-4" />, info: 'Company accounts created this UTC calendar month.', sampleUnit: 'companies' },
+    { label: 'Student signups', key: 'student_signups', href: routes.adminStudents({ created: 'this_month' }), icon: <Users className="h-4 w-4" />, info: 'Student accounts created this UTC calendar month.', sampleUnit: 'students' },
+    { label: 'Company signups', key: 'company_signups', href: routes.adminCompanies + '?created=this_month', icon: <Briefcase className="h-4 w-4" />, info: 'Company accounts created this UTC calendar month.', sampleUnit: 'companies' },
     { label: 'Admin actions', key: 'admin_actions', href: routes.adminAuditLogs({ range: '14d' }), icon: <Activity className="h-4 w-4" />, info: 'Audit log records created in the last 14 days.', sampleUnit: 'actions', period: 'Last 14 days' },
     { label: 'Pending verifications', key: 'pending_verifications', href: routes.adminVerifications, icon: <Check className="h-4 w-4" />, info: 'Company profiles currently awaiting verification.', sampleUnit: 'companies' },
     { label: 'Job queue', key: 'job_queue', href: routes.adminModeration, icon: <FileText className="h-4 w-4" />, info: 'Internships currently awaiting moderation.', sampleUnit: 'postings' },

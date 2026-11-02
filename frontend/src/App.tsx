@@ -154,10 +154,13 @@ const AdminUsersPage = lazy(async () => ({ default: (await adminPages()).AdminUs
 const AdminVerificationsPage = lazy(async () => ({ default: (await adminPages()).AdminVerificationsPage }))
 const AdminModerationPage = lazy(async () => ({ default: (await adminPages()).AdminModerationPage }))
 const AdminReportsPage = lazy(async () => ({ default: (await adminPages()).AdminReportsPage }))
-const AdminCompaniesPage = lazy(async () => ({ default: (await adminPages()).AdminCompaniesPage }))
 const AdminCompanyPostingsPage = lazy(async () => ({ default: (await adminPages()).AdminCompanyPostingsPage }))
 const AdminAuditLogsPage = lazy(async () => ({ default: (await adminPages()).AdminAuditLogsPage }))
 const AdminSkillAssessmentsPage = lazy(async () => ({ default: (await adminPages()).AdminSkillAssessmentsPage }))
+const AdminStudentsPage = lazy(async () => ({ default: (await import('./pages/admin/AdminStudentsPage')).AdminStudentsPage }))
+const AdminStudentDetailPage = lazy(async () => ({ default: (await import('./pages/admin/AdminStudentDetailPage')).AdminStudentDetailPage }))
+const AdminCompanyDirectoryPage = lazy(async () => ({ default: (await import('./pages/admin/AdminCompaniesPage')).AdminCompaniesPage }))
+const AdminCompanyDetailPage = lazy(async () => ({ default: (await import('./pages/admin/AdminCompanyDetailPage')).AdminCompanyDetailPage }))
 import { MobileViewSimulator } from './components/ui/MobileViewSimulator'
 const PrivacyPolicyPage = lazy(async () => ({ default: (await import('./pages/PrivacyPolicyPage')).PrivacyPolicyPage }))
 const PrivacySecurityPage = lazy(async () => ({ default: (await import('./pages/PrivacySecurityPage')).PrivacySecurityPage }))
@@ -265,7 +268,10 @@ export default function App() {
               <Route path={routes.adminVerifications} element={<AdminVerificationsPage />} />
               <Route path={routes.adminModeration} element={<AdminModerationPage />} />
               <Route path={routes.adminReports()} element={<AdminReportsPage />} />
-              <Route path={routes.adminCompanies} element={<AdminCompaniesPage />} />
+              <Route path={routes.adminStudents()} element={<AdminStudentsPage />} />
+              <Route path={routes.adminStudentDetailRoute} element={<AdminStudentDetailPage />} />
+              <Route path={routes.adminCompanies} element={<AdminCompanyDirectoryPage />} />
+              <Route path={routes.adminCompanyDetailRoute} element={<AdminCompanyDetailPage />} />
               <Route path={routes.adminCompanyPostingsRoute} element={<AdminCompanyPostingsPage />} />
               <Route path={routes.adminAuditLogsRoute} element={<AdminAuditLogsPage />} />
               <Route path={routes.adminSkills} element={<AdminSkillAssessmentsPage />} />

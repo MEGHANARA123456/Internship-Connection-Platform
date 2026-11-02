@@ -3,7 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { AdminAuditLogsPage } from '../AdminPages'
-import { AdminCompaniesPage } from '../AdminPages'
+import { AdminCompaniesPage } from '../admin/AdminCompaniesPage'
 import { AdminCompanyPostingsPage } from '../AdminPages'
 import { AdminUsersPage } from '../AdminPages'
 import { api } from '../../api/client'
@@ -155,24 +155,39 @@ describe('AdminAuditLogsPage', () => {
 describe('AdminCompaniesPage', () => {
   it('renders company list with verification badges', async () => {
     vi.mocked(api.get).mockResolvedValueOnce({
-      data: [
-        {
-          id: 10,
+      data: {
+        items: [
+          {
           user_id: 20,
           company_name: 'Acme Corp',
           industry: 'Technology',
           verification_status: 'VERIFIED',
           posting_count: 5,
-        },
-        {
-          id: 11,
+          active_roles: 2,
+          total_applicants: 10,
+          location: 'Remote',
+          company_size: '11-50',
+          created_at: '2025-01-01T00:00:00Z',
+          suspended_at: null,
+          },
+          {
           user_id: 21,
           company_name: 'Beta Ltd',
           industry: 'Finance',
           verification_status: 'PENDING',
           posting_count: 0,
-        },
-      ],
+          active_roles: 0,
+          total_applicants: 0,
+          location: null,
+          company_size: null,
+          created_at: '2025-01-01T00:00:00Z',
+          suspended_at: null,
+          },
+        ],
+        total: 2,
+        page: 1,
+        page_size: 20,
+      },
     })
 
     render(
@@ -182,9 +197,9 @@ describe('AdminCompaniesPage', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText('Acme Corp')).toBeDefined()
+      expect(screen.getAllByText('Acme Corp').length).toBeGreaterThan(0)
     })
-    expect(screen.getByText('Beta Ltd')).toBeDefined()
+    expect(screen.getAllByText('Beta Ltd').length).toBeGreaterThan(0)
     // VERIFIED badge
     expect(screen.getByText('VERIFIED')).toBeDefined()
     // PENDING badge
@@ -195,7 +210,7 @@ describe('AdminCompaniesPage', () => {
   })
 
   it('renders empty state when no companies', async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ data: [] })
+    vi.mocked(api.get).mockResolvedValueOnce({ data: { items: [], total: 0, page: 1, page_size: 20 } })
 
     render(
       <BrowserRouter>

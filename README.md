@@ -70,6 +70,9 @@ It combines a **FastAPI + PostgreSQL** backend with a **React + TypeScript** fro
 
 ### 🛡️ For Administrators
 - Verify companies and moderate internship listings
+- Browse paginated student and company directories, including applications, assessments, documents, and shared company metrics
+- Student and company profile views are audited; company document downloads are logged
+- Manage skill assessment topic metadata and review topic analytics and attempt histories
 - Suspend / reactivate users and handle user reports
 - **Audit logs** for every sensitive admin action
 - Analytics dashboard: user growth, application funnel by company, top companies, admin action volume
