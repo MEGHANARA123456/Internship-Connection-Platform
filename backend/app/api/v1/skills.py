@@ -36,14 +36,14 @@ ASSESSMENT_DURATION = timedelta(minutes=15)
 RETENTION_WINDOW = timedelta(days=7)
 PASS_PERCENTAGE = 80
 TOPIC_INFO: dict[str, dict[str, str]] = {
-    "python": {"name": "Python & Backend Architecture", "icon": "🐍", "badge_title": "Verified Python Specialist"},
-    "react": {"name": "React & Modern Frontend", "icon": "⚛️", "badge_title": "Verified React Pro"},
-    "sql": {"name": "SQL & Database Design", "icon": "🗄️", "badge_title": "Verified SQL Specialist"},
-    "dsa": {"name": "Data Structures & Algorithms", "icon": "🧮", "badge_title": "Verified DSA Problem Solver"},
-    "ai": {"name": "Machine Learning & AI Engineering", "icon": "🤖", "badge_title": "Verified AI/ML Engineer"},
-    "devops": {"name": "Cloud, Docker & DevOps", "icon": "☁️", "badge_title": "Verified Cloud & DevOps Specialist"},
-    "security": {"name": "Web Security & System Design", "icon": "🛡️", "badge_title": "Verified Security & Systems Pro"},
-    "typescript": {"name": "JavaScript & TypeScript Mastery", "icon": "🔷", "badge_title": "Verified TypeScript Specialist"},
+    "python": {"name": "Python & Backend Architecture", "icon": "🐍", "badge_title": "Verified Python Specialist", "description": "Build dependable Python services and backend systems."},
+    "react": {"name": "React & Modern Frontend", "icon": "⚛️", "badge_title": "Verified React Pro", "description": "Create responsive interfaces with modern React."},
+    "sql": {"name": "SQL & Database Design", "icon": "🗄️", "badge_title": "Verified SQL Specialist", "description": "Query, model, and reason about relational data."},
+    "dsa": {"name": "Data Structures & Algorithms", "icon": "🧮", "badge_title": "Verified DSA Problem Solver", "description": "Practice core structures, complexity, and algorithms."},
+    "ai": {"name": "Machine Learning & AI Engineering", "icon": "🤖", "badge_title": "Verified AI/ML Engineer", "description": "Explore machine learning concepts and practical AI."},
+    "devops": {"name": "Cloud, Docker & DevOps", "icon": "☁️", "badge_title": "Verified Cloud & DevOps Specialist", "description": "Understand cloud infrastructure and delivery workflows."},
+    "security": {"name": "Web Security & System Design", "icon": "🛡️", "badge_title": "Verified Security & Systems Pro", "description": "Apply secure design principles to web systems."},
+    "typescript": {"name": "JavaScript & TypeScript Mastery", "icon": "🔷", "badge_title": "Verified TypeScript Specialist", "description": "Strengthen typed JavaScript and application design."},
 }
 DIFFICULTIES = set(DIFFICULTY_WEIGHTS)
 QUESTION_TYPES = {"SINGLE", "MULTI", "TRUE_FALSE"}
@@ -596,20 +596,38 @@ async def _assert_unique_prompt(
 @router.get("/topics")
 async def list_assessment_topics(user: student_only, db: DbSession) -> list[dict[str, str]]:
     """List the configured assessment topics and their available question counts."""
-    topics = list(await db.scalars(
-        select(SkillQuestion.topic)
+    rows = (await db.execute(
+        select(SkillQuestion.topic, SkillQuestion.difficulty, func.count(SkillQuestion.id))
         .where(SkillQuestion.active.is_(True))
-        .distinct()
+        .group_by(SkillQuestion.topic, SkillQuestion.difficulty)
         .order_by(SkillQuestion.topic)
-    ))
-    return [
-        {
+    )).all()
+    counts_by_topic: dict[str, dict[str, int]] = {}
+    for topic, difficulty, count in rows:
+        counts_by_topic.setdefault(str(topic), {})[str(difficulty).upper()] = int(count)
+    topics = []
+    for topic, counts in counts_by_topic.items():
+        missing = [
+            f"{required - counts.get(difficulty, 0)} more active {difficulty.lower()} question(s)"
+            for difficulty, required in ASSESSMENT_MIX.items()
+            if counts.get(difficulty, 0) < required
+        ]
+        topics.append({
             "id": topic,
             "name": TOPIC_INFO.get(topic, {}).get("name", topic.replace("-", " ").replace("_", " ").title()),
             "icon": TOPIC_INFO.get(topic, {}).get("icon", "✦"),
-        }
-        for topic in topics
-    ]
+            "description": TOPIC_INFO.get(topic, {}).get("description", "Show what you know and build a verified skill."),
+            "question_counts": {
+                difficulty.lower(): counts.get(difficulty, 0)
+                for difficulty in ASSESSMENT_MIX
+            },
+            "available": not missing,
+            "unavailable_reason": None if not missing else "Add " + ", ".join(missing) + " to enable this topic.",
+            "question_count": ASSESSMENT_QUESTION_COUNT,
+            "duration_seconds": int(ASSESSMENT_DURATION.total_seconds()),
+            "pass_percentage": PASS_PERCENTAGE,
+        })
+    return topics
 
 
 @router.post("/assessments/start")
@@ -1081,10 +1099,12 @@ async def list_my_skill_attempts(user: student_only, db: DbSession) -> list[dict
             "weighted_percentage": attempt.weighted_percentage,
             "level": attempt.level,
             "attempt_number": attempt.attempt_number,
+            "status": attempt.status,
             "passed": attempt.passed,
             "started_at": attempt.started_at,
             "expires_at": attempt.expires_at,
             "submitted_at": attempt.submitted_at,
+            "subtopic_scores": attempt.subtopic_scores or {},
         }
         for attempt in attempts
     ]
