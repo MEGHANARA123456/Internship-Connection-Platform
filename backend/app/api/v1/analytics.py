@@ -29,6 +29,7 @@ from app.schemas.admin import (
 from app.services.ai import compute_explicit_eligibility_fit, compute_match, get_student_resume_text
 from app.services.analytics_domains import normalize_domain_rows
 from app.services.application_funnel import cumulative_student_application_counts
+from app.services.company_metrics import get_company_metrics
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 admin_only = Annotated[User, Depends(require_roles(UserRole.ADMIN))]# type: ignore
@@ -479,32 +480,35 @@ async def get_analytics_overview(
 
     elif role == "COMPANY" and user_id:
         # 2. Company hiring pipeline
-        company_jobs = (await db.scalars(select(Internship).where(Internship.company_id == user_id))).all()
-        job_ids = [j.id for j in company_jobs]
+        metrics = await get_company_metrics(db, user_id)
+        job_ids = [
+            role["id"]
+            for role in metrics["applications_by_role"]
+        ]
         company_summary = {
-            "active": sum(1 for job in company_jobs if job.status == "PUBLISHED"),
-            "closed": sum(1 for job in company_jobs if job.status == "CLOSED"),
-            "total_applications": int(
-                await db.scalar(
-                    select(func.count(Application.id))
-                    .join(Internship, Application.internship_id == Internship.id)
-                    .where(Internship.company_id == user_id)
-                )
-                or 0
+            "active": metrics["active_roles"],
+            "closed": sum(
+                role["status"] == "CLOSED"
+                for role in metrics["applications_by_role"]
             ),
+            "total_roles": metrics["total_roles"],
+            "total_applications": metrics["total_applicants"],
+            "withdrawn_applications": metrics["withdrawn_count"],
+            "shortlisted": metrics["shortlisted"],
+            "offers": metrics["offers"],
+            "interviews_scheduled": metrics["interviews_scheduled"],
         }
 
         if job_ids:
-            apps = (await db.scalars(select(Application).where(Application.internship_id.in_(job_ids)))).all()
-            funnel["applied"] = len(apps)
-            funnel["screened"] = sum(1 for a in apps if a.status != "REJECTED")
-            funnel["interviews"] = sum(1 for a in apps if a.status in {
-                "SHORTLISTED",
-                "INTERVIEW_SCHEDULED",
-                "SELECTED",
-                "ACCEPTED",
-            })
-            funnel["offers"] = sum(1 for a in apps if a.status in {"SELECTED", "ACCEPTED"})
+            status_counts = metrics["status_counts"]
+            funnel["applied"] = metrics["total_applicants"]
+            funnel["shortlisted"] = metrics["shortlisted"]
+            funnel["screened"] = sum(
+                status_counts.get(status, 0)
+                for status in ("UNDER_REVIEW", "SHORTLISTED", "INTERVIEW_SCHEDULED", "SELECTED", "ACCEPTED")
+            )
+            funnel["interviews"] = status_counts.get("INTERVIEW_SCHEDULED", 0)
+            funnel["offers"] = metrics["offers"]
 
             # Domain breakdown of company's open listings
             domain_query = (
@@ -566,6 +570,11 @@ async def get_analytics_overview(
     # Summary metrics
     has_activity = funnel["applied"] > 0 or len(domains) > 0
 
+    total_active_internships = (
+        company_summary["active"]
+        if company_summary is not None
+        else await db.scalar(select(func.count(Internship.id)).where(Internship.status == "PUBLISHED")) or 0
+    )
     return {
         "role": role,
         "has_activity": has_activity,
@@ -573,7 +582,7 @@ async def get_analytics_overview(
         "company_summary": company_summary,
         "domains": domains,
         "monthly_trends": monthly_trends,
-        "total_active_internships": await db.scalar(select(func.count(Internship.id)).where(Internship.status == "PUBLISHED")) or 0,
+        "total_active_internships": total_active_internships,
         "total_verified_students": await db.scalar(select(func.count(StudentProfile.id))) or 0,
         "total_companies": await db.scalar(select(func.count(CompanyProfile.id))) or 0,
     }

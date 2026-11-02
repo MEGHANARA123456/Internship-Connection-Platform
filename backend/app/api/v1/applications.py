@@ -20,6 +20,7 @@ from app.services.application_events import record_event, record_status_event, t
 from app.services.mail import visible_gmail_url
 from app.services.notify import dispatch_notification, notify
 from app.services.application_rules import check_eligibility
+from app.services.company_metrics import get_company_metrics
 from app.services.skill_badges import apply_verified_badge_boost, badge_response, get_valid_badges
 from app.schemas.application import (
     ApplicationCreate,
@@ -683,6 +684,8 @@ async def search_company_applications(
     )
     if status and status.upper() != "ALL":
         query = query.where(Application.status == status.upper())
+    else:
+        query = query.where(Application.status != "WITHDRAWN")
     if internship_id is not None:
         query = query.where(Internship.id == internship_id)
     if search and search.strip():
@@ -712,18 +715,24 @@ async def search_company_applications(
                 )
             )
         )
-    count_query = select(func.count()).select_from(query.order_by(None).subquery())
-    total = int(await db.scalar(count_query) or 0)
-    status_counts_query = (
-        select(Application.status, func.count(Application.id))
-        .join(Internship, Application.internship_id == Internship.id)
-        .where(Internship.company_id == user.id)
-        .group_by(Application.status)
-    )
-    status_counts = {
-        status_key: int(count)
-        for status_key, count in (await db.execute(status_counts_query)).all()
-    }
+    company_metrics = await get_company_metrics(db, user.id, internship_id)
+    has_extra_filters = any((
+        search and search.strip(),
+        date_from is not None,
+        date_to is not None,
+        created == "week",
+        skills and skills.strip(),
+        education and education.strip(),
+        verified_skill,
+    ))
+    if not has_extra_filters and not internship_id and status in (None, "", "ALL"):
+        total = company_metrics["total_applicants"]
+    elif not has_extra_filters and not internship_id and status and status.upper() == "SHORTLISTED":
+        total = company_metrics["shortlisted"]
+    else:
+        count_query = select(func.count()).select_from(query.order_by(None).subquery())
+        total = int(await db.scalar(count_query) or 0)
+    status_counts = company_metrics["all_status_counts"]
     if sort == "response_time":
         first_response_at = (
             select(func.min(ApplicationEvent.created_at))

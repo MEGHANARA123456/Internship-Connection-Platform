@@ -24,6 +24,7 @@ from app.services.ai import compute_explicit_eligibility_fit, compute_match, get
 from app.services.analytics_domains import normalize_domain_rows
 from app.services.application_funnel import cumulative_student_application_counts
 from app.services.audit import audit_action_label
+from app.services.company_metrics import company_metric_cards, get_company_metrics
 
 router = APIRouter(tags=["analytics"])
 dashboard_user = Annotated[User, Depends(require_roles(UserRole.COMPANY, UserRole.ADMIN))]# type: ignore
@@ -611,67 +612,28 @@ async def company_insights(
     role_scope = [Internship.company_id == user.id]
     if internship_id is not None:
         role_scope.append(Internship.id == internship_id)
-    total_roles = int(await db.scalar(select(func.count(Internship.id)).where(*role_scope)) or 0)
-    active_roles = int(await db.scalar(
-        select(func.count(Internship.id)).where(
-            *role_scope,
-            Internship.status.in_(ACTIVE_ROLE_STATUSES),
-        )
-    ) or 0)
+    metrics = await get_company_metrics(db, user.id, internship_id)
+    total_roles = metrics["total_roles"]
+    active_roles = metrics["active_roles"]
 
     cutoff = _cutoff(range_value)
-    status_query = (
-        select(Application.status, func.count(Application.id))
-        .join(Internship, Internship.id == Application.internship_id)
-        .where(*role_scope)
-    )
-    if cutoff is not None:
-        status_query = status_query.where(Application.created_at >= cutoff)
-    status_rows = (await db.execute(status_query.group_by(Application.status))).all()
-    status_counts = {str(status): int(count) for status, count in status_rows}
-    total_applications = sum(status_counts.values())
-    role_counts_query = (
-        select(
-            Internship.id,
-            Internship.title,
-            func.count(Application.id).label("count"),
-            func.sum(case((Application.status == "APPLIED", 1), else_=0)).label("applied"),
-            func.sum(case((Application.status == "UNDER_REVIEW", 1), else_=0)).label("under_review"),
-            func.sum(case((Application.status == "SHORTLISTED", 1), else_=0)).label("shortlisted"),
-            func.sum(case((Application.status == "INTERVIEW_SCHEDULED", 1), else_=0)).label("interview"),
-            func.sum(case((Application.status.in_(OFFER_STATUSES), 1), else_=0)).label("selected"),
-            func.sum(case((Application.status == "ACCEPTED", 1), else_=0)).label("accepted"),
-        )
-        .outerjoin(Application, Application.internship_id == Internship.id)
-        .where(*role_scope)
-    )
-    if cutoff is not None:
-        role_counts_query = role_counts_query.where(
-            (Application.created_at >= cutoff) | (Application.id.is_(None))
-        )
-    applicants_by_role_rows = (await db.execute(
-        role_counts_query.group_by(Internship.id, Internship.title)
-        .order_by(func.count(Application.id).desc(), Internship.title)
-    )).all()
-    active_interviews_by_role_query = (
-        select(Internship.id, func.count(func.distinct(Application.id)))
-        .join(Application, Application.internship_id == Internship.id)
-        .join(Interview, Interview.application_id == Application.id)
-        .where(
-            *role_scope,
-            Interview.status.in_(("SCHEDULED", "RESCHEDULED")),
-        )
-    )
-    if cutoff is not None:
-        active_interviews_by_role_query = active_interviews_by_role_query.where(
-            Application.created_at >= cutoff
-        )
-    active_interviews_by_role = {
-        int(role_id): int(count or 0)
-        for role_id, count in (await db.execute(
-            active_interviews_by_role_query.group_by(Internship.id)
-        )).all()
-    }
+    status_counts = metrics["status_counts"]
+    total_applications = metrics["total_applicants"]
+    applicants_by_role_rows = []
+    for role in metrics["applications_by_role"]:
+        counts = role["status_counts"]
+        applicants_by_role_rows.append((
+            role["id"],
+            role["title"],
+            role["applications"],
+            counts.get("APPLIED", 0),
+            counts.get("UNDER_REVIEW", 0),
+            counts.get("SHORTLISTED", 0),
+            counts.get("INTERVIEW_SCHEDULED", 0),
+            counts.get("SELECTED", 0),
+            counts.get("ACCEPTED", 0),
+            counts.get("REJECTED", 0),
+        ))
     trend_query = (
         select(func.date(Application.created_at), func.count(Application.id))
         .join(Internship, Internship.id == Application.internship_id)
@@ -698,8 +660,7 @@ async def company_insights(
         )
         .group_by(ApplicationEvent.application_id, Application.created_at)
     )
-    if cutoff is not None:
-        response_query = response_query.where(Application.created_at >= cutoff)
+    response_query = response_query.where(Application.status != "WITHDRAWN")
     response_rows = (await db.execute(response_query)).all()
     response_hours: list[float] = []
     for _, first_response, applied_at in response_rows:
@@ -715,31 +676,15 @@ async def company_insights(
         .join(Internship, Internship.id == Application.internship_id)
         .where(*role_scope)
     )
-    if cutoff is not None:
-        interviews_query = interviews_query.where(Interview.scheduled_at >= cutoff)
     interviews = (await db.execute(interviews_query.group_by(Interview.status))).all()
     interview_counts = {str(status).upper(): int(count) for status, count in interviews}
-    upcoming_interviews = int(
-        await db.scalar(
-            select(func.count(Interview.id))
-            .join(Application, Application.id == Interview.application_id)
-            .join(Internship, Internship.id == Application.internship_id)
-            .where(
-                *role_scope,
-                Interview.status.in_(("SCHEDULED", "RESCHEDULED")),
-                Interview.scheduled_at > datetime.now(timezone.utc),
-            )
-        )
-        or 0
-    )
+    upcoming_interviews = metrics["interviews_scheduled"]
     skills_query = (
         select(StudentProfile.user_id, StudentProfile.skills)
         .join(Application, Application.student_id == StudentProfile.user_id)
         .join(Internship, Internship.id == Application.internship_id)
-        .where(*role_scope)
+        .where(*role_scope, Application.status != "WITHDRAWN")
     )
-    if cutoff is not None:
-        skills_query = skills_query.where(Application.created_at >= cutoff)
     skills_rows = (await db.execute(skills_query)).all()
     skill_applicants: dict[str, set[int]] = {}
     for student_id, skills in skills_rows:
@@ -756,8 +701,6 @@ async def company_insights(
         select(Internship.industry, func.count(Internship.id))
         .where(*role_scope)
     )
-    if cutoff is not None:
-        domains_query = domains_query.where(Internship.created_at >= cutoff)
     domain_rows = (await db.execute(
         domains_query.group_by(Internship.industry)
         .order_by(func.count(Internship.id).desc(), Internship.industry)
@@ -766,10 +709,8 @@ async def company_insights(
         select(StudentProfile.university, func.count(Application.id))
         .join(Application, Application.student_id == StudentProfile.user_id)
         .join(Internship, Internship.id == Application.internship_id)
-        .where(*role_scope)
+        .where(*role_scope, Application.status != "WITHDRAWN")
     )
-    if cutoff is not None:
-        university_query = university_query.where(Application.created_at >= cutoff)
     university_rows = (await db.execute(
         university_query.group_by(StudentProfile.university)
         .order_by(func.count(Application.id).desc(), StudentProfile.university)
@@ -777,7 +718,7 @@ async def company_insights(
     )).all()
     shortlisted = status_counts.get("SHORTLISTED", 0)
     offers = status_counts.get("SELECTED", 0) + status_counts.get("ACCEPTED", 0)
-    interview_conversion_count = sum(active_interviews_by_role.values())
+    interview_conversion_count = status_counts.get("INTERVIEW_SCHEDULED", 0)
     accepted_offers = status_counts.get("ACCEPTED", 0)
     response_sample = len(response_hours)
     response_mean = round(sum(response_hours) / response_sample, 1) if response_sample else None
@@ -786,31 +727,28 @@ async def company_insights(
         "role": "company",
         "range": range_value,
         "sample_size": total_applications,
-        "period_label": f"Last {range_value} days" if range_value != "all" else "All time",
+        "period_label": f"Totals: all time · Activity: last {range_value} days" if range_value != "all" else "Totals and activity: all time",
         "status_breakdown": [
             {"status": status, "count": count}
             for status, count in sorted(status_counts.items())
         ],
+        "withdrawn_count": metrics["withdrawn_count"],
         "kpis": {
-            "active_roles": {"value": active_roles, "sample_size": total_roles, "definition": "Count of this company's PUBLISHED internships."},
-            "total_applicants": {"value": total_applications, "sample_size": total_applications, "definition": "Count of applications submitted to this company's internships."},
-            "shortlisted": {"value": shortlisted, "sample_size": total_applications, "definition": "Applications currently SHORTLISTED."},
-            "interviews_scheduled": {"value": upcoming_interviews, "sample_size": upcoming_interviews, "definition": "Future interviews currently scheduled or rescheduled across company applications."},
-            "offers": {"value": offers, "sample_size": total_applications, "definition": "Applications currently SELECTED or ACCEPTED."},
+            **company_metric_cards(metrics),
             "average_response_time": {"value": response_mean, "sample_size": response_sample, "definition": "Mean hours from application to the first company-authored application event."},
             "shortlist_rate": {
-                "value": round(shortlisted * 100 / total_applications, 1) if total_applications >= 5 else None,
+                "value": round(shortlisted * 100 / total_applications, 1) if total_applications else None,
                 "sample_size": total_applications,
                 "numerator": shortlisted,
                 "denominator": total_applications,
-                "definition": "Applications currently SHORTLISTED divided by applications in the selected range and internship filter.",
+                "definition": "Applications currently SHORTLISTED divided by all non-withdrawn applications.",
             },
             "interview_conversion": {
-                "value": round(interview_conversion_count * 100 / total_applications, 1) if total_applications >= 5 else None,
+                "value": round(interview_conversion_count * 100 / total_applications, 1) if total_applications else None,
                 "sample_size": total_applications,
                 "numerator": interview_conversion_count,
                 "denominator": total_applications,
-                "definition": "Applications currently in INTERVIEW_SCHEDULED divided by applications in the selected range and internship filter.",
+                "definition": "Applications currently in INTERVIEW_SCHEDULED divided by all non-withdrawn applications.",
             },
             "hires": {
                 "value": offers,
@@ -827,11 +765,8 @@ async def company_insights(
         },
         "charts": {
             "company_pipeline": [
-                {"name": "Applied", "count": total_applications, "conversion_pct": None},
-                {"name": "Under review", "count": status_counts.get("UNDER_REVIEW", 0), "conversion_pct": round(status_counts.get("UNDER_REVIEW", 0) * 100 / total_applications, 1) if total_applications else None},
-                {"name": "Shortlisted", "count": shortlisted, "conversion_pct": round(shortlisted * 100 / total_applications, 1) if total_applications else None},
-                {"name": "Interview", "count": interview_conversion_count, "conversion_pct": round(interview_conversion_count * 100 / total_applications, 1) if total_applications else None},
-                {"name": "Selected", "count": offers, "conversion_pct": round(offers * 100 / total_applications, 1) if total_applications else None},
+                {"name": status.replace("_", " ").title(), "count": status_counts.get(status, 0)}
+                for status in ("APPLIED", "UNDER_REVIEW", "SHORTLISTED", "INTERVIEW_SCHEDULED", "SELECTED", "ACCEPTED", "REJECTED")
             ],
             "applicants_by_posting": [
                 {"id": int(role_id), "name": title, "count": int(count or 0)}
@@ -844,11 +779,12 @@ async def company_insights(
                     "applied": int(applied or 0),
                     "under_review": int(under_review or 0),
                     "shortlisted": int(shortlisted_count or 0),
-                    "interview_scheduled": active_interviews_by_role.get(int(role_id), 0),
+                    "interview_scheduled": int(interview or 0),
                     "selected": int(selected or 0),
                     "accepted": int(accepted or 0),
+                    "rejected": int(rejected or 0),
                 }
-                for role_id, title, count, applied, under_review, shortlisted_count, interview, selected, accepted
+                for role_id, title, count, applied, under_review, shortlisted_count, interview, selected, accepted, rejected
                 in applicants_by_role_rows
             ],
             "applications_over_time": [{"name": str(day), "date": str(day), "count": int(count)} for day, count in trend_rows],
@@ -865,6 +801,34 @@ async def company_insights(
             {"id": int(role_id), "title": title}
             for role_id, title, *_ in applicants_by_role_rows
         ],
+    }
+
+
+@router.get("/companies/me/metrics")
+async def company_metrics(
+    db: DbSession,
+    response: Response,
+    user: User = Depends(require_roles(UserRole.COMPANY)),# type: ignore
+    internship_id: int | None = Query(None, ge=1),
+) -> dict[str, Any]:
+    """Return canonical all-time company dashboard counts for every company page."""
+    response.headers["Cache-Control"] = "no-store"
+    if internship_id is not None:
+        owned_role = await db.scalar(
+            select(Internship.id).where(
+                Internship.id == internship_id,
+                Internship.company_id == user.id,
+            )
+        )
+        if owned_role is None:
+            raise HTTPException(404, "Internship not found")
+    metrics = await get_company_metrics(db, user.id, internship_id)
+    return {
+        "kpis": company_metric_cards(metrics),
+        "status_counts": metrics["status_counts"],
+        "all_status_counts": metrics["all_status_counts"],
+        "applications_by_role": metrics["applications_by_role"],
+        "withdrawn_count": metrics["withdrawn_count"],
     }
 
 

@@ -6,6 +6,7 @@ import { Button } from '../ui/Button'
 import { Modal } from '../ui/Modal'
 import { Textarea } from '../ui/Textarea'
 import { routes } from '../../lib/routes'
+import { invalidateCompanyMetrics } from '../../hooks/useCompanyMetrics'
 
 interface EligibilityBlocker {
   code: string
@@ -145,6 +146,7 @@ export function ApplyModal({
         cover_note: coverNote.trim() || null,
       })
       const applicationId = Number(response.data?.id)
+      invalidateCompanyMetrics()
       setSuccessApplicationId(Number.isInteger(applicationId) ? applicationId : null)
       setSubmitted(true)
       onApplied(Number.isInteger(applicationId) ? applicationId : undefined)

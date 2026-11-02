@@ -115,7 +115,7 @@ describe('analytics velocity panel', () => {
     setupApi()
     useAuthStore.getState().setSession({ accessToken: 'token', refreshToken: 'refresh', userId: 17, role: 'COMPANY' })
     render(<BrowserRouter><DesktopAnalysisVisuals variant="company" fullAnalyticsMenu /></BrowserRouter>)
-    expect(await screen.findByRole('heading', { name: 'Status Per Application' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Current application status' })).toBeInTheDocument()
     const selector = screen.getByRole('button', { name: /Show: All charts/ })
     fireEvent.click(selector)
     const menu = screen.getByRole('menu', { name: 'Analytics chart focus' })

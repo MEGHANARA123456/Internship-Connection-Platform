@@ -53,6 +53,7 @@ import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisV
 import { AccountSecurityCard } from '../components/security/AccountSecurityCard'
 import { StatusFilterMenu } from '../components/applications/StatusFilterMenu'
 import { CompanyApplicantsRedesign } from './CompanyApplicantsRedesign'
+import { invalidateCompanyMetrics, useCompanyMetrics } from '../hooks/useCompanyMetrics'
 
 // --- 1. Company Jobs Management ---
 
@@ -171,6 +172,7 @@ export function CompanyOverviewPage() {
   const [data, setData] = useState<CompanyOverviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const companyMetrics = useCompanyMetrics()
   const load = async () => {
     setLoading(true)
     setError(false)
@@ -187,15 +189,15 @@ export function CompanyOverviewPage() {
   useEffect(() => { void load() }, [])
 
   const cards = [
-    ['Active internships', 'active_internships', routes.companyJobs({ status: 'PUBLISHED' }), <Briefcase className="h-4 w-4" />],
-    ['Total internships', 'total_internships', routes.companyJobs(), <FileText className="h-4 w-4" />],
+    ['Active internships', 'active_roles', routes.companyJobs({ status: 'PUBLISHED' }), <Briefcase className="h-4 w-4" />],
+    ['Total internships', 'total_roles', routes.companyJobs(), <FileText className="h-4 w-4" />],
     ['Total applicants', 'total_applicants', routes.companyApplicants(), <Users className="h-4 w-4" />],
     ['New applications this week', 'new_applications_this_week', routes.companyApplicants({ created: 'week' }), <Calendar className="h-4 w-4" />],
     ['Shortlisted', 'shortlisted', routes.companyApplicants({ status: 'SHORTLISTED' }), <UserCheck className="h-4 w-4" />],
     ['Interviews scheduled', 'interviews_scheduled', routes.interviews({ tab: 'upcoming' }), <Calendar className="h-4 w-4" />],
   ] as const
 
-  if (loading || error || !data) {
+  if (loading || error || !data || (companyMetrics.loading && !companyMetrics.data)) {
     return (
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
         {cards.map(([label, key, to, icon]) => (
@@ -208,7 +210,7 @@ export function CompanyOverviewPage() {
             href={to}
             loading={loading}
             error={!loading}
-            onRetry={() => void load()}
+            onRetry={() => { void load(); companyMetrics.retry() }}
           />
         ))}
       </div>
@@ -235,17 +237,34 @@ export function CompanyOverviewPage() {
         </div>
       </header>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-        {cards.map(([label, key, to, icon]) => (
+        {cards.map(([label, key, to, icon]) => {
+          const metric = companyMetrics.data?.kpis[key]
+          const fallbackKey = key === 'active_roles'
+            ? 'active_internships'
+            : key === 'total_roles'
+              ? 'total_internships'
+              : key
+          const value = metric?.value ?? data.kpis[fallbackKey] ?? 0
+          const sample = metric?.sample_size ?? value
+          const unit = key === 'active_roles' || key === 'total_roles'
+            ? 'internships'
+            : key === 'interviews_scheduled'
+              ? 'interviews'
+              : 'applications'
+          const caption = key === 'new_applications_this_week'
+            ? `Based on ${sample.toLocaleString()} applications in the last 7 days`
+            : `Based on ${sample.toLocaleString()} ${unit}`
+          return (
           <KpiCard
             key={key}
             label={label}
-            value={(data.kpis[key] ?? 0).toLocaleString()}
-            caption={key === 'interviews_scheduled' && !data.kpis[key] ? 'None scheduled' : 'Current total'}
+            value={value.toLocaleString()}
+            caption={caption}
             icon={icon}
             href={to}
-            info={key === 'interviews_scheduled'
+            info={metric?.definition ?? (key === 'interviews_scheduled'
               ? 'Future interviews in SCHEDULED or RESCHEDULED status.'
-              : `Current ${label.toLowerCase()} count.`}
+              : `Current ${label.toLowerCase()} count.`)}
           />
         ))}
       </div>
@@ -432,6 +451,7 @@ export function LegacyCompanyApplicantsPage({
             : `/applications/${item.id}/status`
       if (endpoint.endsWith('/status')) await api.patch(endpoint, { status: nextStatus })
       else await api.patch(endpoint)
+      invalidateCompanyMetrics()
       await load()
     } catch (requestError) {
       console.error(`Unable to move applicant ${item.id} to ${nextStatus}.`, requestError)
@@ -593,7 +613,7 @@ export function LegacyCompanyApplicantsPage({
           </div>
         </>
       )}
-      {activeInterview && <ScheduleInterviewModal isOpen onClose={() => setActiveInterview(null)} applicationId={activeInterview.id} candidateName={activeInterview.student_name ?? undefined} jobTitle={activeInterview.internship_title ?? undefined} onScheduled={() => { setActiveInterview(null); void load() }} />}
+      {activeInterview && <ScheduleInterviewModal isOpen onClose={() => setActiveInterview(null)} applicationId={activeInterview.id} candidateName={activeInterview.student_name ?? undefined} jobTitle={activeInterview.internship_title ?? undefined} onScheduled={() => { setActiveInterview(null); invalidateCompanyMetrics(); void load() }} />}
       <Modal
         isOpen={notesApplicant !== null}
         onClose={() => setNotesApplicant(null)}
@@ -921,6 +941,7 @@ export function CompanyJobsPage() {
           jobId={schedulingJob.id}
           jobTitle={schedulingJob.title}
           onScheduled={() => {
+            invalidateCompanyMetrics()
             fetchJobs()
           }}
         />
@@ -1333,6 +1354,7 @@ export function JobApplicantsPage() {
       } else if (newStatus === 'REJECTED') {
         await api.patch(`/applications/${appId}/reject`)
       }
+      invalidateCompanyMetrics()
       await fetchApplicants()
     } catch (err: any) {
       showToast(err.response?.data?.detail || 'Failed to update candidate stage.', 'error')
@@ -1423,6 +1445,7 @@ export function JobApplicantsPage() {
         application_ids: Array.from(selectedAppIds),
         status: 'SHORTLISTED',
       })
+      invalidateCompanyMetrics()
       setSelectedAppIds(new Set())
       await fetchApplicants()
     } catch (err: any) {
@@ -1446,6 +1469,7 @@ export function JobApplicantsPage() {
         application_ids: Array.from(selectedAppIds),
         status: 'REJECTED',
       })
+      invalidateCompanyMetrics()
       setSelectedAppIds(new Set())
       await fetchApplicants()
     } catch (err: any) {
@@ -1850,6 +1874,7 @@ export function JobApplicantsPage() {
           applicationId={activeInterviewApp.id}
           candidateName={activeInterviewApp.student_name}
           onScheduled={() => {
+            invalidateCompanyMetrics()
             fetchApplicants()
           }}
         />

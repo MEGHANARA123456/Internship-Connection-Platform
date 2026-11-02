@@ -22,6 +22,7 @@ import { Textarea } from '../components/ui/Textarea'
 import { DropdownSelect } from '../components/ui/DropdownSelect'
 import { showToast } from '../lib/feedback'
 import { confirmAction } from '../lib/feedback'
+import { invalidateCompanyMetrics } from '../hooks/useCompanyMetrics'
 
 interface CompanyApplicant {
   id: number
@@ -420,6 +421,7 @@ export function CompanyApplicantsRedesign({
     setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, status: nextStatus } : entry))
     try {
       await api.patch(`/applications/${item.id}/status`, { status: nextStatus })
+      invalidateCompanyMetrics()
       await load()
     } catch (requestError) {
       console.error(`Unable to move applicant ${item.id} to ${nextStatus}.`, requestError)
@@ -642,7 +644,7 @@ export function CompanyApplicantsRedesign({
       )}
 
       {toast && <div role="status" className="fixed bottom-4 right-4 z-50 flex max-w-sm items-start gap-3 rounded-xl bg-slate-900 px-4 py-3 text-sm text-white shadow-xl"><span>{toast}</span><button type="button" aria-label="Dismiss notification" onClick={() => setToast('')}><X className="h-4 w-4" /></button></div>}
-      {activeInterview && <ScheduleInterviewModal isOpen onClose={() => setActiveInterview(null)} applicationId={activeInterview.id} candidateName={activeInterview.student_name ?? undefined} jobTitle={activeInterview.internship_title ?? undefined} onScheduled={() => { setActiveInterview(null); void load() }} />}
+      {activeInterview && <ScheduleInterviewModal isOpen onClose={() => setActiveInterview(null)} applicationId={activeInterview.id} candidateName={activeInterview.student_name ?? undefined} jobTitle={activeInterview.internship_title ?? undefined} onScheduled={() => { setActiveInterview(null); invalidateCompanyMetrics(); void load() }} />}
       <Modal isOpen={notesApplicant !== null} onClose={() => setNotesApplicant(null)} title="Private recruiter notes" description={`${notesApplicant?.student_name || 'Candidate'} · only visible to your company`}>
         <div className="space-y-3">
           {noteError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-300">{noteError}</p>}

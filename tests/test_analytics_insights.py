@@ -263,8 +263,22 @@ async def test_role_scoped_analytics_aggregates_and_empty_results(monkeypatch: p
             item["name"]: item["interview_scheduled"]
             for item in company_payload["charts"]["conversion_by_role"]
         }
-        assert conversion_by_role["Python Intern"] == 1
+        assert conversion_by_role["Python Intern"] == 0
         assert conversion_by_role["Data Intern"] == 0
+        assert sum(item["count"] for item in company_payload["status_breakdown"]) == 3
+        for role in company_payload["charts"]["conversion_by_role"]:
+            assert role["count"] == sum(
+                role[key]
+                for key in (
+                    "applied",
+                    "under_review",
+                    "shortlisted",
+                    "interview_scheduled",
+                    "selected",
+                    "accepted",
+                    "rejected",
+                )
+            )
         assert "Secret Role" not in str(company_payload)
 
         student_response = await client.get(

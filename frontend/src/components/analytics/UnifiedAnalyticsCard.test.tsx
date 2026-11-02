@@ -146,4 +146,32 @@ describe('UnifiedAnalyticsCard', () => {
     expect(await screen.findByRole('heading', { name: domainTitle })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Match score distribution' })).not.toBeInTheDocument()
   })
+
+  it('uses shared all-time company metrics and exact KPI sample sizes', async () => {
+    const companyMetrics = {
+      kpis: {
+        active_roles: { value: 1, sample_size: 6, definition: 'Published roles with current deadlines.' },
+        total_applicants: { value: 7, sample_size: 7, definition: 'All applications; 1 withdrawn application(s) excluded.' },
+        shortlisted: { value: 1, sample_size: 7, definition: 'Current SHORTLISTED status.' },
+        interviews_scheduled: { value: 0, sample_size: 0, definition: 'Future scheduled interviews.' },
+        offers: { value: 2, sample_size: 7, definition: 'Current SELECTED or ACCEPTED status.' },
+      },
+      status_counts: {},
+      all_status_counts: {},
+      applications_by_role: [],
+      withdrawn_count: 1,
+    }
+    vi.mocked(api.get).mockImplementation((path) => Promise.resolve({
+      data: path === '/companies/me/metrics'
+        ? companyMetrics
+        : { ...studentData, role: 'company', internships: [] },
+    }) as never)
+    renderCard('company')
+
+    expect(await screen.findByRole('link', { name: /Active roles: 1/ })).toBeInTheDocument()
+    expect(screen.getByText('Based on 6 roles')).toBeInTheDocument()
+    expect(screen.getAllByText('Based on 7 applications').length).toBeGreaterThan(0)
+    expect(screen.getByText('Based on 0 interviews')).toBeInTheDocument()
+    expect(api.get).toHaveBeenCalledWith('/companies/me/metrics')
+  })
 })

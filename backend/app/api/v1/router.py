@@ -27,6 +27,7 @@ from app.api.v1.insights import router as insights_router
 from app.api.v1.skills import router as skills_router
 from app.chatbot.router import router as chatbot_router
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
+from app.services.company_metrics import get_company_metrics
 from app.models import (
     Application,
     CompanyDocument,
@@ -180,38 +181,13 @@ async def company_overview(
 ) -> dict[str, Any]:
     """Aggregate hiring KPIs and recent-period data for the authenticated company dashboard."""
     now = datetime.now(timezone.utc)
-    week_start = now - timedelta(days=7)
+    metrics = await get_company_metrics(db, user.id)
     review_cutoff = now - timedelta(days=3)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     async def count(statement: Any) -> int:
         """Return the integer result of a scalar count query, treating an empty result as zero."""
         return int(await db.scalar(statement) or 0)
 
-    total_internships = await count(
-        select(func.count(Internship.id)).where(Internship.company_id == user.id)
-    )
-    active_internships = await count(
-        select(func.count(Internship.id)).where(
-            Internship.company_id == user.id,
-            Internship.status == "PUBLISHED",
-            Internship.deadline >= now.date(),
-        )
-    )
-    total_applicants = await count(
-        select(func.count(Application.id))
-        .join(Internship, Application.internship_id == Internship.id)
-        .where(Internship.company_id == user.id)
-    )
-    new_this_week = await count(
-        select(func.count(Application.id))
-        .join(Internship, Application.internship_id == Internship.id)
-        .where(Internship.company_id == user.id, Application.created_at >= week_start)
-    )
-    shortlisted = await count(
-        select(func.count(Application.id))
-        .join(Internship, Application.internship_id == Internship.id)
-        .where(Internship.company_id == user.id, Application.status == "SHORTLISTED")
-    )
     interviews_today = await count(
         select(func.count(Interview.id))
         .join(Application, Interview.application_id == Application.id)
@@ -277,21 +253,12 @@ async def company_overview(
     ]
     return {
         "kpis": {
-            "active_internships": active_internships,
-            "total_internships": total_internships,
-            "total_applicants": total_applicants,
-            "new_applications_this_week": new_this_week,
-            "shortlisted": shortlisted,
-            "interviews_scheduled": await count(
-                select(func.count(Interview.id))
-                .join(Application, Interview.application_id == Application.id)
-                .join(Internship, Application.internship_id == Internship.id)
-                .where(
-                    Internship.company_id == user.id,
-                    Interview.status.in_(("SCHEDULED", "RESCHEDULED")),
-                    Interview.scheduled_at > now,
-                )
-            ),
+            "active_internships": metrics["active_roles"],
+            "total_internships": metrics["total_roles"],
+            "total_applicants": metrics["total_applicants"],
+            "new_applications_this_week": metrics["new_applications_this_week"],
+            "shortlisted": metrics["shortlisted"],
+            "interviews_scheduled": metrics["interviews_scheduled"],
         },
         "pending_actions": {
             "applications_waiting_over_three_days": waiting_review,

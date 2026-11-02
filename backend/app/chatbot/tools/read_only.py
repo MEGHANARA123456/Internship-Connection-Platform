@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.services.audit import get_recent_admin_audit_events
 from app.services.audit import audit_action_label
+from app.services.company_metrics import get_company_metrics
 
 TOOL_ROLES = {
     "student_applications": UserRole.STUDENT,
@@ -284,12 +285,15 @@ async def _student_recommended_internships(db: AsyncSession, user: User) -> Tool
 
 async def _company_internships(db: AsyncSession, user: User, internship_id: int | None) -> ToolResult:
     """Summarize postings owned by this company, optionally filtering to one posting."""
+    metrics = await get_company_metrics(db, user.id, internship_id)
+    role_counts = {
+        role["id"]: role["applications"]
+        for role in metrics["applications_by_role"]
+    }
     query = (
-        select(Internship.title, Internship.status, Internship.deadline, func.count(Application.id))
-        .outerjoin(Application, Application.internship_id == Internship.id)
+        select(Internship.id, Internship.title, Internship.status, Internship.deadline)
         # Ownership is enforced in the query, even when a caller supplies an ID.
         .where(Internship.company_id == user.id)
-        .group_by(Internship.id)
         .order_by(Internship.created_at.desc())
         .limit(MAX_ROWS)
     )
@@ -300,9 +304,9 @@ async def _company_internships(db: AsyncSession, user: User, internship_id: int 
         "No matching internship postings were found in your company account."
         if not rows
         else "Your internship postings: " + " ".join(
-            f"{title}: {status.replace('_', ' ').title()}, {int(count)} applications, "
+            f"{title}: {status.replace('_', ' ').title()}, {role_counts.get(role_id, 0)} applicants, "
             f"deadline {_when(deadline)}."
-            for title, status, deadline, count in rows
+            for role_id, title, status, deadline in rows
         )
     )
     return ToolResult("company_internships", answer, "/company/jobs")
@@ -336,16 +340,21 @@ async def _company_applicants(
         query = query.where(Internship.id == internship_id)
     if shortlisted:
         query = query.where(Application.status == "SHORTLISTED")
+    else:
+        query = query.where(Application.status != "WITHDRAWN")
     rows = (await db.execute(query)).all()
     heading = "Shortlisted candidates" if shortlisted else "Applicants"
-    answer = (
-        f"No {heading.lower()} were found in your company's postings."
-        if not rows
-        else heading + ": " + " ".join(
-            _company_applicant_summary(row)
-            for row in rows
-        )
-    )
+    metrics = await get_company_metrics(db, user.id, internship_id)
+    count = metrics["shortlisted"] if shortlisted else metrics["total_applicants"]
+    if count == 0:
+        answer = "You have no shortlisted candidates yet." if shortlisted else "You have no applicants yet."
+    else:
+        answer = f"You have {count} {heading.lower()} in your company's postings."
+        if rows:
+            answer += " " + heading + ": " + " ".join(
+                _company_applicant_summary(row)
+                for row in rows
+            )
     return ToolResult(
         "company_shortlisted" if shortlisted else "company_applicants",
         answer,
@@ -375,26 +384,22 @@ def _company_applicant_summary(row: Any) -> str:
 
 async def _company_pipeline(db: AsyncSession, user: User) -> ToolResult:
     """Count application records by stage for internships owned by this company."""
-    rows = (await db.execute(
-        select(Application.status, func.count(Application.id))
-        .join(Internship, Internship.id == Application.internship_id)
-        .where(Internship.company_id == user.id)
-        .group_by(Application.status)
-        .order_by(Application.status)
-    )).all()
+    metrics = await get_company_metrics(db, user.id)
+    rows = sorted(metrics["all_status_counts"].items())
     answer = (
         "Your hiring pipeline has no applications."
         if not rows
         else "Your hiring pipeline: " + ", ".join(
             f"{str(status).replace('_', ' ').title()}: {int(count)}"
             for status, count in rows
-        ) + "."
+        ) + f". Total applicants excluding withdrawn: {metrics['total_applicants']}."
     )
     return ToolResult("company_pipeline", answer, "/company/pipeline")
 
 
 async def _company_interviews(db: AsyncSession, user: User) -> ToolResult:
     """List upcoming scheduled interviews for the company's own internships."""
+    metrics = await get_company_metrics(db, user.id)
     rows = (await db.execute(
         select(Internship.title, Interview.status, Interview.scheduled_at)
         .join(Application, Application.id == Interview.application_id)
@@ -402,16 +407,16 @@ async def _company_interviews(db: AsyncSession, user: User) -> ToolResult:
         .where(
             # Filter by internship ownership through the associated application.
             Internship.company_id == user.id,
-            Interview.status == "SCHEDULED",
+            Interview.status.in_(("SCHEDULED", "RESCHEDULED")),
             Interview.scheduled_at >= datetime.now(timezone.utc),
         )
         .order_by(Interview.scheduled_at.asc())
         .limit(MAX_ROWS)
     )).all()
     answer = (
-        "Your company has no interview records."
+        "Your company has no future scheduled interviews."
         if not rows
-        else "Your recent interviews: " + " ".join(
+        else f"You have {metrics['interviews_scheduled']} future scheduled interviews. " + " ".join(
             f"{title}: {status.replace('_', ' ').title()} for {_when(scheduled_at)}."
             for title, status, scheduled_at in rows
         )

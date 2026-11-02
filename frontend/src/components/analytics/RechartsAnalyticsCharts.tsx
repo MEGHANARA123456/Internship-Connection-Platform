@@ -70,7 +70,7 @@ export type AnalyticsChartKind =
 
 const MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 const STATUS_SERIES = ['applied', 'under_review', 'shortlisted', 'interview', 'selected', 'accepted', 'rejected', 'withdrawn']
-const ROLE_SERIES = ['applied', 'under_review', 'shortlisted', 'interview_scheduled', 'selected', 'accepted']
+const ROLE_SERIES = ['applied', 'under_review', 'shortlisted', 'interview_scheduled', 'selected', 'accepted', 'rejected']
 const STATUS_LABELS: Record<string, string> = {
   applied: 'Applied',
   under_review: 'Under review',
@@ -207,7 +207,7 @@ function ChartTable({ label, rows, kind }: { label: string; rows: ChartDatum[]; 
       : statusSeries || stackedCompanySeries
         ? statusColumns
         : stackedRoleSeries
-          ? ['applied', 'under_review', 'shortlisted', 'interview_scheduled', 'selected', 'accepted']
+          ? ['applied', 'under_review', 'shortlisted', 'interview_scheduled', 'selected', 'accepted', 'rejected']
         : skillSeries
           ? ['have', 'missing']
           : responseSeries
@@ -234,7 +234,7 @@ function ChartTable({ label, rows, kind }: { label: string; rows: ChartDatum[]; 
             {skillSeries && <th scope="col" className="px-3 py-2 text-right">Required roles</th>}
             {deadlineSeries && <th scope="col" className="px-3 py-2 text-right">Deadline</th>}
             {!columns.length && !deadlineSeries && <th scope="col" className="px-3 py-2 text-right">Count</th>}
-            {(kind === 'funnel' || kind === 'company_pipeline') && <th scope="col" className="px-3 py-2 text-right">Of previous stage</th>}
+            {kind === 'funnel' && <th scope="col" className="px-3 py-2 text-right">Of previous stage</th>}
           </tr>
         </thead>
         <tbody>
@@ -259,7 +259,7 @@ function ChartTable({ label, rows, kind }: { label: string; rows: ChartDatum[]; 
               {skillSeries && <td className="px-3 py-2 text-right tabular-nums">{(row.count ?? 0).toLocaleString()}</td>}
               {deadlineSeries && <td className="px-3 py-2 text-right tabular-nums">{row.date ?? '-'}</td>}
               {!columns.length && !deadlineSeries && <td className="px-3 py-2 text-right tabular-nums text-slate-700 dark:text-slate-300">{(row.count ?? 0).toLocaleString()}</td>}
-              {(kind === 'funnel' || kind === 'company_pipeline') && (
+              {kind === 'funnel' && (
                 <td className="px-3 py-2 text-right tabular-nums text-slate-700 dark:text-slate-300">
                   {row.conversion_pct == null ? '-' : `${row.conversion_pct}%`}
                 </td>

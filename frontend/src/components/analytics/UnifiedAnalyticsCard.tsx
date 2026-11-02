@@ -21,6 +21,7 @@ import { ChartSkeleton, Spinner } from '../ui/LoadingSkeleton'
 import type { AnalyticsChartKind, ChartDatum } from './RechartsAnalyticsCharts'
 import { KpiCard } from '../dashboard/KpiCard'
 import { routes } from '../../lib/routes'
+import { useCompanyMetrics } from '../../hooks/useCompanyMetrics'
 
 const RechartsAnalyticsCharts = lazy(async () => {
   const module = await import('./RechartsAnalyticsCharts')
@@ -127,6 +128,7 @@ function CardMetric({
   format,
   period,
   sampleUnit,
+  alwaysShowSample,
 }: {
   label: string
   metric?: Metric
@@ -139,6 +141,7 @@ function CardMetric({
   format?: (value: number) => string
   period?: string
   sampleUnit?: string
+  alwaysShowSample?: boolean
 }) {
   const value = displayMetric(metric, format)
   const sample = metric?.sample_size ?? 0
@@ -148,7 +151,7 @@ function CardMetric({
       ? 'saved roles'
       : 'applications')
   const countMetric = ['applications_submitted', 'interviews_scheduled', 'saved_roles', 'active_roles', 'total_applicants', 'shortlisted', 'offers', 'users_signed_up', 'student_signups', 'company_signups', 'admin_actions', 'pending_verifications', 'job_queue', 'disputes'].includes(label.toLowerCase().replaceAll(' ', '_'))
-  const caption = detail ?? period ?? (sample
+  const caption = detail ?? period ?? (sample || (alwaysShowSample && metric)
     ? `Based on ${sample.toLocaleString()} ${sampleSubject}`
     : countMetric
       ? label === 'Interviews scheduled' ? 'None scheduled' : 'No activity yet'
@@ -253,8 +256,8 @@ type KpiCardConfig = {
 const ROLE_CHARTS: Record<AnalyticsKind, Array<{ kind: AnalyticsChartKind; title: string; focus?: FocusOption }>> = {
   student: CHARTS,
   company: [
-    { kind: 'company_pipeline', title: 'Status Per Application', focus: 'funnel' },
-    { kind: 'conversion_by_role', title: 'Conversion per role', focus: 'funnel' },
+    { kind: 'company_pipeline', title: 'Current application status', focus: 'funnel' },
+    { kind: 'conversion_by_role', title: 'Current status per role', focus: 'funnel' },
     { kind: 'applicants_by_posting', title: 'Applicants per posting', focus: 'domains' },
     { kind: 'applications_over_time', title: 'Applications over time', focus: 'trends' },
     { kind: 'domains', title: 'Roles by domain', focus: 'domains' },
@@ -318,7 +321,12 @@ function chartSample(data: AnalyticsPayload | null, kind: AnalyticsChartKind, ro
     return { count: sum(rows.map((row) => row.count)), noun: 'companies' }
   }
   if (kind === 'funnel' || kind === 'company_pipeline') {
-    return { count: rows[0]?.count ?? 0, noun: 'applications' }
+    return {
+      count: kind === 'company_pipeline'
+        ? data?.sample_size ?? sum(rows.map((row) => row.count))
+        : rows[0]?.count ?? 0,
+      noun: 'applications',
+    }
   }
   return { count: sum(rows.map((row) => row.count)), noun: 'records' }
 }
@@ -367,6 +375,7 @@ export function UnifiedAnalyticsCard({
   const [showFocusMenu, setShowFocusMenu] = useState(false)
   const [showInternshipMenu, setShowInternshipMenu] = useState(false)
   const [internshipId, setInternshipId] = useState<number | null>(null)
+  const companyMetrics = useCompanyMetrics(variant === 'company', internshipId)
   const [viewAsTable, setViewAsTable] = useState(false)
   const [data, setData] = useState<AnalyticsPayload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -480,7 +489,9 @@ export function UnifiedAnalyticsCard({
         return topic ? [{ name: String(row.name), topic }] : []
       })
     : []
-  const metrics = data?.kpis
+  const metrics = variant === 'company'
+    ? companyMetrics.data?.kpis ?? data?.kpis
+    : data?.kpis
   const rangeLabel = RANGE_OPTIONS.find((item) => item.value === range)?.label ?? '30 days'
   const periodLabel = range === 'all' ? 'all time' : `last ${rangeLabel.toLowerCase()}`
 
@@ -517,13 +528,17 @@ export function UnifiedAnalyticsCard({
             <CardMetric
               key={card.key}
               label={card.label}
-              metric={metrics?.[card.key] ? { ...metrics[card.key], definition: card.info } : undefined}
+              metric={metrics?.[card.key] ? {
+                ...metrics[card.key],
+                definition: variant === 'company' ? metrics[card.key].definition : card.info,
+              } : undefined}
               href={card.href}
               period={card.period ?? (variant === 'admin' ? data?.period_label : undefined)}
               sampleUnit={card.sampleUnit}
-              onRetry={() => { void loadData() }}
-              loading={loading}
-              error={error}
+              alwaysShowSample={variant === 'company'}
+              onRetry={() => { void loadData(); if (variant === 'company') companyMetrics.retry() }}
+              loading={loading || (variant === 'company' && companyMetrics.loading)}
+              error={error || (variant === 'company' && companyMetrics.error)}
               icon={card.icon}
               format={card.format}
             />
