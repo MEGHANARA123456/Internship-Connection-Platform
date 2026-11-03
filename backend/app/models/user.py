@@ -390,6 +390,8 @@ class SkillTopic(Base):
     icon: Mapped[str] = mapped_column(String(80), nullable=False, default="✦")
     badge_title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.api.v1.dependencies import get_db
 from app.core.security import create_token
 from app.main import app
-from app.models import SkillAttempt, SkillBadge, SkillQuestion, User, UserRole
+from app.models import SkillAttempt, SkillBadge, SkillQuestion, SkillTopic, User, UserRole
 from app.models.base import Base
 from app.api.v1.skills import _badge_level
 from app.services.question_import import parse_question_import_file
@@ -318,8 +318,18 @@ async def test_assessments_enforce_expiry_ownership_cooldown_and_weekly_limit() 
 
 @pytest.mark.anyio
 async def test_assessment_questions_are_admin_only_and_duplicate_questions_are_rejected() -> None:
-    engine, _, students, admin = await _setup_skill_app()
+    engine, sessions, students, admin = await _setup_skill_app()
     try:
+        async with sessions() as session:
+            session.add(SkillTopic(
+                slug="react",
+                name="React",
+                description="Frontend topic",
+                icon="⚛️",
+                badge_title="Verified React Pro",
+                active=True,
+            ))
+            await session.commit()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             forbidden = await client.get("/api/v1/skills/admin/questions", headers=_headers(students[0]))
             assert forbidden.status_code == 403
