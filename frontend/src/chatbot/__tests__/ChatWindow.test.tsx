@@ -11,6 +11,7 @@ const props = {
   role: 'COMPANY' as const,
   page: 'company-applicants' as const,
   mode: 'llm' as const,
+  retrieval: 'bm25' as const,
   online: true,
   statusDisabled: false,
   statusError: false,
@@ -31,8 +32,8 @@ describe('chatbot dialog accessibility', () => {
     const dialog = screen.getByRole('dialog', { name: 'InternSphere AI' })
 
     expect(dialog).toHaveAttribute('aria-modal', 'true')
-    expect(screen.getByText('Online')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'How do I move a candidate to the next stage?' })).toBeInTheDocument()
+    expect(screen.getByText('AI help')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'How do I review applicants?' })).toBeInTheDocument()
     expect(screen.getByLabelText('Ask a question about InternSphere')).toHaveFocus()
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledOnce()
@@ -115,10 +116,10 @@ describe('chatbot dialog accessibility', () => {
       onFeedback={onFeedback}
     /></MemoryRouter>)
 
-    expect(screen.getByText('Help docs')).toBeInTheDocument()
+    expect(screen.getByText('General help')).toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: /Applications/ })).toHaveLength(1)
     expect(screen.queryByRole('link', { name: 'Applications guide' })).not.toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Profile guide' })).toHaveAttribute('href', '/profile/student')
+    expect(screen.getByRole('link', { name: 'Go to page: Profile guide' })).toHaveAttribute('href', '/profile/student')
     fireEvent.click(screen.getByRole('button', { name: 'How do I withdraw an application?' }))
     expect(props.onSend).toHaveBeenCalledWith('How do I withdraw an application?')
     fireEvent.click(screen.getByRole('button', { name: 'Helpful response' }))
@@ -132,14 +133,45 @@ describe('chatbot dialog accessibility', () => {
       messages={[{
         id: 'turn-2',
         role: 'assistant',
-        content: 'I could not find that in the help guide.',
+        content: "I don't have sufficient data to answer this question.",
         createdAt: Date.now(),
-        sourceType: 'docs',
+        sourceType: 'none',
         suggestedFollowups: ['How do I read my application timeline?'],
         noEvidence: true,
+        links: [{ label: 'Help docs', route: '/#faq' }],
       }]}
     /></MemoryRouter>)
-    expect(screen.getByText(/Couldn’t find this in the help docs/)).toBeInTheDocument()
+    expect(screen.getByText('Here are related questions I can help with:')).toBeInTheDocument()
+    expect(screen.queryByText('General help')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'How do I read my application timeline?' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Help docs →' })).toHaveAttribute('href', '/#faq')
+  })
+
+  it('renders a clarification response separately from help and live-data answers', () => {
+    render(<MemoryRouter><ChatWindow
+      {...props}
+      messages={[{
+        id: 'turn-3',
+        role: 'assistant',
+        content: 'Which internship should I check?',
+        createdAt: Date.now(),
+        sourceType: 'none',
+        needsClarification: 'Which internship should I check?',
+      }]}
+    /></MemoryRouter>)
+    expect(screen.getByRole('status')).toHaveTextContent('Please clarify')
+    expect(screen.getByText('Which internship should I check?')).toBeInTheDocument()
+  })
+
+  it('shows an empty hybrid index notice and enforces the API message limit', () => {
+    render(<MemoryRouter><ChatWindow
+      {...props}
+      ragEnabled
+      indexedChunkCount={0}
+    /></MemoryRouter>)
+
+    expect(screen.getByRole('status')).toHaveTextContent(/knowledge index is empty/i)
+    expect(screen.getByLabelText('Ask a question about InternSphere')).toHaveAttribute('maxLength', '500')
+    expect(screen.getByText('0/500')).toBeInTheDocument()
   })
 })

@@ -16,6 +16,7 @@ except Exception:  # pragma: no cover - optional dependency for .xls import.
     xlrd = None
 
 try:
+    
     from odf.opendocument import load as load_ods_document
     from odf.table import Table, TableRow, TableCell
     from odf.text import P
@@ -45,7 +46,6 @@ HEADER_ALIASES = {
     "option_4": "options",
     "answer": "correct_index",
     "correct": "correct_index",
-    "correct_option": "correct_index",
     "correct_answer": "correct_index",
     "level": "difficulty",
     "type": "question_type",
@@ -63,7 +63,8 @@ HEADER_GROUPS = {
     "options": {"options", "choices", "answers", "answer_options", "option_a", "option_b", "option_c", "option_d", "option_1", "option_2", "option_3", "option_4"},
     "explanation": {"explanation"},
     "difficulty": {"difficulty", "level"},
-    "correct_index": {"correct_index", "answer", "correct", "correct_option", "correct_answer"},
+    "correct_index": {"correct_index", "answer", "correct", "correct_answer"},
+    "correct_option": {"correct_option"},
     "question_type": {"question_type", "type"},
     "subtopic": {"subtopic", "subtopic_id"},
     "resource_title": {"resource_title"},
@@ -168,6 +169,22 @@ def parse_correct_index(value: Any, options: list[str]) -> int | None:
     return None
 
 
+def parse_correct_option_number(value: Any, options: list[str]) -> int | None:
+    """Convert a 1-based correct option number to its stored zero-based index."""
+    text = str(value).strip() if value is not None else ""
+    if not re.fullmatch(r"[1-9]\d*", text):
+        return None
+    number = int(text)
+    return number - 1 if number <= len(options) else None
+
+
+def _unescape_spreadsheet_cell(value: Any) -> Any:
+    """Undo the apostrophe prefix used to prevent spreadsheet formula execution."""
+    if isinstance(value, str) and len(value) > 1 and value[0] == "'" and value[1] in "=+-@":
+        return value[1:]
+    return value
+
+
 def _normalize_row(row: dict[str, Any], row_number: int) -> dict[str, Any]:
     """Ensure each row exposes the canonical keys and collects validation errors."""
     errors: list[dict[str, str]] = []
@@ -196,9 +213,39 @@ def _normalize_row(row: dict[str, Any], row_number: int) -> dict[str, Any]:
 
     correct_value = row_data.get("correct_index")
     if correct_value is None:
-        correct_value = row_data.get("correct_answer") or row_data.get("answer") or row_data.get("correct") or row_data.get("correct_option")
-    correct_index = parse_correct_index(correct_value, options) if correct_value is not None else None
-    if correct_index is None and correct_value is not None and options:
+        correct_value = row_data.get("correct_answer") or row_data.get("answer") or row_data.get("correct")
+    has_legacy_key = correct_value is not None and str(correct_value).strip() != ""
+    option_number_value = row_data.get("correct_option")
+    has_option_number = option_number_value is not None and str(option_number_value).strip() != ""
+    legacy_index = parse_correct_index(correct_value, options) if has_legacy_key else None
+    correct_option_values = (
+        [value.strip() for value in str(option_number_value).split(",")]
+        if has_option_number and question_type == "MULTI"
+        else [option_number_value]
+    )
+    option_indices = [
+        parse_correct_option_number(value, options)
+        for value in correct_option_values
+    ] if has_option_number else []
+    option_index = option_indices[0] if option_indices else None
+    if has_option_number and (
+        not option_indices
+        or any(index is None for index in option_indices)
+        or len(set(option_indices)) != len(option_indices)
+        or (question_type == "MULTI" and len(option_indices) < 2)
+    ):
+        errors.append({
+            "field": "correct_option",
+            "message": "correct_option must contain valid, unique 1-based option numbers"
+            if question_type == "MULTI"
+            else "correct_option must be a 1-based option number within the provided options",
+        })
+    if has_legacy_key and legacy_index is None:
+        errors.append({"field": "correct_index", "message": "Legacy correct_index must be a valid zero-based index or identify an option"})
+    if has_legacy_key and has_option_number and legacy_index is not None and option_index is not None and legacy_index != option_index:
+        errors.append({"field": "correct_option", "message": "correct_option and correct_index identify different options"})
+    correct_index = option_index if has_option_number else legacy_index
+    if correct_index is None and (has_legacy_key or has_option_number) and options:
         errors.append({"field": "correct_index", "message": "Correct answer did not match any provided option"})
 
     if not topic:
@@ -220,7 +267,11 @@ def _normalize_row(row: dict[str, Any], row_number: int) -> dict[str, Any]:
         "subtopic": subtopic.strip() or "fundamentals",
         "options": [item.strip() for item in options if item and item.strip()],
         "correct_index": correct_index,
-        "correct_answers": row_data.get("correct_answers"),
+        "correct_answers": (
+            [int(index) for index in option_indices if index is not None]
+            if question_type == "MULTI" and has_option_number
+            else row_data.get("correct_answers")
+        ),
         "difficulty": difficulty,
         "question_type": question_type,
         "explanation": explanation,
@@ -252,10 +303,14 @@ def _validate_header_set(fieldnames: list[str]) -> None:
         if not any(alias in found for alias in aliases):
             missing.append(canonical)
     if missing:
-        alias_text = ", ".join(sorted({alias for field in HEADER_GROUPS for alias in HEADER_GROUPS[field]}))
-        found_text = ", ".join(sorted(found)) if found else "none"
+        expected = ", ".join(sorted(
+            alias
+            for canonical in ("topic", "prompt", "options", "explanation", "difficulty")
+            for alias in HEADER_GROUPS[canonical]
+        ))
         raise ValueError(
-            "Missing required headers: " + ", ".join(missing) + ". Found headers: " + found_text + ". Acceptable aliases: " + alias_text
+            f"Missing required columns: {', '.join(missing)}. "
+            f"Expected: {expected}. Download the template."
         )
 
 
@@ -282,7 +337,7 @@ def _load_csv_rows(text: str) -> list[dict[str, Any]]:
             normalized = normalize_header(field_name)
             alias = HEADER_ALIASES.get(normalized, normalized)
             if value is not None and str(value).strip():
-                row[alias] = value
+                row[alias] = _unescape_spreadsheet_cell(value)
         rows.append(row)
     return rows
 
@@ -429,10 +484,10 @@ def parse_question_import_file(filename: str | None, raw_bytes: bytes) -> dict[s
 def build_question_import_template_csv() -> bytes:
     """Return a sample CSV import template containing three example questions."""
     template = "\n".join([
-        "topic,prompt,options,correct_index,explanation,difficulty,question_type,subtopic,source,resource_title,resource_url,resource_subtopic",
-        'python,"Which built-in value is used to represent the absence of a value?","[\"None\", \"null\", \"undefined\", \"void\"]",0,"Python uses None for an intentionally empty value.",easy,SINGLE,syntax,"InternSphere curated assessment bank","Python docs","https://docs.python.org/3/library/functions/open.html",syntax',
-        'python,"Which file mode opens a file for writing without truncating it?","[\"a\", \"w\", \"x\", \"r\"]",1,"The append mode writes to the end of the file without clearing it.",medium,SINGLE,file_io,"InternSphere curated assessment bank","Working with files","https://docs.python.org/3/library/functions/open.html",file_io',
-        'react,"Which hook is used to manage a component\'s local state?","[\"useMemo\", \"useState\", \"useEffect\", \"useCallback\"]",1,"State is tracked in a component with the useState hook.",easy,SINGLE,components,"InternSphere curated assessment bank","React docs","https://react.dev/reference/react/useState",components',
+        "topic,prompt,options,correct_option,explanation,difficulty,question_type,subtopic,source,resource_title,resource_url,resource_subtopic",
+        'python,"Which built-in value is used to represent the absence of a value?","[\"None\", \"null\", \"undefined\", \"void\"]",1,"Python uses None for an intentionally empty value.",easy,SINGLE,syntax,"InternSphere curated assessment bank","Python docs","https://docs.python.org/3/library/functions/open.html",syntax',
+        'python,"Which file mode opens a file for writing without truncating it?","[\"a\", \"w\", \"x\", \"r\"]",2,"The append mode writes to the end of the file without clearing it.",medium,SINGLE,file_io,"InternSphere curated assessment bank","Working with files","https://docs.python.org/3/library/functions/open.html",file_io',
+        'react,"Which hook is used to manage a component\'s local state?","[\"useMemo\", \"useState\", \"useEffect\", \"useCallback\"]",2,"State is tracked in a component with the useState hook.",easy,SINGLE,components,"InternSphere curated assessment bank","React docs","https://react.dev/reference/react/useState",components',
     ])
     return template.encode("utf-8")
 
@@ -447,10 +502,10 @@ def build_question_import_template_xlsx() -> bytes | None:
     sheet = workbook.active
     sheet.title = "Questions"
     rows = [
-        ["topic", "prompt", "options", "correct_index", "explanation", "difficulty", "question_type", "subtopic", "source", "resource_title", "resource_url", "resource_subtopic"],
-        ["python", "Which built-in value is used to represent the absence of a value?", '["None", "null", "undefined", "void"]', 0, "Python uses None for an intentionally empty value.", "easy", "SINGLE", "syntax", "InternSphere curated assessment bank", "Python docs", "https://docs.python.org/3/library/functions/open.html", "syntax"],
-        ["python", "Which file mode opens a file for writing without truncating it?", '["a", "w", "x", "r"]', 1, "The append mode writes to the end of the file without clearing it.", "medium", "SINGLE", "file_io", "InternSphere curated assessment bank", "Working with files", "https://docs.python.org/3/library/functions/open.html", "file_io"],
-        ["react", "Which hook is used to manage a component's local state?", '["useMemo", "useState", "useEffect", "useCallback"]', 1, "State is tracked in a component with the useState hook.", "easy", "SINGLE", "components", "InternSphere curated assessment bank", "React docs", "https://react.dev/reference/react/useState", "components"],
+        ["topic", "prompt", "options", "correct_option", "explanation", "difficulty", "question_type", "subtopic", "source", "resource_title", "resource_url", "resource_subtopic"],
+        ["python", "Which built-in value is used to represent the absence of a value?", '["None", "null", "undefined", "void"]', 1, "Python uses None for an intentionally empty value.", "easy", "SINGLE", "syntax", "InternSphere curated assessment bank", "Python docs", "https://docs.python.org/3/library/functions/open.html", "syntax"],
+        ["python", "Which file mode opens a file for writing without truncating it?", '["a", "w", "x", "r"]', 2, "The append mode writes to the end of the file without clearing it.", "medium", "SINGLE", "file_io", "InternSphere curated assessment bank", "Working with files", "https://docs.python.org/3/library/functions/open.html", "file_io"],
+        ["react", "Which hook is used to manage a component's local state?", '["useMemo", "useState", "useEffect", "useCallback"]', 2, "State is tracked in a component with the useState hook.", "easy", "SINGLE", "components", "InternSphere curated assessment bank", "React docs", "https://react.dev/reference/react/useState", "components"],
     ]
     for row in rows:
         sheet.append(row)

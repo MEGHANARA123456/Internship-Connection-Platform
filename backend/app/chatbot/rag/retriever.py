@@ -1,6 +1,7 @@
 """Audience-filtered hybrid vector and full-text retrieval."""
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -119,16 +120,29 @@ class HybridRetriever:
                 )
         ordered = sorted(ranks.values(), key=lambda item: item[1], reverse=True)[:CANDIDATE_LIMIT]
         threshold = self.config.rag_min_score
-        return [
-            Passage(
+        passages = []
+        for row, _, similarity in ordered[:self.config.rag_top_k]:
+            if similarity < threshold:
+                continue
+            route_hint = str(row["route_hint"])
+            try:
+                raw_links = json.loads(route_hint)
+                links = tuple(
+                    (str(label), str(route))
+                    for label, route in raw_links
+                    if isinstance(label, str) and isinstance(route, str)
+                ) if isinstance(raw_links, list) else ()
+            except (TypeError, ValueError):
+                links = ()
+            routes = tuple(route for _, route in links) or (route_hint,)
+            passages.append(Passage(
                 id=str(row["id"]),
                 title=str(row["title"]),
                 audience=(str(row["audience"]),),
                 text=str(row["content"]),
-                related_routes=(str(row["route_hint"]),),
+                related_routes=routes,
                 score=similarity,
                 doc_id=str(row["doc_id"]),
-            )
-            for row, _, similarity in ordered[:self.config.rag_top_k]
-            if similarity >= threshold
-        ]
+                links=links,
+            ))
+        return passages

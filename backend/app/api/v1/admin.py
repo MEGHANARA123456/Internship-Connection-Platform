@@ -23,6 +23,9 @@ from app.models import (
     Report,
     SkillAttempt,
     SkillBadge,
+    SkillLearningResource,
+    SkillQuestion,
+    SkillTopic,
     User,
     UserRole,
 )
@@ -59,7 +62,9 @@ from app.schemas.admin import (
     StudentProfileBrief,
     CompanyProfileBrief,
 )
-from app.services.audit import write_audit
+from app.services.audit import audit_target_id_response, write_audit
+from app.services.reporting_ranges import reporting_range_cutoff
+from app.services.search_matching import escape_search_term, search_conditions
 from app.services.company_metrics import get_company_metrics, get_company_metrics_batch
 from app.services.account_deletion import erase_user
 from app.services.email_validation import validate_email_format
@@ -78,6 +83,53 @@ def report_transition_allowed(current: str, target: str) -> bool:
     return target in REPORT_TRANSITIONS.get(current, set())
 
 
+def _metadata_target_label(metadata: dict[str, Any] | None) -> str | None:
+    """Build a readable target description from audit metadata when no row is available."""
+    if not metadata:
+        return None
+    for source in (metadata, metadata.get("after"), metadata.get("before")):
+        if not isinstance(source, dict):
+            continue
+        topic_name = source.get("topic_name")
+        topic_key = source.get("topic_key") or source.get("topic")
+        if topic_name or topic_key:
+            topic = str(topic_name or topic_key)
+            if topic_key and topic_name and str(topic_name).casefold() != str(topic_key).casefold():
+                topic = f"{topic_name} ({topic_key})"
+            return f"Skill topic: {topic}"
+        title = source.get("title") or source.get("name")
+        if title:
+            return str(title)
+        prompt = source.get("prompt")
+        if prompt:
+            text = " ".join(str(prompt).split())
+            return text[:60] + ("..." if len(text) > 60 else "")
+        filename = source.get("file_name") or source.get("filename")
+        if filename:
+            return f"File: {filename}"
+        count = source.get("count") or source.get("imported_count")
+        if count is not None:
+            return f"{count} records"
+        topics = source.get("topics")
+        if isinstance(topics, list) and topics:
+            return f"Topics: {', '.join(str(topic) for topic in topics[:3])}"
+    return None
+
+
+def _numeric_audit_target_id(target_id: int | str | None) -> int | None:
+    if isinstance(target_id, int):
+        return target_id
+    if isinstance(target_id, str) and target_id.isdecimal():
+        return int(target_id)
+    return None
+
+
+def _humanize_target_type(target_type: str) -> str:
+    """Convert an unknown target type into a compact display label."""
+    label = " ".join(part.lower() for part in target_type.replace("-", "_").split("_"))
+    return label[:1].upper() + label[1:]
+
+
 def _get_ip(request: Request) -> str | None:
     """Extract client IP from request, honouring X-Forwarded-For."""
     xff = request.headers.get("X-Forwarded-For")
@@ -90,16 +142,17 @@ def _get_ip(request: Request) -> str | None:
 
 def _escaped_search_term(term: str) -> str:
     """Escape SQL LIKE metacharacters so admin search treats them literally."""
-    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return escape_search_term(term)
 
 
-def _search_words(query: str, fields: tuple[ColumnElement[Any], ...]) -> list[ColumnElement[bool]]:
-    """Require each query word to match at least one of the searchable fields."""
-    words = query.strip()[:100].split()
-    return [
-        or_(*(field.ilike(f"%{_escaped_search_term(word)}%", escape="\\") for field in fields))
-        for word in words
-    ]
+def _search_words(
+    query: str,
+    fields: tuple[ColumnElement[Any], ...],
+    *,
+    postgres: bool = False,
+) -> list[ColumnElement[bool]]:
+    """Require each normalized word to match a searchable field, including PostgreSQL trigram matches."""
+    return search_conditions(query[:100], fields, postgres=postgres)
 
 
 async def _audit_filter_usage(
@@ -199,7 +252,8 @@ async def search_users(
     """List users newest first, optionally filtering by email text, role, current-month creation, and suspended status."""
     query = select(User).order_by(User.id.desc())
     if search:
-        query = query.where(User.email.ilike(f"%{search}%"))
+        escaped = _escaped_search_term(search.strip()[:100])
+        query = query.where(User.email.ilike(f"%{escaped}%", escape="\\"))
     if role:
         query = query.where(User.role == role)
     if created == "this_month":
@@ -260,6 +314,7 @@ async def list_admin_students(
         conditions = _search_words(
             q,
             (StudentProfile.full_name, User.email, StudentProfile.university, StudentProfile.major, StudentProfile.skills),
+            postgres=db.get_bind().dialect.name == "postgresql",
         )
         query = query.where(*conditions)
         count_query = count_query.where(*conditions)
@@ -394,7 +449,7 @@ async def get_admin_student_detail(
     ))
     audit_rows = list(await db.scalars(
         select(AuditLog)
-        .where(AuditLog.target_type == "user", AuditLog.target_id == user_id)
+        .where(AuditLog.target_type == "user", cast(User.id, String) == AuditLog.target_id)
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .limit(10)
     ))
@@ -580,7 +635,7 @@ async def view_user_detail(user_id: int, db: DbSession, user: admin_user) -> dic
             actor_email=a.actor_email,
             action=a.action,
             target_type=a.target_type,
-            target_id=a.target_id,
+            target_id=audit_target_id_response(a.target_id),
             metadata=a.metadata_, # type: ignore
             ip_address=a.ip_address,
             created_at=a.created_at,
@@ -843,6 +898,7 @@ async def list_all_companies(
                 CompanyProfile.recruiter_contact_name,
                 CompanyProfile.recruiter_contact_email,
             ),
+            postgres=db.get_bind().dialect.name == "postgresql",
         )
         query = query.where(*conditions)
         count_query = count_query.where(*conditions)
@@ -1309,21 +1365,25 @@ async def get_audit_logs(
     actor: str | None = Query(None, description="Filter by actor email (partial match)"),
     action: str | None = Query(None, description="Filter by exact action string"),
     target_type: str | None = Query(None, description="Filter by target_type"),
-    target_id: int | None = Query(None, description="Filter by target_id"),
+    target_id: str | None = Query(None, description="Filter by target_id"),
     search_target: str | None = Query(None, description="Search resolved target labels"),
     date_from: datetime | None = Query(None, description="ISO datetime lower bound"),
     date_to: datetime | None = Query(None, description="ISO datetime upper bound"),
-    range_value: str | None = Query(None, alias="range", pattern="^14d$"),
+    range_value: str | None = Query(
+        None, alias="range", pattern="^(7d|14d|30d|90d|all|7|30|90)$"
+    ),
 ) -> dict[str, Any]:
     """Paginated, filterable audit log listing. Admin-only."""
     base = select(AuditLog)
     count_base = select(func.count()).select_from(AuditLog)
 
     filters = []
-    if range_value == "14d":
-        filters.append(AuditLog.created_at >= datetime.now(timezone.utc) - timedelta(days=14))
+    range_cutoff = reporting_range_cutoff(range_value)
+    if range_cutoff is not None:
+        filters.append(AuditLog.created_at >= range_cutoff)
     if actor:
-        filters.append(AuditLog.actor_email.ilike(f"%{actor}%"))
+        escaped_actor = _escaped_search_term(actor.strip()[:100])
+        filters.append(AuditLog.actor_email.ilike(f"%{escaped_actor}%", escape="\\"))
     if action:
         filters.append(AuditLog.action == action)
     if target_type:
@@ -1338,29 +1398,36 @@ async def get_audit_logs(
     if date_to:
         filters.append(AuditLog.created_at <= date_to)
     if search_target and search_target.strip():
-        target_pattern = f"%{search_target.strip()}%"
+        target_pattern = f"%{_escaped_search_term(search_target.strip()[:100])}%"
         filters.append(or_(
             exists(select(User.id).where(
-                User.id == AuditLog.target_id,
+                cast(User.id, String) == AuditLog.target_id,
                 AuditLog.target_type.ilike("user"),
-                User.email.ilike(target_pattern),
+                User.email.ilike(target_pattern, escape="\\"),
             )),
             exists(select(Internship.id).outerjoin(
                 CompanyProfile, CompanyProfile.user_id == Internship.company_id
             ).where(
-                Internship.id == AuditLog.target_id,
+                cast(Internship.id, String) == AuditLog.target_id,
                 AuditLog.target_type.ilike("internship") | AuditLog.target_type.ilike("posting"),
-                or_(Internship.title.ilike(target_pattern), CompanyProfile.company_name.ilike(target_pattern)),
+                or_(
+                    Internship.title.ilike(target_pattern, escape="\\"),
+                    CompanyProfile.company_name.ilike(target_pattern, escape="\\"),
+                ),
             )),
             exists(select(CompanyProfile.id).where(
-                or_(CompanyProfile.user_id == AuditLog.target_id, CompanyProfile.id == AuditLog.target_id),
+                or_(
+                    cast(CompanyProfile.user_id, String) == AuditLog.target_id,
+                    cast(CompanyProfile.id, String) == AuditLog.target_id,
+                ),
                 AuditLog.target_type.ilike("company"),
-                CompanyProfile.company_name.ilike(target_pattern),
+                CompanyProfile.company_name.ilike(target_pattern, escape="\\"),
             )),
             (
                 (AuditLog.target_type.ilike("report"))
-                & (cast(AuditLog.target_id, String).ilike(target_pattern))
+                & (cast(AuditLog.target_id, String).ilike(target_pattern, escape="\\"))
             ),
+            cast(AuditLog.metadata_, String).ilike(target_pattern, escape="\\"),
         ))
 
     if filters:
@@ -1374,9 +1441,38 @@ async def get_audit_logs(
         .limit(page_size)
     ))
 
-    target_user_ids = {a.target_id for a in rows if a.target_id is not None and (a.target_type or "").lower() == "user"}
-    target_internship_ids = {a.target_id for a in rows if a.target_id is not None and (a.target_type or "").lower() in {"internship", "posting"}}
-    target_company_ids = {a.target_id for a in rows if a.target_id is not None and (a.target_type or "").lower() == "company"}
+    target_user_ids = {
+        target_id for a in rows
+        if (a.target_type or "").lower() == "user"
+        and (target_id := _numeric_audit_target_id(a.target_id)) is not None
+    }
+    target_internship_ids = {
+        target_id for a in rows
+        if (a.target_type or "").lower() in {"internship", "posting"}
+        and (target_id := _numeric_audit_target_id(a.target_id)) is not None
+    }
+    target_company_ids = {
+        target_id for a in rows
+        if (a.target_type or "").lower() == "company"
+        and (target_id := _numeric_audit_target_id(a.target_id)) is not None
+    }
+    target_question_ids = {
+        target_id for a in rows
+        if (a.target_type or "").lower() == "skill_question"
+        and (target_id := _numeric_audit_target_id(a.target_id)) is not None
+    }
+    target_resource_ids = {
+        target_id for a in rows
+        if (a.target_type or "").lower() == "skill_learning_resource"
+        and (target_id := _numeric_audit_target_id(a.target_id)) is not None
+    }
+    target_topic_keys = {
+        str(key)
+        for a in rows
+        if (a.target_type or "").lower() == "skill_topic"
+        for key in (a.target_id, *((a.metadata_ or {}).get("topic_key"), (a.metadata_ or {}).get("topic")))
+        if key
+    }
     actor_ids = {a.actor_id for a in rows if a.actor_id is not None}
 
     target_users = {}
@@ -1403,6 +1499,32 @@ async def get_audit_logs(
         for company in company_rows:
             target_companies[company.user_id] = company.company_name
             target_companies[company.id] = company.company_name
+    target_questions = {}
+    if target_question_ids:
+        target_questions = {
+            question.id: (question.topic, question.prompt)
+            for question in await db.scalars(
+                select(SkillQuestion).where(SkillQuestion.id.in_(target_question_ids))
+            )
+        }
+    target_resources = {}
+    if target_resource_ids:
+        target_resources = {
+            resource.id: resource.title
+            for resource in await db.scalars(
+                select(SkillLearningResource).where(
+                    SkillLearningResource.id.in_(target_resource_ids)
+                )
+            )
+        }
+    target_topics = {}
+    if target_topic_keys:
+        target_topics = {
+            topic.slug: topic.name
+            for topic in await db.scalars(
+                select(SkillTopic).where(SkillTopic.slug.in_(target_topic_keys))
+            )
+        }
     actor_roles = {}
     if actor_ids:
         actor_roles = {
@@ -1417,9 +1539,11 @@ async def get_audit_logs(
         target_type_normalized = (a.target_type or "").lower()
         target_label = None
         target_url = None
+        metadata_label = _metadata_target_label(a.metadata_)
         if a.target_id is not None:
+            numeric_target_id = _numeric_audit_target_id(a.target_id)
             if target_type_normalized == "user":
-                target_user = target_users.get(a.target_id)
+                target_user = target_users.get(numeric_target_id)
                 target_label = (
                     "Deleted user"
                     if target_user is None or (target_user.email or "").endswith("@deleted.local")
@@ -1427,7 +1551,7 @@ async def get_audit_logs(
                 )
                 target_url = "/admin/users"
             elif target_type_normalized in {"internship", "posting"}:
-                resolved = target_internships.get(a.target_id)
+                resolved = target_internships.get(numeric_target_id)
                 if resolved:
                     title, company_name, company_id = resolved
                     target_label = f"{title} · {company_name or 'Company'}"
@@ -1435,11 +1559,63 @@ async def get_audit_logs(
                 else:
                     target_label = "Deleted internship"
             elif target_type_normalized == "company":
-                target_label = target_companies.get(a.target_id, "Deleted company")
-                target_url = f"/admin/companies/{a.target_id}/postings"
+                target_label = target_companies.get(numeric_target_id, "Deleted company")
+                target_url = f"/admin/companies/{numeric_target_id}/postings"
             elif target_type_normalized == "report":
                 target_label = f"Report #{a.target_id}"
                 target_url = "/admin/reports"
+            elif target_type_normalized == "skill_topic":
+                topic_key = (
+                    (a.metadata_ or {}).get("topic_key")
+                    or (a.metadata_ or {}).get("topic")
+                )
+                if topic_key:
+                    topic_name = target_topics.get(str(topic_key))
+                    target_label = f"Skill topic: {topic_name or topic_key}"
+                else:
+                    target_label = f"Skill topic #{a.target_id}"
+            elif target_type_normalized == "skill_question":
+                question = target_questions.get(numeric_target_id)
+                if question:
+                    topic, prompt = question
+                    prompt_preview = " ".join(prompt.split())[:60]
+                    if len(" ".join(prompt.split())) > 60:
+                        prompt_preview += "..."
+                    target_label = f"{topic}: {prompt_preview}"
+                else:
+                    target_label = "Deleted question"
+            elif target_type_normalized == "skill_learning_resource":
+                target_label = target_resources.get(numeric_target_id, "Deleted resource")
+            else:
+                target_label = metadata_label or (
+                    f"{_humanize_target_type(target_type_normalized)} #{a.target_id}"
+                )
+        elif target_type_normalized == "skill_topic" and metadata_label:
+            target_label = metadata_label
+        elif target_type_normalized == "skill_question":
+            metadata = a.metadata_ or {}
+            question_context = metadata.get("after", metadata)
+            prompt = question_context.get("prompt") if isinstance(question_context, dict) else None
+            topic = question_context.get("topic") if isinstance(question_context, dict) else None
+            if prompt:
+                prompt_text = " ".join(str(prompt).split())
+                prompt_preview = prompt_text[:60] + ("..." if len(prompt_text) > 60 else "")
+                target_label = f"{topic}: {prompt_preview}" if topic else prompt_preview
+            else:
+                target_label = metadata_label or "Deleted question"
+        elif target_type_normalized == "skill_learning_resource":
+            metadata = a.metadata_ or {}
+            resource_context = metadata.get("after", metadata)
+            resource_title = (
+                resource_context.get("title")
+                if isinstance(resource_context, dict)
+                else None
+            )
+            target_label = resource_title or metadata_label or "Deleted resource"
+        elif target_type_normalized:
+            target_label = metadata_label or _humanize_target_type(target_type_normalized)
+        else:
+            target_label = metadata_label or "System-wide"
         items.append(AuditLogResponse(
             id=a.id,
             actor_id=a.actor_id,
@@ -1447,7 +1623,7 @@ async def get_audit_logs(
             actor_role=actor_roles.get(a.actor_id),
             action=a.action,
             target_type=a.target_type,
-            target_id=a.target_id,
+            target_id=audit_target_id_response(a.target_id),
             target_label=target_label,
             target_url=target_url,
             metadata=a.metadata_, # type: ignore

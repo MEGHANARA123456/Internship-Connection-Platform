@@ -5,7 +5,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models import Application, Interview, Internship
+from app.models import Application, Interview, Internship, Notification
 from app.services.application_events import record_interview_event
 from app.services.notify import notify
 
@@ -77,6 +77,16 @@ async def expire_overdue_interviews(
         )
         if application is None:
             continue
+        await db.execute(
+            update(Notification)
+            .where(
+                Notification.user_id == application.student_id,
+                Notification.application_id == application.id,
+                Notification.notification_type == "INTERVIEW_INVITE",
+                Notification.read_at.is_(None),
+            )
+            .values(read_at=current_time)
+        )
 
         formatted_date = scheduled_at.astimezone(timezone.utc).strftime(
             "%A, %b %d, %Y %I:%M %p UTC"

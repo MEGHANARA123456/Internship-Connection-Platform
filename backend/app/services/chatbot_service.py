@@ -16,8 +16,15 @@ from ..chatbot.providers.base import AnswerProvider, ChatbotRouterProvider, Pass
 from ..chatbot.providers.retrieval_only import RetrievalOnlyProvider
 from ..chatbot.rag.retriever import HybridRetriever
 from ..chatbot.redaction import contains_secret, redact
+from ..models import ChatbotLowConfidenceLog
 from ..chatbot.retriever import BM25Retriever
-from ..chatbot.scope import ScopeDecision, decide_scope, fixed_reply, is_admin_audit_query
+from ..chatbot.scope import (
+    ScopeDecision,
+    decide_scope,
+    fixed_reply,
+    is_admin_audit_query,
+    is_how_to_question,
+)
 from .audit import AuditEventSummary, audit_action_label
 
 logger = logging.getLogger("internsphere.chatbot")
@@ -66,26 +73,37 @@ GUIDANCE = {
     "account": "Open your account settings to review your InternSphere account information.",
 }
 WORD_LIMIT = 120
+NO_EVIDENCE_ANSWER = "I don't have sufficient data to answer this question."
+SAFE_QUESTION_WORDS = set(
+    "a about account accounts active activity admin applications apply are audit badges "
+    "best by can candidate candidates company companies completed count current data delete "
+    "deleted did do does email events failed for from help how in internship internships is "
+    "it its last live login many messages most new number of open or other platform posting "
+    "postings recent registered registration registrations report reports role security show "
+    "sign suspicious student students the today total verified verification what when where "
+    "which who why with".split()
+)
 COMMON_ROUTES = {
     "/", "/opportunities", "/login", "/register-student", "/register-company",
     "/forgot-password", "/reset-password", "/verify", "/privacy", "/privacy-center",
-    "/privacy-security",
+    "/privacy-security", "/#faq",
 }
 ROLE_ROUTES = {
     "guest": COMMON_ROUTES,
     "student": COMMON_ROUTES | {
         "/applications", "/profile/student", "/interviews", "/messages",
-        "/notifications", "/saved", "/student/analytics",
+        "/notifications", "/saved", "/student/analytics", "/skills/history",
     },
     "company": COMMON_ROUTES | {
         "/company", "/company/jobs", "/company/internships/new", "/company/applicants",
-        "/company/pipeline", "/company/shortlisted", "/company/analytics",
+        "/company/jobs/:id/applicants",
+        "/company/interviews", "/company/pipeline", "/company/shortlisted", "/company/analytics",
         "/company/settings", "/profile/company", "/interviews", "/messages", "/notifications",
     },
     "admin": COMMON_ROUTES | {
         "/admin", "/admin/moderation", "/admin/companies", "/admin/users",
         "/admin/verifications", "/admin/reports", "/admin/audit-logs",
-        "/admin/skill-assessments", "/notifications",
+        "/admin/skill-assessments", "/admin/students", "/notifications",
     },
 }
 
@@ -101,6 +119,7 @@ class ChatResult:
     refused: bool
     matched_ids: tuple[str, ...]
     refusal_reason: str | None
+    needs_clarification: str | None = None
 
 
 def _truncate_answer(text: str) -> str:
@@ -112,6 +131,8 @@ def _truncate_answer(text: str) -> str:
         if not stripped:
             continue
         if re.match(r"^(?:\d+[.)]|[-*])\s+", stripped):
+            units = [stripped]
+        elif stripped.endswith(":") or re.search(r"\.[A-Z][^.!?]*:\s*$", stripped):
             units = [stripped]
         else:
             units = re.split(r"(?<=[.!?])\s+", stripped)
@@ -152,15 +173,83 @@ def _render_retrieval_answer(passages: list[Passage]) -> str:
     return _truncate_answer("\n\n".join(paragraphs[:2]))
 
 
-def _no_evidence_reply(role: str) -> str:
-    """Return a role-specific help-guide fallback when retrieval provides no usable evidence."""
-    suggestions = {
-        "student": "I can help with finding internships, applications, or skill assessments.",
-        "company": "I can help with internship postings, applicants, or your hiring pipeline.",
-        "admin": "I can help with moderation, company verification, or audit reports.",
-        "guest": "I can help with registration, finding internships, or general platform features.",
+def _closest_supported_questions(
+    retriever: BM25Retriever,
+    query: str,
+    role: str,
+    page: str,
+) -> tuple[str, ...]:
+    """Return up to three role-visible, example questions nearest to the current message."""
+    fallback = {
+        "student": (
+            "How do I search internships?",
+            "How do I track my applications?",
+            "How do I take a skill assessment?",
+        ),
+        "company": (
+            "How do I create an internship posting?",
+            "How do I review applicants?",
+            "How do I schedule an interview?",
+        ),
+        "admin": (
+            "How do I review pending postings?",
+            "How do I verify a company?",
+            "How do I manage assessment questions?",
+        ),
+        "guest": (
+            "How do I search internships?",
+            "How do I register?",
+            "How does InternSphere work?",
+        ),
     }
-    return f"I couldn’t find that in the help guide. {suggestions.get(role, suggestions['guest'])}"
+    passages = retriever.retrieve(
+        query,
+        role,
+        top_k=8,
+        minimum_score=0,
+        minimum_margin=0,
+        page_route=PAGE_ROUTES.get(page),
+    )
+    documents = {
+        document.id: document
+        for document in getattr(retriever, "documents", ())
+    }
+    questions = []
+    for passage in passages:
+        if passage.score <= 0:
+            continue
+        document = documents.get(passage.id)
+        if document is None:
+            continue
+        question = next(
+            (example.strip() for example in document.examples if example.strip()),
+            "",
+        )
+        if question and question.casefold() not in {item.casefold() for item in questions}:
+            questions.append(question)
+        if len(questions) == 3:
+            break
+    for question in fallback[role]:
+        if len(questions) == 3:
+            break
+        if question.casefold() not in {item.casefold() for item in questions}:
+            questions.append(question)
+    return tuple(questions)
+
+
+def _no_evidence_reply() -> str:
+    """Return the exact response used when retrieval does not meet its relevance threshold."""
+    return NO_EVIDENCE_ANSWER
+
+
+def _privacy_reduced_question(question: str) -> str:
+    """Keep only general question language and platform terms before storing for review."""
+    words = re.findall(r"[A-Za-z]+|\d+|[?.!,]", redact(question).casefold())
+    safe = [
+        word if word in SAFE_QUESTION_WORDS or word in {"?", ".", ",", "!"} else "[redacted]"
+        for word in words
+    ]
+    return re.sub(r"(?:\[redacted\]\s*){2,}", "[redacted] ", " ".join(safe))[:500].strip()
 
 
 def _role_routes(role: str) -> set[str]:
@@ -169,44 +258,76 @@ def _role_routes(role: str) -> set[str]:
 
 
 def _is_allowed_live_route(route: str, role: str) -> bool:
-    """Check role route access, allowing students to open numeric opportunity-detail routes."""
+    """Check role access for static and parameterized frontend routes."""
+    if route == "/#faq":
+        route = "/"
+    if role != "guest" and route in {
+        "/login", "/register-student", "/register-company",
+        "/forgot-password", "/reset-password", "/verify",
+    }:
+        return False
     if route in _role_routes(role):
         return True
-    return role == "student" and re.fullmatch(r"/opportunities/[1-9]\d*", route) is not None
+    if role == "student":
+        return bool(re.fullmatch(r"/(?:opportunities|applications)/[1-9]\d*", route))
+    if role == "company":
+        return bool(re.fullmatch(
+            r"/company/interviews|/company/(?:jobs|companies)/[1-9]\d+(?:/applicants)?|/company/internships/[1-9]\d+/(?:edit|applicants)",
+            route,
+        ))
+    if role == "admin":
+        return bool(re.fullmatch(
+            r"/admin/(?:companies|students)/[1-9]\d+(?:/postings)?",
+            route,
+        ))
+    return False
 
 
 def _allowed_routes(passages: list[Passage], role: str) -> set[str]:
     """Collect role-authorized routes referenced by retrieved passages."""
-    role_routes = _role_routes(role)
     return {
         route
         for passage in passages
-        for route in passage.related_routes
-        if route in role_routes
+        for _, route in (
+            passage.links or tuple((passage.title, item) for item in passage.related_routes)
+        )
+        if _is_allowed_live_route(route, role)
     }
 
 
 def _links_for(passages: list[Passage], role: str) -> tuple[tuple[str, str], ...]:
-    """Build up to four unique, role-authorized passage-title links."""
+    """Build up to two unique, role-authorized links across the ranked passages."""
     links = []
-    seen = set()
-    role_routes = _role_routes(role)
+    seen_routes: set[str] = set()
+    seen_labels: set[str] = set()
     for passage in passages:
-        for route in passage.related_routes:
-            if route not in seen and route in role_routes:
-                seen.add(route)
-                links.append((passage.title, route))
-    return tuple(links[:4])
+        passage_links = passage.links or tuple((passage.title, route) for route in passage.related_routes)
+        for label, route in passage_links:
+            if (
+                route not in seen_routes
+                and label.casefold() not in seen_labels
+                and _is_allowed_live_route(route, role)
+            ):
+                seen_routes.add(route)
+                seen_labels.add(label.casefold())
+                links.append((label, route))
+                if len(links) == 2:
+                    return tuple(links)
+    return tuple(links)
 
 
 def _sources_for(passages: list[Passage], role: str) -> tuple[tuple[str, str, str], ...]:
     """Return up to five distinct passage IDs paired with titles and each passage's first allowed route."""
     sources = []
     seen: set[str] = set()
-    role_routes = _role_routes(role)
     for passage in passages:
         route = next(
-            (item for item in passage.related_routes if item in role_routes),
+            (
+                route for _, route in (
+                    passage.links or tuple((passage.title, item) for item in passage.related_routes)
+                )
+                if _is_allowed_live_route(route, role)
+            ),
             None,
         )
         if route and passage.id not in seen:
@@ -216,13 +337,15 @@ def _sources_for(passages: list[Passage], role: str) -> tuple[tuple[str, str, st
 
 
 def _dedupe_links(links: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
-    """Keep the first link for each route while preserving input order."""
+    """Keep the first link per route and label, with no more than two destinations."""
     unique = []
     seen_routes: set[str] = set()
     for link in links:
         if link[1] not in seen_routes:
             seen_routes.add(link[1])
             unique.append(link)
+        if len(unique) == 2:
+            break
     return tuple(unique)
 
 
@@ -249,75 +372,318 @@ def _role_capabilities(role: str) -> tuple[str, str]:
     )
 
 
-def _suggested_followups(role: str, message: str) -> tuple[str, ...]:
-    """Choose canned follow-up questions from role and message keywords, with a role-specific default set."""
+def _suggested_followups(
+    role: str,
+    message: str,
+    page: str,
+    history: list[tuple[str, str]],
+    source_ids: tuple[str, ...],
+    previous_suggestions: list[str],
+    matched_examples: tuple[str, ...] = (),
+    matched_intent: str | None = None,
+) -> tuple[str, ...]:
+    """Offer answerable questions related to the page/topic without repeating recent content."""
     text = message.casefold()
+    topic = source_ids[0] if source_ids else ""
+    suggestions: tuple[str, ...]
     if role == "student":
-        if any(term in text for term in ("application", "submission")):
-            return (
+        if topic in {"application-statuses-timeline", "applying"} or page == "applications":
+            suggestions = (
                 "How do I withdraw an application?",
-                "Any interviews coming up?",
                 "How do I understand application statuses?",
-            )
-        if any(term in text for term in ("match", "recommend", "internships")) and "profile" in text:
-            return (
-                "Show my saved internships.",
-                "How do I apply to an internship?",
-                "How do I update my profile skills?",
-            )
-        if "interview" in text:
-            return (
-                "How do I prepare for an interview?",
-                "Where can I see my applications?",
                 "How do notifications work?",
+                "Any interviews coming up?",
+                "How do I save an internship?",
+                "How do I update my profile and resume?",
+                "How do I search internships by skills and location?",
+            )
+        elif topic in {"skill-assessments", "assessment-badges"} or page in {"profile", "student-dashboard"}:
+            suggestions = (
+                "How do I take a skill assessment?",
+                "When can I retake a skill assessment?",
+                "How long do verified skill badges last?",
+                "How do I update my profile skills?",
+                "Where can I see my assessment results?",
+                "How do I download an assessment report?",
+                "How do I search internships by skills and location?",
+            )
+        elif "interview" in text or page == "interviews":
+            suggestions = (
+                "Where can I see my applications?",
+                "How do I understand application statuses?",
+                "How do notifications work?",
+                "How do I withdraw an application?",
+                "How do I update my profile and resume?",
+                "How do I save an internship?",
+                "How do skill assessments and badges work?",
+            )
+        elif "notification" in text or page == "notifications":
+            suggestions = (
+                "Where can I see my applications?",
+                "Any interviews coming up?",
+                "How do I update my profile and resume?",
+                "How do I save an internship?",
+                "How do I withdraw an application?",
+                "How do I search internships by skills and location?",
+                "How do skill assessments and badges work?",
+            )
+        else:
+            suggestions = (
+                "How do I search internships by skills and location?",
+                "How do I apply for an internship?",
+                "Where can I see my applications?",
+                "How do skill assessments and badges work?",
+                "How do I save an internship?",
+                "How do notifications work?",
+                "How do I update my profile and resume?",
             )
     if role == "company":
-        if any(term in text for term in ("applicant", "candidate", "shortlist")):
-            return (
+        if topic in {"company-applicant-review", "company-hiring-pipeline"} or page in {
+            "company-applicants", "company-pipeline", "company-shortlisted",
+        }:
+            suggestions = (
                 "How do I shortlist a candidate?",
                 "Show my hiring pipeline counts.",
                 "How do I schedule an interview?",
-            )
-        if "interview" in text:
-            return (
-                "How do I schedule an interview?",
                 "How do I update an application status?",
-                "Show applicants for my internships.",
+                "Who applied to my internship?",
+                "How do I create an internship posting?",
+                "How do I verify my company?",
+                "Show my upcoming interviews.",
+            )
+        elif "interview" in text or page == "interviews":
+            suggestions = (
+                "Who applied to my internship?",
+                "How do I update an application status?",
+                "How do I shortlist a candidate?",
+                "Show my hiring pipeline counts.",
+                "How do I create an internship posting?",
+                "How do I verify my company?",
+                "Show my internships.",
+            )
+        else:
+            suggestions = (
+                "How do I create an internship posting?",
+                "How do I review applicants?",
+                "How do I schedule an interview?",
+                "How do I verify my company?",
+                "Show my hiring pipeline counts.",
+                "Show my upcoming interviews.",
+                "How do I close an internship posting?",
             )
     if role == "admin":
-        if any(term in text for term in ("audit", "event", "action")):
-            return (
+        if topic in {"admin-skill-assessments"} or page == "admin-skills":
+            suggestions = (
+                "How do I archive a skill topic?",
+                "How do I import assessment questions?",
+                "How do I review assessment analytics?",
+                "How do I restore an archived topic?",
+                "How do I manage assessment questions?",
+                "How do I review company verification requests?",
                 "How do I review pending postings?",
+            )
+        elif "audit" in text or "event" in text or page == "admin-audit-logs":
+            suggestions = (
                 "How many postings are pending approval?",
                 "Show company verification counts.",
+                "How do I manage users?",
+                "How do I review platform reports?",
+                "How do I manage assessment questions?",
+                "How do I review pending postings?",
+                "How do I verify a company?",
             )
-        if any(term in text for term in ("posting", "approval")):
-            return (
-                "How do I approve or reject a posting?",
+        elif "posting" in text or page == "admin-moderation":
+            suggestions = (
                 "Explain recent audit events.",
                 "Show company verification counts.",
+                "How do I manage skill assessments?",
+                "How do I manage users?",
+                "How do I verify a company?",
+                "How do I review pending postings?",
+                "How do I review platform reports?",
             )
-    return {
-        "student": (
-            "How do I withdraw an application?",
-            "What is my application status?",
-            "How do I update my resume?",
+        else:
+            suggestions = (
+                "How do I review pending postings?",
+                "Show company verification counts.",
+                "How do I manage skill assessments?",
+                "Explain recent audit events.",
+                "How do I review platform reports?",
+                "How do I manage users?",
+                "How do I moderate postings?",
+            )
+    if role == "guest":
+        suggestions = (
+            "How do I register as a student?",
+            "How do companies register?",
+            "How do I search internships?",
+            "How does InternSphere work?",
+            "How do I sign in if I forgot my password?",
+            "How do I verify my email?",
+            "Where can I find the Privacy Center?",
+        )
+    intent_suggestions = {
+        "admin_company_counts": (
+            "How many companies are verified?",
+            "How many companies are pending verification?",
+            "Show recent company registrations.",
         ),
-        "company": (
-            "How do I shortlist a candidate?",
-            "Who applied to my internship?",
+        "admin_student_counts": (
+            "How many students are active?",
+            "What were today's student signups?",
+            "Show recent user registrations.",
+        ),
+        "admin_posting_counts": (
+            "How many postings are pending approval?",
+            "Show recent posting changes.",
+            "How many postings were approved today?",
+        ),
+        "admin_today_activity": (
+            "Show recent admin activities.",
+            "How many internship postings are active?",
+            "Are there any open reports?",
+        ),
+        "admin_recent_registrations": (
+            "How many companies are registered?",
+            "How many students are active?",
+            "Show today's platform activity.",
+        ),
+        "admin_recent_posting_changes": (
+            "Show recent admin activities.",
+            "How many postings are pending approval?",
+            "Are there any suspicious activities?",
+        ),
+        "admin_recent_posting_deletions": (
+            "What posting changes were recorded recently?",
+            "Show recent admin activities.",
+            "How many postings are pending approval?",
+        ),
+        "admin_security_events": (
+            "Show recent admin activities.",
+            "What changes were made to postings recently?",
+            "How many reports are open?",
+        ),
+        "admin_audit_events": (
+            "What changes were made to postings recently?",
+            "Show today's platform activity.",
+            "Are there any suspicious activities?",
+        ),
+        "admin_chatbot_low_confidence_questions": (
+            "How do I add an article to the help knowledge base?",
+            "Show recent admin activities.",
+            "How do I check chatbot retrieval quality?",
+        ),
+        "admin_company_and_posting_counts": (
+            "How many students are active?",
+            "Show today's platform activity.",
+            "Show recent posting changes.",
+        ),
+        "public_open_internships_count": (
+            "How do I find internships matching my skills?",
+            "How do I check whether a company is verified?",
+            "How do I report a suspicious internship?",
+        ),
+        "student_applications": (
+            "How do I understand application statuses?",
+            "How do I withdraw an application?",
+            "How do I follow up with a recruiter?",
+        ),
+        "student_interviews": (
+            "How do I review an interview invitation?",
+            "What happens when an interview is rescheduled?",
+            "Where can I see past interviews?",
+        ),
+        "student_saved_internships": (
+            "How do I apply to a saved internship?",
+            "How do I remove a saved internship?",
+            "How do I search internships by skills?",
+        ),
+        "student_skill_assessments": (
+            "How long do skill badges last?",
+            "When can I retake an assessment?",
+            "Where can I review assessment results?",
+        ),
+        "company_applicants": (
+            "How do I shortlist an applicant?",
+            "How do I update an application status?",
             "How do I schedule an interview?",
         ),
-        "admin": (
-            "Explain recent audit events.",
-            "How many postings are pending approval?",
-            "How do I verify a company?",
+        "company_shortlisted": (
+            "How do I move a candidate through the hiring pipeline?",
+            "How do I schedule an interview?",
+            "How do I update an application status?",
         ),
-    }.get(role, (
-        "How do I register?",
-        "How do I reset my password?",
-        "How do I search internships?",
-    ))
+        "company_pipeline": (
+            "What does each hiring stage mean?",
+            "How do I shortlist a candidate?",
+            "How do I schedule an interview?",
+        ),
+        "company_internships": (
+            "How do I create or edit an internship posting?",
+            "How do I close a posting?",
+            "How do I check a posting's moderation status?",
+        ),
+        "company_interviews": (
+            "How do I reschedule an interview?",
+            "How do I cancel an interview?",
+            "How do interview reminders work?",
+        ),
+    }
+    if matched_intent in intent_suggestions:
+        suggestions = intent_suggestions[matched_intent]
+    topic_suggestions = {
+        "internship-verification-and-moderation": (
+            "What does a verified company badge mean?",
+            "How can I report a suspicious internship?",
+            "What warning signs should I look for?",
+        ),
+        "spotting-internship-scams": (
+            "How do I know internships are real?",
+            "What does the verified company badge mean?",
+            "How do I report a suspicious internship?",
+        ),
+        "reporting-unfair-treatment": (
+            "How do I message a recruiter about my application?",
+            "Where do I report a misleading internship?",
+            "How do I review my application timeline?",
+        ),
+        "verified-companies": (
+            "How are internship postings moderated?",
+            "Can I report a verified company's posting?",
+            "How do I spot a suspicious offer?",
+        ),
+        "match-percentage": (
+            "How can I improve my profile match?",
+            "Do skill badges affect the match percentage?",
+            "Does a high match guarantee an interview?",
+        ),
+        "interview-invites-and-expiry": (
+            "Where can I see upcoming interviews?",
+            "What happens if an interview is rescheduled?",
+            "Where do cancelled or past interviews appear?",
+        ),
+        "assessment-badges": (
+            "How long do verified skill badges last?",
+            "When can I retake a skill assessment?",
+            "Where can I see my assessment results?",
+        ),
+    }
+    if source_ids and source_ids[0] in topic_suggestions:
+        suggestions = topic_suggestions[source_ids[0]]
+    if matched_examples:
+        suggestions = (*matched_examples, *suggestions)
+
+    excluded = {message.casefold().strip()}
+    excluded.update(content.casefold().strip() for _, content in history)
+    excluded.update(item.casefold().strip() for item in previous_suggestions)
+    selected = []
+    for candidate in suggestions:
+        normalized = candidate.casefold().strip()
+        if normalized not in excluded and normalized not in {item.casefold() for item in selected}:
+            selected.append(candidate)
+        if len(selected) == 3:
+            break
+    return tuple(selected)
 
 
 def _admin_audit_summary(events: list[AuditEventSummary]) -> str:
@@ -386,8 +752,10 @@ class ChatbotService:
             if self.config.mode == "llm"
             else RetrievalOnlyProvider()
         )
+        self.vector_available = self.config.uses_vector
         self._now = now
         self._requests: dict[str, deque[float]] = defaultdict(deque)
+        self.metrics: dict[str, int] = defaultdict(int)
 
     async def classify_intent_hint(self, message: str, role: str) -> str | None:
         """Ask a router provider for a redacted intent hint, returning ``None`` if routing is unavailable."""
@@ -436,6 +804,8 @@ class ChatbotService:
         live_answer: str | None = None,
         live_route: str | None = None,
         live_links: tuple[tuple[str, str], ...] = (),
+        previous_suggestions: list[str] | None = None,
+        matched_intent: str | None = None,
     ) -> ChatResult:
         """Retrieve and scope help/live context, construct a safe role-aware answer, and attach allowed sources and links."""
         started = time.monotonic()
@@ -445,23 +815,47 @@ class ChatbotService:
         secret_in_request = contains_secret(normalized_message) or any(
             contains_secret(content) for _, content in history
         )
-        score_threshold = self.config.rag_min_score if self.config.rag_enabled and db else self.config.min_score
-        preflight = decide_scope(normalized_message, [], score_threshold, role_name)
+        score_threshold = (
+            self.config.rag_min_score
+            if self.config.uses_vector and self.vector_available and db
+            else self.config.min_score
+        )
+        retrieval_query = normalized_message
+        preflight = decide_scope(retrieval_query, [], score_threshold, role_name)
         passages: list[Passage] = []
         if not secret_in_request and (
             not preflight.refused
             or preflight.refusal_reason == "no_product_intent_or_knowledge_match"
         ) and include_docs:
-            if self.config.rag_enabled and db is not None:
-                passages = await HybridRetriever(self.config).retrieve(
-                    db,
-                    normalized_message,
-                    retrieval_role,
-                    history,
-                )
+            if self.config.uses_vector and self.vector_available and db is not None:
+                try:
+                    passages = await HybridRetriever(self.config).retrieve(
+                        db,
+                        retrieval_query,
+                        retrieval_role,
+                        [],
+                    )
+                except Exception as error:
+                    self.vector_available = False
+                    logger.warning(
+                        "chatbot_vector_fallback",
+                        extra={
+                            "chatbot_meta": {
+                                "reason": type(error).__name__,
+                                "retrieval": "bm25",
+                            }
+                        },
+                    )
+                    passages = self.retriever.retrieve(
+                        retrieval_query,
+                        retrieval_role,
+                        top_k=self.config.top_k,
+                        minimum_score=self.config.min_score,
+                        page_route=PAGE_ROUTES.get(page),
+                    )
             else:
                 passages = self.retriever.retrieve(
-                    normalized_message,
+                    retrieval_query,
                     retrieval_role,
                     top_k=self.config.top_k,
                     minimum_score=self.config.min_score,
@@ -476,59 +870,64 @@ class ChatbotService:
         ):
             decision = ScopeDecision("live_data", True, False)
 
+        if (
+            db is not None
+            and not secret_in_request
+            and not passages
+            and decision.refusal_reason == "no_product_intent_or_knowledge_match"
+        ):
+            db.add(ChatbotLowConfidenceLog(
+                role=role_name,
+                question=_privacy_reduced_question(normalized_message),
+            ))
+            await db.commit()
+
         answer = ""
         links: tuple[tuple[str, str], ...] = ()
         sources: tuple[tuple[str, str, str], ...] = ()
         source_type = "docs"
         answer_path = "retrieval"
+        low_confidence = False
+        needs_clarification: str | None = None
         if decision.refused:
-            answer = (
-                _no_evidence_reply(role_name)
-                if decision.refusal_reason == "no_product_intent_or_knowledge_match"
-                else fixed_reply(decision, role_name)
-            )
-            answer_path = "refusal"
+            low_confidence = decision.refusal_reason == "no_product_intent_or_knowledge_match"
+            answer = _no_evidence_reply() if low_confidence else fixed_reply(decision, role_name)
+            answer_path = "fallback" if low_confidence else "refusal"
+            if low_confidence:
+                source_type = "none"
+                links = (("Help docs", "/#faq"),)
         elif is_role_capability_question(normalized_message):
             answer, role_route = _role_capabilities(role_name)
             links = (("Your InternSphere role", role_route),)
         elif live_answer is not None:
             source_type = "live data"
-            if self.config.mode == "llm":
-                answer, sources, links, provider_fallback = await self._answer_with_provider(
-                    normalized_message,
-                    history,
-                    role_name,
-                    page,
-                    passages if include_docs else [],
-                    live_data=live_answer,
-                )
-                answer_path = "fallback" if provider_fallback else "model"
-                if include_docs and passages:
+            answer = live_answer
+            answer_path = "tool"
+            docs_links: tuple[tuple[str, str], ...] = ()
+            if include_docs and passages:
+                docs_answer = _render_retrieval_answer(passages)
+                sources = _sources_for(passages, role_name)
+                docs_links = _links_for(passages, role_name)
+                if docs_answer:
+                    answer = f"{answer}\n\nHelp docs: {docs_answer}"
                     source_type = "docs + live data"
-            else:
-                answer = live_answer
-                answer_path = "tool"
-                if include_docs and passages:
-                    docs_answer, sources, doc_links = (
-                        _render_retrieval_answer(passages),
-                        _sources_for(passages, role_name),
-                        _links_for(passages, role_name),
-                    )
-                    if docs_answer:
-                        answer = f"{answer} Help docs: {docs_answer}"
-                        source_type = "docs + live data"
-                    links = doc_links
-            if live_route:
-                if _is_allowed_live_route(live_route, role_name):
-                    links = tuple(dict.fromkeys((*links, (live_route.rsplit("/", 1)[-1].replace("-", " ").title(), live_route))))
             safe_live_links = tuple(
                 (label, route)
                 for label, route in live_links
                 if _is_allowed_live_route(route, role_name)
                 and output_is_safe(label, _role_routes(role_name))
             )
-            links = tuple(dict.fromkeys((*links, *safe_live_links)))
-        elif role_name == "admin" and is_admin_audit_query(normalized_message):
+            primary_live_link = (
+                ((live_route.rsplit("/", 1)[-1].replace("-", " ").title(), live_route),)
+                if live_route and _is_allowed_live_route(live_route, role_name)
+                else ()
+            )
+            links = tuple(dict.fromkeys((*safe_live_links, *primary_live_link, *docs_links)))
+        elif (
+            role_name == "admin"
+            and is_admin_audit_query(normalized_message)
+            and not is_how_to_question(normalized_message)
+        ):
             answer = _admin_audit_summary(audit_events or [])
             links = (("Recent audit events", PAGE_ROUTES["admin-audit-logs"]),)
             source_type = "live data"
@@ -557,16 +956,32 @@ class ChatbotService:
                 route = PAGE_ROUTES.get(account_key, "/profile/student")
                 links = ((account_key.replace("-", " ").title(), route),)
         elif not passages:
-            answer = _no_evidence_reply(role_name)
+            answer = _no_evidence_reply()
+            source_type = "none"
+            links = (("Help docs", "/#faq"),)
+            low_confidence = True
+            answer_path = "fallback"
         elif self.config.mode == "llm":
-            answer, sources, links, provider_fallback = await self._answer_with_provider(
+            answer, sources, links, provider_fallback, needs_clarification = await self._answer_with_provider(
                 normalized_message,
-                history,
+                [],
                 role_name,
                 page,
                 passages,
             )
             answer_path = "fallback" if provider_fallback else "model"
+            if needs_clarification:
+                source_type = "none"
+            elif answer == NO_EVIDENCE_ANSWER:
+                low_confidence = True
+                source_type = "none"
+                links = (("Help docs", "/#faq"),)
+                if db is not None:
+                    db.add(ChatbotLowConfidenceLog(
+                        role=role_name,
+                        question=_privacy_reduced_question(normalized_message),
+                    ))
+                    await db.commit()
         else:
             answer = _render_retrieval_answer(passages)
             sources = _sources_for(passages, role_name)
@@ -612,17 +1027,30 @@ class ChatbotService:
                     links = ()
                     sources = ()
                     answer_path = "fallback"
+                    source_type = "none"
         links = _dedupe_links(links)
         if not answer.strip():
-            answer = _render_retrieval_answer(passages) or "I couldn’t find an answer in the help guide."
+            answer = _no_evidence_reply()
+            sources = ()
+            source_type = "none"
+            links = (("Help docs", "/#faq"),)
+            low_confidence = True
             answer_path = "fallback"
         elapsed_ms = round((time.monotonic() - started) * 1000)
+        category = "low_confidence" if low_confidence else decision.category
+        self.metrics["answered" if answer_path not in {"fallback", "refusal"} else answer_path] += 1
+        refused = decision.refused and not low_confidence
+        if refused:
+            self.metrics["refused"] += 1
         logger.info(
             "chatbot_request",
             extra={
                 "chatbot_meta": {
                     "path": answer_path,
+                    "category": category,
                     "latency_ms": elapsed_ms,
+                    "source_ids": [passage.id for passage in passages[:2]],
+                    "retrieval": "hybrid" if self.vector_available else "bm25",
                 }
             },
         )
@@ -631,11 +1059,38 @@ class ChatbotService:
             links=links,
             sources=sources,
             source_type=source_type,
-            suggested_followups=_suggested_followups(role_name, normalized_message),
-            category=decision.category,
-            refused=decision.refused,
+            suggested_followups=(
+                ()
+                if needs_clarification
+                else _closest_supported_questions(
+                    self.retriever,
+                    normalized_message,
+                    role_name,
+                    page,
+                )
+                if low_confidence
+                else _suggested_followups(
+                    role_name,
+                    normalized_message,
+                    page,
+                    history[-3:],
+                    tuple(passage.id for passage in passages),
+                    previous_suggestions or [],
+                    tuple(
+                        example
+                        for passage in passages
+                        for document in getattr(self.retriever, "documents", ())
+                        if document.id == passage.id
+                        for example in document.examples
+                    ),
+                    matched_intent,
+                )
+            ),
+            category=category,
+            refused=refused,
             matched_ids=tuple(passage.id for passage in passages),
             refusal_reason=decision.refusal_reason,
+            needs_clarification=needs_clarification,
         )
 
     async def _answer_with_provider(
@@ -645,12 +1100,12 @@ class ChatbotService:
         role: str,
         page: str,
         passages: list[Passage],
-        live_data: str | None = None,
     ) -> tuple[
         str,
         tuple[tuple[str, str, str], ...],
         tuple[tuple[str, str], ...],
         bool,
+        str | None,
     ]:
         """Request a redacted provider answer and validate its length, citations, and routes, falling back to retrieved text."""
         payload = ProviderPayload(
@@ -659,14 +1114,31 @@ class ChatbotService:
             role=role,
             page=page,
             passages=tuple(passages),
-            live_data=live_data,
         )
         allowed_ids = {passage.id for passage in passages}
         try:
             result = await self.provider.rewrite(payload)
+            clarification = (
+                result.needs_clarification.strip()
+                if isinstance(result.needs_clarification, str)
+                else ""
+            )
+            if clarification:
+                if (
+                    result.answerable
+                    or len(clarification.split()) > 20
+                    or not clarification.endswith("?")
+                    or not output_is_safe(
+                        clarification,
+                        _allowed_routes(passages, role) | _role_routes(role),
+                    )
+                ):
+                    raise ValueError("Provider clarification failed chatbot validation.")
+                return clarification, (), (), False, clarification
+            if not result.answerable or result.confidence < self.config.rag_min_score:
+                return NO_EVIDENCE_ANSWER, (), (("Help docs", "/#faq"),), False, None
             if (
-                not result.answerable
-                or not result.answer.strip()
+                not result.answer.strip()
                 or (passages and not result.sources)
                 or len(result.answer.split()) > WORD_LIMIT
                 or not set(result.sources).issubset(allowed_ids)
@@ -677,24 +1149,31 @@ class ChatbotService:
             ):
                 raise ValueError("Provider output failed chatbot validation.")
             sources = tuple(
-                (item.id, item.title, next(
-                    route for route in item.related_routes if route in _role_routes(role)
-                ))
+                (
+                    item.id,
+                    item.title,
+                    next(route for _, route in (
+                        item.links or tuple((item.title, route) for route in item.related_routes)
+                    ) if _is_allowed_live_route(route, role)),
+                )
                 for item in passages
                 if item.id in result.sources
-                and any(route in _role_routes(role) for route in item.related_routes)
+                and any(
+                    _is_allowed_live_route(route, role)
+                    for _, route in (
+                        item.links or tuple((item.title, route) for route in item.related_routes)
+                    )
+                )
             )
-            return result.answer.strip(), sources, _links_for(passages, role), False
+            return result.answer.strip(), sources, _links_for(passages, role), False, None
         except (OSError, RuntimeError, TimeoutError, ValueError):
-            fallback_answer = _render_retrieval_answer(passages) or live_data or ""
+            fallback_answer = _render_retrieval_answer(passages)
             fallback_answer = _truncate_answer(fallback_answer)
-            notice = "I couldn’t reach the answer service, so this is the help-guide answer."
-            answer = f"{fallback_answer} {notice}".strip()
-            if not fallback_answer:
-                answer = "I couldn’t reach the answer service or find a matching help article. Please try a specific platform feature."
+            answer = fallback_answer or "I don't have this in the help guide yet."
             return (
                 answer,
                 _sources_for(passages, role),
                 _links_for(passages, role),
                 True,
+                None,
             )

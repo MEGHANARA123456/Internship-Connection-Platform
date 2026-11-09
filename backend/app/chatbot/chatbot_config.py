@@ -1,13 +1,16 @@
 """Chatbot-only configuration. This module deliberately does not import app settings."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from io import StringIO
+import logging
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
+
+logger = logging.getLogger("internsphere.chatbot")
 
 CHATBOT_ENV_NAMES = (
     "CHATBOT_ENABLED",
@@ -28,6 +31,7 @@ CHATBOT_ENV_NAMES = (
     "CHATBOT_USER_PER_DAY",
     "CHATBOT_GUEST_PER_MINUTE",
     "RAG_ENABLED",
+    "CHATBOT_VECTOR_ENABLED",
     "EMBEDDING_MODEL",
     "EMBEDDING_DIM",
     "RAG_TOP_K",
@@ -63,18 +67,24 @@ class ChatbotConfig:
     temperature: float = 0.1
     retries: int = 1
     top_k: int = 3
-    min_score: float = 0.5
+    min_score: float = 4.0
     timeout_seconds: float = 8.0
     user_per_minute: int = 20
     user_per_day: int = 200
     guest_per_minute: int = 5
-    rag_enabled: bool = True
+    rag_enabled: bool = False
+    vector_enabled: bool | None = None
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dim: int = 384
     rag_top_k: int = 5
     rag_min_score: float = 0.55
     rerank_enabled: bool = False
     kb_path: Path = DEFAULT_KB_PATH
+
+    @property
+    def uses_vector(self) -> bool:
+        """Use vector retrieval only when explicitly enabled; keep rag_enabled for older callers."""
+        return self.rag_enabled if self.vector_enabled is None else self.vector_enabled
 
 
 def load_config() -> ChatbotConfig:
@@ -111,12 +121,19 @@ def load_config() -> ChatbotConfig:
         temperature=max(0.0, min(0.2, float(setting("CHATBOT_TEMPERATURE", "0.1")))),
         retries=max(0, min(1, int(setting("CHATBOT_RETRIES", "1")))),
         top_k=max(1, min(8, int(setting("CHATBOT_TOP_K", "3")))),
-        min_score=max(0.0, float(setting("CHATBOT_MIN_SCORE", "0.5"))),
-        timeout_seconds=min(15.0, max(0.1, float(setting("CHATBOT_TIMEOUT_SECONDS", "15")))),
+        min_score=max(4.0, float(setting("CHATBOT_MIN_SCORE", "4.0"))),
+        timeout_seconds=min(8.0, max(0.1, float(setting("CHATBOT_TIMEOUT_SECONDS", "8")))),
         user_per_minute=max(1, int(setting("CHATBOT_USER_PER_MINUTE", "20"))),
         user_per_day=max(1, int(setting("CHATBOT_USER_PER_DAY", "200"))),
         guest_per_minute=max(1, int(setting("CHATBOT_GUEST_PER_MINUTE", "5"))),
-        rag_enabled=boolean_setting("RAG_ENABLED", True),
+        rag_enabled=boolean_setting(
+            "CHATBOT_VECTOR_ENABLED",
+            boolean_setting("RAG_ENABLED", False),
+        ),
+        vector_enabled=boolean_setting(
+            "CHATBOT_VECTOR_ENABLED",
+            boolean_setting("RAG_ENABLED", False),
+        ),
         embedding_model=setting("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5").strip(),
         embedding_dim=max(1, int(setting("EMBEDDING_DIM", "384"))),
         rag_top_k=max(1, min(5, int(setting("RAG_TOP_K", "5")))),
@@ -128,17 +145,16 @@ def load_config() -> ChatbotConfig:
         raise ValueError("CHATBOT_MODE must be 'retrieval' or 'llm'.")
     if config.provider not in {"anthropic", "openai-compatible"}:
         raise ValueError("CHATBOT_PROVIDER must be 'anthropic' or 'openai-compatible'.")
-    if config.enabled and config.mode == "llm" and not provider_configured(config):
-        raise ValueError(
-            "Configure the selected chatbot provider, answer model, router model, and API key before enabling LLM mode."
+    if config.mode == "llm" and not provider_configured(config):
+        logger.warning(
+            "CHATBOT_MODE=llm requested without provider configuration; falling back to retrieval mode."
         )
+        config = replace(config, mode="retrieval")
     return config
 
 
 def provider_configured(config: ChatbotConfig) -> bool:
     """Report whether the selected LLM provider has its required endpoint and credentials."""
-    if config.mode == "retrieval":
-        return True
     parsed_url = urlsplit(config.base_url)
     local_provider = parsed_url.hostname in {"localhost", "127.0.0.1", "::1"}
     if config.provider == "anthropic":

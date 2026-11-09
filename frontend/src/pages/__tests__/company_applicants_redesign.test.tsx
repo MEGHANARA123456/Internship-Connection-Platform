@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { api } from '../../api/client'
 import { CompanyApplicantsRedesign } from '../CompanyApplicantsRedesign'
 
@@ -31,13 +31,22 @@ function searchResponse(items: ReturnType<typeof application>[]) {
   return { data: { items, total: items.length, status_counts: {} } }
 }
 
+function CurrentQuery() {
+  const location = useLocation()
+  return <output data-testid="current-query">{location.search}</output>
+}
+
 function renderPage(pipeline: boolean, path: string, view: 'applicants' | 'shortlisted' = 'shortlisted') {
-  return render(<MemoryRouter initialEntries={[path]}><CompanyApplicantsRedesign pipeline={pipeline} view={view} /></MemoryRouter>)
+  return render(<MemoryRouter initialEntries={[path]}><CompanyApplicantsRedesign pipeline={pipeline} view={view} /><CurrentQuery /></MemoryRouter>)
 }
 
 beforeEach(() => {
   vi.mocked(api.get).mockImplementation(async (url) => {
-    if (url === '/internships/mine') return { data: [{ id: 12, title: 'Frontend Engineering Internship' }] } as never
+    if (url === '/internships/mine') return { data: [
+      { id: 12, title: 'Sales Manager', location: 'Pune', created_at: '2026-10-12T00:00:00Z', applicant_count: 3 },
+      { id: 13, title: 'Sales Manager', location: 'Mumbai', created_at: '2026-10-12T00:00:00Z', applicant_count: 2 },
+      { id: 14, title: 'Sales Manager', location: 'Pune', created_at: '2026-10-12T00:00:00Z', applicant_count: 3 },
+    ] } as never
     if (url === '/applications/company/search') return searchResponse([]) as never
     return { data: [] } as never
   })
@@ -52,14 +61,15 @@ describe('company pipeline and shortlisted redesign', () => {
 
     const filters = screen.getByRole('group', { name: 'Candidate filters' })
     expect(await within(filters).findByRole('combobox', { name: 'Sort candidates' })).toHaveClass('h-10')
-    for (const name of ['Search candidate', 'Filter by skills', 'Filter by education']) {
+    expect(within(filters).getByRole('combobox', { name: 'Search candidate' })).toHaveClass('h-10')
+    for (const name of ['Filter by skills', 'Filter by education']) {
       expect(within(filters).getByRole('textbox', { name })).toHaveClass('h-10')
     }
     for (const name of ['Filter by internship', 'Filter by verified skill']) {
       expect(within(filters).getByRole('combobox', { name })).toHaveClass('h-10')
     }
     expect(within(filters).getByRole('button', { name: 'Apply' })).toHaveClass('h-10', 'bg-indigo-600')
-    expect(within(filters).getByRole('button', { name: 'Reset' })).toHaveClass('h-10')
+    expect(within(filters).getByRole('button', { name: 'Clear filters' })).toHaveClass('h-10')
     expect(filters).toHaveClass('items-end', 'xl:grid-cols-4', '2xl:grid-cols-[repeat(5,minmax(0,1fr))_minmax(160px,1fr)_auto]')
 
     unmount()
@@ -86,6 +96,57 @@ describe('company pipeline and shortlisted redesign', () => {
     }
     expect(within(screen.getByRole('region', { name: 'Applied applicants' })).getByText('1')).toBeInTheDocument()
     expect(within(screen.getByRole('region', { name: 'Shortlisted applicants' })).getByText('1')).toBeInTheDocument()
+  })
+
+  it('updates the URL and sends internship, applicant, and sort filters to the server', async () => {
+    renderPage(true, '/company/pipeline')
+    const internship = screen.getByRole('combobox', { name: 'Filter by internship' })
+    fireEvent.click(internship)
+    fireEvent.click(await screen.findByRole('option', { name: /Sales Manager · Pune · 12 Oct \(3\) · #12/ }))
+    await waitFor(() => {
+      expect(screen.getByTestId('current-query')).toHaveTextContent('internship=12')
+      expect(api.get).toHaveBeenCalledWith('/applications/company/search', {
+        params: expect.objectContaining({ internship: '12' }),
+      })
+    })
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Filter by verified skill' }))
+    fireEvent.click(screen.getByRole('option', { name: 'High match (70%+)' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('current-query')).toHaveTextContent('applicant_filter=high_match')
+      expect(api.get).toHaveBeenCalledWith('/applications/company/search', {
+        params: expect.objectContaining({ internship: '12', applicant_filter: 'high_match' }),
+      })
+    })
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Sort candidates' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Name A-Z' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('current-query')).toHaveTextContent('sort=name')
+      expect(api.get).toHaveBeenCalledWith('/applications/company/search', {
+        params: expect.objectContaining({ internship: '12', applicant_filter: 'high_match', sort: 'name' }),
+      })
+    })
+  })
+
+  it('keeps duplicate internship titles distinguishable and displays a clear empty state', async () => {
+    vi.mocked(api.get).mockImplementation(async (url) => {
+      if (url === '/internships/mine') return { data: [
+        { id: 12, title: 'Sales Manager', location: 'Pune', created_at: '2026-10-12T00:00:00Z', applicant_count: 3 },
+        { id: 14, title: 'Sales Manager', location: 'Pune', created_at: '2026-10-12T00:00:00Z', applicant_count: 3 },
+        { id: 13, title: 'Sales Manager', location: 'Mumbai', created_at: '2026-10-12T00:00:00Z', applicant_count: 2 },
+      ] } as never
+      if (url === '/applications/company/search') return searchResponse([]) as never
+      return { data: [] } as never
+    })
+    renderPage(true, '/company/pipeline?internship=12&search=missing&sort=name')
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Filter by internship' }))
+    expect(await screen.findByRole('option', { name: /Sales Manager · Pune · 12 Oct \(3\) · #12/ })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: /Sales Manager · Pune · 12 Oct \(3\) · #14/ })).toBeInTheDocument()
+    expect(await screen.findByText('No candidates match these filters')).toBeInTheDocument()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Clear filters' })[0])
+    await waitFor(() => expect(screen.getByTestId('current-query')).toHaveTextContent(''))
   })
 
   it('shows enabled and disabled actions using backend-provided transition permissions', async () => {

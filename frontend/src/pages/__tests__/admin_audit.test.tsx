@@ -89,8 +89,7 @@ describe('AdminAuditLogsPage', () => {
     })
     // Action badge
     expect(screen.getAllByText('Users blocked').length).toBeGreaterThan(0)
-    // Target cell — /user/ matches both the badge and the target cell, use getAllByText
-    expect(screen.getAllByText(/user/).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('User')).toBeInTheDocument()
 
     // Metadata expand toggle
     const metaBtn = screen.getByRole('button', { name: /metadata/i })
@@ -120,6 +119,9 @@ describe('AdminAuditLogsPage', () => {
     expect(screen.getByRole('option', { name: 'All actions' })).toBeDefined()
     fireEvent.click(screen.getByRole('combobox', { name: 'Filter audit logs by target type' }))
     expect(screen.getByRole('option', { name: 'Target type' })).toBeDefined()
+    expect(screen.getByRole('option', { name: 'Skill topic' })).toBeDefined()
+    expect(screen.getByRole('option', { name: 'Skill question' })).toBeDefined()
+    expect(screen.getByRole('option', { name: 'Learning resource' })).toBeDefined()
   })
 
   it('renders resolved target labels and links, and shows a dash without a target', async () => {
@@ -142,11 +144,45 @@ describe('AdminAuditLogsPage', () => {
     })
     render(<BrowserRouter><AdminAuditLogsPage /></BrowserRouter>)
     expect(await screen.findByText('Research Intern · Acme')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'View' })).toHaveAttribute('href', '/admin/companies/20/postings')
+    expect(screen.getByRole('link', { name: 'Research Intern · Acme' })).toHaveAttribute('href', '/admin/companies/20/postings')
     expect(screen.getAllByText('Internship').length).toBeGreaterThan(0)
     expect(screen.getByText('GDPR data export')).toBeInTheDocument()
     expect(screen.getByText('—')).toBeInTheDocument()
     expect(screen.getByText('System')).toBeInTheDocument()
+  })
+
+  it('renders an unlinked target label and shows the active window with an all-time action', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({
+      data: {
+        items: [{
+          id: 8,
+          actor_email: 'admin@test.com',
+          action: 'skill_topic_archived',
+          target_type: 'skill_topic',
+          target_id: null,
+          target_label: 'Skill topic: Artificial Intelligence',
+          target_url: null,
+          metadata: { topic_key: 'ai' },
+          created_at: new Date().toISOString(),
+        }],
+        total: 235,
+        page: 1,
+        page_size: 25,
+      },
+    })
+    render(
+      <MemoryRouter initialEntries={['/admin/audit-logs?range=30d']}>
+        <AdminAuditLogsPage />
+      </MemoryRouter>,
+    )
+
+    const target = await screen.findByText('Skill topic: Artificial Intelligence')
+    expect(target.closest('a')).toBeNull()
+    expect(screen.getByText('235 events · Last 30 days')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show all time' })).toBeInTheDocument()
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/admin/audit-logs', {
+      params: expect.objectContaining({ range: '30d' }),
+    }))
   })
 })
 

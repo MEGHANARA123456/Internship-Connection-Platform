@@ -13,6 +13,7 @@ class Passage:
     related_routes: tuple[str, ...]
     score: float
     doc_id: str | None = None
+    links: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,6 @@ class ProviderPayload:
     role: str
     page: str
     passages: tuple[Passage, ...]
-    live_data: str | None = None
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,7 @@ class ProviderResult:
     answer: str
     sources: tuple[str, ...]
     confidence: float = 0.0
+    needs_clarification: str | None = None
 
 
 class AnswerProvider(Protocol):

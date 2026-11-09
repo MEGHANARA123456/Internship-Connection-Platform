@@ -17,8 +17,11 @@ JSON_RESPONSE_SCHEMA = {
         "answer": {"type": "string"},
         "used_chunk_ids": {"type": "array", "items": {"type": "string"}},
         "confidence": {"type": "number"},
+        "needs_clarification": {"type": ["string", "null"]},
     },
-    "required": ["answerable", "answer", "used_chunk_ids", "confidence"],
+    "required": [
+        "answerable", "answer", "used_chunk_ids", "confidence", "needs_clarification",
+    ],
     "additionalProperties": False,
 }
 
@@ -51,11 +54,6 @@ class AnthropicProvider:
                 for role, content in payload.history
             ],
             "passages": passages,
-            "live_data": (
-                f"<<<UNTRUSTED_LIVE_DATA>>>\n{payload.live_data}\n<<<END_UNTRUSTED_LIVE_DATA>>>"
-                if payload.live_data is not None
-                else None
-            ),
         }
         content = await self._request(
             model=self._config.model,
@@ -81,11 +79,15 @@ class AnthropicProvider:
         confidence = parsed.get("confidence")
         if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
             raise RuntimeError("Chatbot answer provider returned invalid confidence.")
+        needs_clarification = parsed.get("needs_clarification")
+        if needs_clarification is not None and not isinstance(needs_clarification, str):
+            raise RuntimeError("Chatbot answer provider returned invalid clarification.")
         return ProviderResult(
             parsed["answerable"],
             parsed["answer"],
             tuple(source_values),
             float(confidence),
+            needs_clarification,
         )
 
     async def classify_intent(self, message: str, role: str) -> str:

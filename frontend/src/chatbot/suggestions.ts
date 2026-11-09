@@ -2,30 +2,29 @@ import type { UserRole } from '../store/auth'
 import type { ChatPage } from './types'
 
 const GUEST_SUGGESTIONS = [
-  'What is InternSphere?',
   'How do I register?',
-  'How do I verify my email?',
-  'How do I sign in?',
+  'How do I search internships?',
+  'How does InternSphere work?',
 ]
 
 const ROLE_SUGGESTIONS: Record<UserRole, string[]> = {
   STUDENT: [
     'Find internships matching my profile.',
-    'Show my application status.',
-    'Help me prepare for an interview.',
-    'How can I improve my resume?',
+    'How many applications do I have?',
+    'Any interviews?',
+    'How do I take a skill assessment?',
   ],
   COMPANY: [
-    'Help me create an internship posting.',
-    'Summarize my applicants.',
-    'Explain my hiring pipeline.',
-    'Show my recruitment activity.',
+    'My active postings',
+    'How many applicants do I have?',
+    'How many shortlisted candidates do I have?',
+    'How do I schedule an interview?',
   ],
   ADMIN: [
-    'Summarize platform activity.',
+    'How do I review pending postings?',
+    'Show company verification counts.',
+    'How many topics in skill assessment?',
     'Explain recent audit events.',
-    'Help me verify a company.',
-    'How do I manage platform users?',
   ],
 }
 
@@ -47,19 +46,19 @@ export function suggestedQuestions(role: UserRole | undefined): string[] {
 
 const PAGE_SUGGESTIONS: Partial<Record<ChatPage, Partial<Record<UserRole, string[]>>>> = {
   applications: {
-    STUDENT: ['How do I read my application timeline?', 'What do the application statuses mean?'],
+    STUDENT: ['How many applications do I have?', 'How do I track my applications?'],
   },
   'company-applicants': {
-    COMPANY: ['How do I move a candidate to the next stage?', 'How do I review verified skill badges?'],
+    COMPANY: ['How do I review applicants?', 'How many shortlisted candidates do I have?'],
   },
   'company-jobs': {
-    COMPANY: ['How do I publish or close a role?', 'How do applicants reach my posting?'],
+    COMPANY: ['How do I create an internship posting?', 'My active postings'],
   },
   'admin-moderation': {
-    ADMIN: ['How do I review a moderation report?', 'Where can I see the audit trail?'],
+    ADMIN: ['How do I review pending postings?', 'Explain recent audit events.'],
   },
   'admin-skills': {
-    ADMIN: ['How do I manage assessment questions?', 'How are verified skill badges awarded?'],
+    ADMIN: ['How do I manage assessment questions?', 'How do I import assessment questions?'],
   },
 }
 

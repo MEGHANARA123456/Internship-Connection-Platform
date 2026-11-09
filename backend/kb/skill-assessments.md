@@ -1,9 +1,12 @@
 ---
 id: skill-assessments
 title: Skill assessments, results, and verified badges
-audience: student
-route: /profile/student
-related_routes: [/profile/student, /skills/history]
+audience: [student]
+links:
+  - label: "Assessment History"
+    route: "/skills/history"
+  - label: "My Profile"
+    route: "/profile/student"
 ---
 ## Start a skill assessment
 Sign in as a student and open your Profile. In the Skill Assessment area, choose an available topic and select Start Assessment. Each attempt has 10 questions: 4 easy, 4 medium, and 2 hard. You have 15 minutes, and the server rejects submissions after the timer expires. The quiz shows one question at a time; use Next Question and Previous to move between questions.

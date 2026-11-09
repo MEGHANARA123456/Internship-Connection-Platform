@@ -10,8 +10,10 @@ from app.api.v1.dependencies import get_db
 from app.core.security import create_token
 from app.main import app
 from app.models import (
+    Application,
     CompanyProfile,
     EmailMessage,
+    Interview,
     Internship,
     Notification,
     StudentProfile,
@@ -171,6 +173,159 @@ async def test_pre_migration_notification_without_application_and_email_links_is
         assert notification_response.json()[0]["gmail_url"] is None
         assert mailbox_response.status_code == 200
         assert mailbox_response.json()[0]["gmail_url"] is None
+
+
+@pytest.mark.anyio
+async def test_email_detail_is_owner_only_sanitized_and_uses_reference_gmail_search() -> None:
+    async with client_with_database() as (client, sessions):
+        async with sessions() as db:
+            owner = User(email="owner@gmail.com", password_hash="fake", role=UserRole.STUDENT)
+            other = User(email="other@gmail.com", password_hash="fake", role=UserRole.STUDENT)
+            db.add_all([owner, other])
+            await db.flush()
+            email = EmailMessage(
+                user_id=owner.id,
+                recipient_email=owner.email,
+                sender_email="sender@internsphere.example",
+                subject="Interview update",
+                message_type="INTERVIEW",
+                body="Your interview is scheduled.",
+                html='<p>Hello</p><script>alert("bad")</script><img src=x onerror="alert(1)">',
+                delivered_via_smtp=True,
+            )
+            db.add(email)
+            await db.commit()
+            await db.refresh(email)
+            owner_headers = access_headers(owner)
+            other_headers = access_headers(other)
+            email_id = email.id
+
+        owner_response = await client.get(f"/api/v1/emails/{email_id}", headers=owner_headers)
+        other_response = await client.get(f"/api/v1/emails/{email_id}", headers=other_headers)
+
+        assert owner_response.status_code == 200
+        assert "<script" not in owner_response.json()["html"].lower()
+        assert "alert(" not in owner_response.json()["html"]
+        assert "onerror" not in owner_response.json()["html"]
+        assert owner_response.json()["gmail_url"].endswith(
+            f"#search/%22IS-{email_id}%22%20in%3Aanywhere"
+        )
+        assert other_response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_interview_invite_count_follows_actionable_schedule_and_student_ownership() -> None:
+    async with client_with_database() as (client, sessions):
+        async with sessions() as db:
+            student = User(email="invite-student@example.com", password_hash="fake", role=UserRole.STUDENT)
+            other_student = User(email="other-invite-student@example.com", password_hash="fake", role=UserRole.STUDENT)
+            company = User(email="invite-company@example.com", password_hash="fake", role=UserRole.COMPANY)
+            db.add_all([student, other_student, company])
+            await db.flush()
+            internship = Internship(
+                company_id=company.id,
+                title="Invite Intern",
+                description="Role",
+                location="Remote",
+                industry="Technology",
+                duration_months=3,
+                work_mode="REMOTE",
+                skills="",
+                deadline=date.today() + timedelta(days=30),
+                status="PUBLISHED",
+            )
+            db.add(internship)
+            await db.flush()
+            upcoming_app = Application(
+                internship_id=internship.id,
+                student_id=student.id,
+                status="INTERVIEW_SCHEDULED",
+            )
+            past_app = Application(
+                internship_id=internship.id,
+                student_id=other_student.id,
+                status="INTERVIEW_SCHEDULED",
+            )
+            db.add_all([upcoming_app, past_app])
+            await db.flush()
+            upcoming_interview = Interview(
+                    application_id=upcoming_app.id,
+                    scheduled_by=company.id,
+                    scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+                    interview_type="VIDEO",
+                    status="SCHEDULED",
+                )
+            db.add_all([
+                upcoming_interview,
+                Interview(
+                    application_id=past_app.id,
+                    scheduled_by=company.id,
+                    scheduled_at=datetime.now(timezone.utc) - timedelta(days=1),
+                    interview_type="VIDEO",
+                    status="CANCELLED",
+                ),
+                Notification(
+                    user_id=student.id,
+                    application_id=upcoming_app.id,
+                    notification_type="INTERVIEW_INVITE",
+                    title="Upcoming",
+                    body="Interview",
+                ),
+                Notification(
+                    user_id=other_student.id,
+                    application_id=past_app.id,
+                    notification_type="INTERVIEW_INVITE",
+                    title="Cancelled",
+                    body="Interview",
+                ),
+                Notification(
+                    user_id=other_student.id,
+                    application_id=past_app.id,
+                    notification_type="APPLICATION_STATUS",
+                    title="Other notification",
+                    body="Not an invite",
+                ),
+            ])
+            await db.commit()
+            await db.refresh(upcoming_interview)
+            student_headers = access_headers(student)
+            other_headers = access_headers(other_student)
+            company_headers = access_headers(company)
+
+        counts = await client.get("/api/v1/students/me/nav-counts", headers=student_headers)
+        assert counts.status_code == 200
+        assert counts.json()["invites_new"] == 1
+
+        reschedule = await client.patch(
+            f"/api/v1/interviews/{upcoming_interview.id}",
+            headers=company_headers,
+            json={
+                "status": "RESCHEDULED",
+                "scheduled_at": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
+                "change_reason": "Recruiter availability changed",
+            },
+        )
+        assert reschedule.status_code == 200
+        rescheduled_counts = await client.get("/api/v1/students/me/nav-counts", headers=student_headers)
+        assert rescheduled_counts.json()["invites_new"] == 1
+
+        clear = await client.patch("/api/v1/interviews/invites/read", headers=student_headers)
+        assert clear.status_code == 204
+        counts_after_open = await client.get("/api/v1/students/me/nav-counts", headers=student_headers)
+        assert counts_after_open.json()["invites_new"] == 0
+
+        other_notifications = await client.get("/api/v1/notifications", headers=other_headers)
+        other_invite = next(item for item in other_notifications.json() if item["notification_type"] == "INTERVIEW_INVITE")
+        other_application_notice = next(item for item in other_notifications.json() if item["notification_type"] == "APPLICATION_STATUS")
+        assert other_invite["read_at"] is None
+        assert other_application_notice["read_at"] is None
+        other_counts = await client.get("/api/v1/students/me/nav-counts", headers=other_headers)
+        assert other_counts.json()["invites_new"] == 0
+        other_notifications = await client.get("/api/v1/notifications", headers=other_headers)
+        other_invite = next(item for item in other_notifications.json() if item["notification_type"] == "INTERVIEW_INVITE")
+        other_application_notice = next(item for item in other_notifications.json() if item["notification_type"] == "APPLICATION_STATUS")
+        assert other_invite["read_at"] is not None
+        assert other_application_notice["read_at"] is None
 
 
 @pytest.mark.anyio

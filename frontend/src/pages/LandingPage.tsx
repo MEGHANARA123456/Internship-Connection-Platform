@@ -5,19 +5,21 @@ import { useAuthStore } from '../store/auth'
 import { Button } from '../components/ui/Button'
 import { Badge } from '../components/ui/Badge'
 import { Card } from '../components/ui/Card'
+import { SearchBox } from '../components/ui/SearchBox'
 import { routes } from '../lib/routes'
+import { stripMarkdownPreview } from '../lib/search'
 import {
   GraduationCap,
   Building,
   ShieldCheck,
-  Search,
   ArrowRight,
   CheckCircle2,
   MapPin,
   Sparkles,
 } from 'lucide-react'
-import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 import { CompaniesSection } from '../components/landing/CompaniesSection'
+import { CompanyHowItWorks } from '../components/landing/CompanyHowItWorks'
+import { GuestInsights } from '../components/landing/GuestInsights'
 import { StudentsSection } from '../components/landing/StudentsSection'
 import { Testimonials } from '../components/landing/Testimonials'
 import { FaqSection } from '../components/landing/FaqSection'
@@ -38,7 +40,7 @@ export function LandingPage() {
 
   const handleHeroSearch = (e: React.FormEvent) => {
     e.preventDefault()
-    navigate(routes.opportunitySearch(searchQuery ? { location: searchQuery } : {}))
+    navigate(routes.opportunitySearch(searchQuery ? { search: searchQuery } : {}))
   }
 
   return (
@@ -63,14 +65,14 @@ export function LandingPage() {
           onSubmit={handleHeroSearch}
           className="mt-8 w-full max-w-xl p-2 bg-white rounded-2xl border border-slate-200 shadow-md flex items-center gap-2"
         >
-          <div className="flex items-center gap-2 flex-1 pl-3 text-slate-400">
-            <Search className="w-4 h-4 shrink-0" />
-            <input
-              type="text"
-              placeholder="Search by city, remote, or keywords..."
+          <div className="min-w-0 flex-1">
+            <SearchBox
+              ariaLabel="Search internships"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none bg-transparent"
+              onChange={setSearchQuery}
+              scope="internships"
+              placeholder="Search by city, remote, or keywords..."
+              className="border-0 bg-transparent text-xs focus-visible:ring-0 sm:text-sm"
             />
           </div>
           <Button type="submit" variant="primary" size="md">
@@ -246,7 +248,7 @@ export function LandingPage() {
                     <Building className="w-3 h-3 text-indigo-500 shrink-0" />
                     <span>{job.company_name || 'Enterprise Partner'}</span>
                   </p>
-                  <p className="text-xs text-slate-500 line-clamp-2 mt-1">{job.description}</p>
+                  <p className="text-xs text-slate-500 line-clamp-2 mt-1">{stripMarkdownPreview(job.description || '')}</p>
                 </div>
                 <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
                   <span className="flex items-center gap-1">
@@ -263,16 +265,10 @@ export function LandingPage() {
         </section>
       )}
 
-      {/* Desktop Ecosystem Analysis Visuals Section */}
-      <section className="hidden md:block w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-        <DesktopAnalysisVisuals
-          variant="public"
-          title="Transparent Ecosystem Analytics & Insights"
-          subtitle="Explore live recruitment metrics: applicant progression, hiring speed, and role distributions"
-        />
-      </section>
+      {!session && <GuestInsights />}
 
       <CompaniesSection />
+      <CompanyHowItWorks />
       <StudentsSection />
       <Testimonials />
       <FaqSection />

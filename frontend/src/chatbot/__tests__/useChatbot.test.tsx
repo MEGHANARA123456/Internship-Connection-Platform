@@ -22,6 +22,7 @@ const answer: ChatResponse = {
   suggested_followups: ['How do I withdraw an application?'],
   category: 'in_scope',
   refused: false,
+  needs_clarification: null,
 }
 
 function Harness() {
@@ -111,17 +112,18 @@ describe('transient chatbot state', () => {
     expect(await screen.findByText('Temporary help service error.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Retry question' }))
     expect(await screen.findByText(answer.answer)).toBeInTheDocument()
-    expect(askChatbot).toHaveBeenNthCalledWith(1, 'How do I apply?', [], 'home')
-    expect(askChatbot).toHaveBeenNthCalledWith(2, 'How do I apply?', [], 'home')
+    expect(askChatbot).toHaveBeenNthCalledWith(1, 'How do I apply?', [], 'home', [])
+    expect(askChatbot).toHaveBeenNthCalledWith(2, 'How do I apply?', [], 'home', [])
   })
 
-  it('shows a friendly length error for the user message without making a request', async () => {
+  it('shortens an over-limit user message before sending it', async () => {
+    vi.mocked(askChatbot).mockResolvedValue(answer)
     render(<MemoryRouter><Harness /></MemoryRouter>)
 
     fireEvent.click(screen.getByRole('button', { name: 'Send long question' }))
 
-    expect(await screen.findByText('Message too long (max 500 characters)')).toBeInTheDocument()
-    expect(askChatbot).not.toHaveBeenCalled()
+    expect(await screen.findByText(answer.answer)).toBeInTheDocument()
+    expect(askChatbot).toHaveBeenCalledWith('x'.repeat(500), [], 'home', [])
   })
 
   it('fetches summaries from the role endpoint and excludes their data from chatbot requests', async () => {
@@ -146,6 +148,6 @@ describe('transient chatbot state', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
     await screen.findByText(answer.answer)
-    expect(askChatbot).toHaveBeenCalledWith('How do I apply?', [], 'home')
+    expect(askChatbot).toHaveBeenCalledWith('How do I apply?', [], 'home', [])
   })
 })

@@ -9,6 +9,8 @@ import { ChatbotWidget } from '../ChatbotWidget'
 const status = {
   enabled: true,
   mode: 'retrieval',
+  retrieval: 'bm25',
+  provider_ok: true,
   provider_configured: false,
   rag_enabled: true,
   indexed_chunk_count: 38,
@@ -41,7 +43,7 @@ describe('chatbot launcher availability', () => {
     expect(screen.getByRole('button', { name: 'Chat with InternSphere AI' })).toBeInTheDocument()
     await waitFor(() => expect(api.get).toHaveBeenCalledWith('/chatbot/status'))
     fireEvent.click(screen.getByRole('button', { name: 'Chat with InternSphere AI' }))
-    expect(await screen.findByText('Help online')).toBeInTheDocument()
+    expect(await screen.findByText('BM25 help')).toBeInTheDocument()
   })
 
   it.each(['/login', '/register-student', '/register-company', '/forgot-password', '/reset-password', '/verify', '/verify/token'])(
@@ -61,12 +63,14 @@ describe('chatbot launcher availability', () => {
     },
   )
 
-  it('does not render or contact the chatbot for a signed-out visitor', async () => {
-    const get = vi.spyOn(api, 'get')
+  it('makes public chatbot help available to signed-out visitors', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: status } as never)
     render(<MemoryRouter initialEntries={['/opportunities']}><ChatbotWidget /></MemoryRouter>)
 
-    expect(screen.queryByRole('button', { name: 'Chat with InternSphere AI' })).not.toBeInTheDocument()
-    await waitFor(() => expect(get).not.toHaveBeenCalled())
+    expect(screen.getByRole('button', { name: 'Chat with InternSphere AI' })).toBeInTheDocument()
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/chatbot/status'))
+    fireEvent.click(screen.getByRole('button', { name: 'Chat with InternSphere AI' }))
+    expect(await screen.findByText(/ask me how to use the platform/i)).toBeInTheDocument()
   })
 
   it('keeps one launcher instance mounted across authenticated route changes', async () => {
@@ -96,14 +100,14 @@ describe('chatbot launcher availability', () => {
     expect(screen.getAllByRole('button', { name: 'Chat with InternSphere AI' })).toHaveLength(1)
     await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1))
     fireEvent.click(screen.getByRole('button', { name: 'Chat with InternSphere AI' }))
-    expect(await screen.findByText('Help online')).toBeInTheDocument()
+    expect(await screen.findByText('BM25 help')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Navigate' }))
     expect(await screen.findByText('Company page')).toBeInTheDocument()
     expect(screen.getAllByRole('dialog', { name: 'InternSphere AI' })).toHaveLength(1)
     expect(api.get).toHaveBeenCalledTimes(1)
   })
 
-  it('minimizes and reopens without clearing the current conversation', async () => {
+  it('closes and reopens without clearing the current conversation', async () => {
     useAuthStore.getState().setSession({
       accessToken: 'test-access',
       refreshToken: 'test-refresh',
@@ -117,8 +121,8 @@ describe('chatbot launcher availability', () => {
     render(<MemoryRouter initialEntries={['/company']}><ChatbotWidget /></MemoryRouter>)
     fireEvent.click(screen.getByRole('button', { name: 'Chat with InternSphere AI' }))
     expect(await screen.findByRole('dialog', { name: 'InternSphere AI' })).toBeInTheDocument()
-    expect(await screen.findByText('Online')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Minimize chat' }))
+    expect(await screen.findByText('AI help')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close chat' }))
     fireEvent.click(screen.getByRole('button', { name: 'Chat with InternSphere AI' }))
     expect(await screen.findByRole('dialog', { name: 'InternSphere AI' })).toBeInTheDocument()
   })

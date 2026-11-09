@@ -76,7 +76,7 @@ export function DropdownSelect({
         onKeyDown={handleKeyDown}
         className="flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-800 hover:border-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
       >
-        <span className="truncate">{selected?.label ?? label ?? 'Choose an option'}</span>
+        <span title={selected?.label} className="truncate">{selected?.label ?? label ?? 'Choose an option'}</span>
         <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
@@ -93,7 +93,7 @@ export function DropdownSelect({
               }}
               className="flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-slate-200 dark:hover:bg-slate-800"
             >
-              <span className="min-w-0 truncate">{option.label}</span>
+              <span title={option.label} className="min-w-0 truncate">{option.label}</span>
               {value === option.value && <Check className="h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-400" />}
             </button>
           ))}

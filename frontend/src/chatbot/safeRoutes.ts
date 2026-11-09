@@ -1,5 +1,6 @@
 const KNOWN_ROUTES = [
   '/',
+  '/#faq',
   '/opportunities',
   '/opportunities/:id',
   '/applications',

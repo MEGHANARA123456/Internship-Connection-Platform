@@ -1,9 +1,12 @@
 ---
 id: company-hiring-pipeline
 title: Shortlist candidates and move them through Hiring Pipeline
-audience: company
-route: /company/pipeline
-related_routes: [/company/applicants, /company/shortlisted]
+audience: [company]
+links:
+  - label: "Hiring Pipeline"
+    route: "/company/pipeline"
+  - label: "Shortlisted"
+    route: "/company/shortlisted"
 ---
 ## Open Hiring Pipeline
 Open Hiring Pipeline at `/company/pipeline` to see applicants grouped by their current stage. You can also review candidates on Applicants at `/company/applicants`, or see the shortlist at `/company/shortlisted`. On a candidate card, open the Actions menu and choose an action offered for that candidate's current stage. You can also drag a card to a permitted stage. The available next stages are enforced; a candidate cannot skip a stage or move out of a terminal stage.

@@ -1,5 +1,6 @@
 export type ChatRole = 'user' | 'assistant'
-export type ChatSourceType = 'docs' | 'live data' | 'docs + live data'
+export type ChatSourceType = 'docs' | 'live data' | 'docs + live data' | 'none'
+export type ChatFeedbackSourceType = Exclude<ChatSourceType, 'none'>
 
 export interface ChatMessage {
   id: string
@@ -11,6 +12,7 @@ export interface ChatMessage {
   sourceType?: ChatSourceType
   suggestedFollowups?: string[]
   noEvidence?: boolean
+  needsClarification?: string | null
   summary?: PersonalSummary
 }
 
@@ -28,6 +30,7 @@ export interface ChatResponse {
   suggested_followups: string[]
   category: string
   refused: boolean
+  needs_clarification: string | null
 }
 
 export type ChatPage =
@@ -69,6 +72,8 @@ export type ChatPage =
 export interface ChatbotStatus {
   enabled: boolean
   mode: 'retrieval' | 'llm'
+  retrieval: 'bm25' | 'hybrid'
+  provider_ok: boolean
   provider_configured: boolean
   rag_enabled: boolean
   indexed_chunk_count: number

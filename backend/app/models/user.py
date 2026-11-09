@@ -12,6 +12,7 @@ except ImportError:
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, false, func, text, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
 
 from app.models.base import Base
 
@@ -20,6 +21,19 @@ class UserRole(StrEnum):# type: ignore
     STUDENT = "STUDENT"
     COMPANY = "COMPANY"
     ADMIN = "ADMIN"
+
+
+class AuditTargetId(TypeDecorator):
+    impl = String(100)
+    cache_ok = True
+
+    def process_bind_param(self, value: int | str | None, dialect) -> str | None:
+        return str(value) if value is not None else None
+
+    def process_result_value(self, value: str | None, dialect) -> int | str | None:
+        if value is not None and value.isdecimal():
+            return int(value)
+        return value
 
 
 class User(Base):
@@ -351,7 +365,7 @@ class AuditLog(Base):
     actor_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     action: Mapped[str] = mapped_column(String(60), index=True)
     target_type: Mapped[str | None] = mapped_column(String(30), index=True, nullable=True)
-    target_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    target_id: Mapped[int | str | None] = mapped_column(AuditTargetId(), index=True, nullable=True)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
@@ -373,6 +387,8 @@ class SkillQuestion(Base):
     question_type: Mapped[str] = mapped_column(String(20), default="SINGLE", server_default="SINGLE")
     source: Mapped[str] = mapped_column(String(500), default="InternSphere curated assessment bank", server_default="InternSphere curated assessment bank")
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    key_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    key_reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -471,4 +487,19 @@ class SkillLearningResource(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
         nullable=False,
+    )
+
+
+class ChatbotLowConfidenceLog(Base):
+    __tablename__ = "chatbot_low_confidence_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
     )

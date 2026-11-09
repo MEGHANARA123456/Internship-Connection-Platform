@@ -19,6 +19,7 @@ from app.api.v1.applications import application_transition_allowed
 from app.schemas.communication import ApplicationNoteCreate, ApplicationNoteResponse, ConversationCreate, InterviewCreate, InterviewFeedbackResponse, InterviewFeedbackUpdate, InterviewResponse, InterviewUpdate, MessageCreate, MessageResponse, NotificationResponse
 from app.services.notify import BLOCKED_NOTIFICATION_TYPES, notify
 from app.services.application_events import record_interview_event, transition_application
+from app.services.interview_display import derive_application_display_status, get_interview_state
 from app.services.mail import visible_gmail_url
 
 router = APIRouter(tags=["communication"])
@@ -572,6 +573,7 @@ async def list_company_interviews(user: company_only, db: DbSession) -> list[dic
             "feedback_at": interview.feedback_at,
             "cancel_reason": interview.cancel_reason,
             "cancelled_at": interview.cancelled_at,
+            "interview_state": get_interview_state(interview),
         }
         for interview, candidate_name, title, company_name in rows
     ]
@@ -665,6 +667,34 @@ async def update_interview(interview_id: int, data: InterviewUpdate, user: parti
             + (f" Reason: {reason}" if reason else ""),
             application_id=application.id,
         )
+    retire_invite = (
+        data.status == "RESCHEDULED" and should_notify_change
+    ) or (
+        data.status in {"CANCELLED", "COMPLETED"}
+        and data.status != previous_status
+    )
+    if retire_invite:
+        await db.execute(
+            update(Notification)
+            .where(
+                Notification.user_id == application.student_id,
+                Notification.application_id == application.id,
+                Notification.notification_type == "INTERVIEW_INVITE",
+                Notification.read_at.is_(None),
+            )
+            .values(read_at=datetime.now(timezone.utc))
+        )
+        if data.status == "RESCHEDULED":
+            # The replacement invitation is the only one that remains actionable.
+            await notify(
+                db,
+                application.student_id,
+                "INTERVIEW_INVITE",
+                "Interview invitation",
+                f"Your interview for {internship.title if internship else 'your internship'} "
+                f"has been rescheduled to {interview.scheduled_at.astimezone(timezone.utc).strftime('%A, %B %d, %Y at %I:%M %p UTC')}.",
+                application_id=application.id,
+            )
     await db.refresh(interview)
     await db.commit(); await db.refresh(interview); return interview
 
@@ -721,7 +751,29 @@ async def notifications(user: Annotated[User, Depends(get_current_user)], db: Db
     ]
     application_ids = {item.application_id for item in visible_items if item.application_id is not None}
     latest_emails: dict[int, EmailMessage] = {}
+    expired_applications: dict[int, str] = {}
     if application_ids:
+        applications = list(
+            await db.scalars(select(Application).where(Application.id.in_(application_ids)))
+        )
+        interviews = list(
+            await db.scalars(
+                select(Interview)
+                .where(Interview.application_id.in_(application_ids))
+                .order_by(Interview.scheduled_at, Interview.id)
+            )
+        )
+        interviews_by_application: dict[int, list[Interview]] = {}
+        for interview in interviews:
+            interviews_by_application.setdefault(interview.application_id, []).append(interview)
+        expired_applications = {
+            application.id: application.internship_id
+            for application in applications
+            if derive_application_display_status(
+                application.status,
+                interviews_by_application.get(application.id, []),
+            ) == "EXPIRED"
+        }
         emails = await db.scalars(
             select(EmailMessage)
             .where(
@@ -733,25 +785,66 @@ async def notifications(user: Annotated[User, Depends(get_current_user)], db: Db
         for email in emails:
             if email.application_id is not None:
                 latest_emails.setdefault(email.application_id, email)
+    internship_titles: dict[int, str] = {}
+    if expired_applications:
+        internships = await db.scalars(
+            select(Internship).where(Internship.id.in_(set(expired_applications.values())))
+        )
+        internship_titles = {internship.id: internship.title for internship in internships}
 
     return [
         NotificationResponse(
             id=item.id,
             application_id=item.application_id,
+            email_id=(
+                latest_emails[application_id].id
+                if application_id is not None and application_id in latest_emails
+                else None
+            ),
             gmail_url=(
                 visible_gmail_url(latest_emails[application_id], user.email)
                 if application_id is not None and application_id in latest_emails
                 else None
             ),
             notification_type=item.notification_type,
-            title=item.title,
-            body=item.body,
+            title=(
+                "Interview completed"
+                if user.role == UserRole.COMPANY and application_id in expired_applications
+                else "Interview date passed"
+                if application_id in expired_applications
+                else item.title
+            ),
+            body=(
+                f"Interview completed for {internship_titles.get(expired_applications[application_id], 'this application')}. Update the status."
+                if user.role == UserRole.COMPANY and application_id in expired_applications
+                else "Interview date has passed. Waiting for the recruiter's decision."
+                if application_id in expired_applications
+                else item.body
+            ),
             created_at=item.created_at,
             read_at=item.read_at,
         )
         for item in visible_items
         for application_id in [item.application_id]
     ]
+
+
+@router.patch("/interviews/invites/read", status_code=204)
+async def mark_interview_invites_read(
+    user: Annotated[User, Depends(require_roles(UserRole.STUDENT))],
+    db: DbSession,
+) -> None:
+    """Mark only the authenticated student's interview invitation notifications as read."""
+    await db.execute(
+        update(Notification)
+        .where(
+            Notification.user_id == user.id,
+            Notification.notification_type == "INTERVIEW_INVITE",
+            Notification.read_at.is_(None),
+        )
+        .values(read_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
 
 
 @router.post("/notifications/read-all", status_code=204)

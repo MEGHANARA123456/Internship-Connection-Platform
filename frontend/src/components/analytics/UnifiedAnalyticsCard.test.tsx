@@ -174,4 +174,39 @@ describe('UnifiedAnalyticsCard', () => {
     expect(screen.getByText('Based on 0 interviews')).toBeInTheDocument()
     expect(api.get).toHaveBeenCalledWith('/companies/me/metrics')
   })
+
+  it('links admin actions to the selected dashboard window and explains its time range', async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: {
+        ...studentData,
+        role: 'admin',
+        kpis: {
+          admin_actions: {
+            value: 235,
+            sample_size: 235,
+            definition: 'Audit log records created in the selected reporting range.',
+          },
+        },
+      },
+    })
+    renderCard('admin')
+
+    const actionsLink = await screen.findByRole('link', { name: /Admin actions: 235/ })
+    expect(actionsLink).toHaveAttribute('href', '/admin/audit-logs?range=30d')
+    expect(screen.getByText('Last 30 days')).toBeInTheDocument()
+    expect(screen.getByLabelText('Admin actions information')).toHaveAttribute(
+      'title',
+      'Audit records created in the last 30 days. The Audit Logs page shows all-time events unless filtered.',
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '30 days' }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '7 days' }))
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: /Admin actions: 235/ })).toHaveAttribute(
+        'href',
+        '/admin/audit-logs?range=7d',
+      )
+      expect(api.get).toHaveBeenCalledWith('/admin/insights?range=7')
+    })
+  })
 })

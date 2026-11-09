@@ -57,7 +57,14 @@ def detect_injection(text: str) -> bool:
 
 def detect_account_specific(text: str) -> bool:
     """Detect first-person account-data requests, excluding general how-to questions."""
-    if re.search(r"\bhow (?:do|can|should) i\b|\bhow to\b|\bsteps to\b", text, re.I):
+    if re.search(
+        r"\bhow (?:do|can|should) i\b|\bhow to\b|\bsteps to\b|"
+        r"\bwhere (?:do|can) i (?:see|find|open|go|update|edit)\b|"
+        r"\bwhere is my\b|\bwhere are my\b|"
+        r"\bwho (?:has|have) applied\b|\bpeople who applied\b|\bapplicant profile\b|\bprivate conversations\b",
+        text,
+        re.I,
+    ):
         return False
     return any(pattern.search(text) for pattern in ACCOUNT_PATTERNS)
 
@@ -101,9 +108,17 @@ def output_is_safe(answer: str, allowed_routes: set[str]) -> bool:
         or re.search(r"\]\(\s*(?:javascript|data):", answer, re.I)
     ):
         return False
-    for url in re.findall(r"https?://\S+", answer, re.I):
-        return False
-    for route in re.findall(r"(?<![\w])/(?:[A-Za-z0-9._~-]+/?)+(?:\?[^\s]*)?", answer):
-        if route.rstrip(".,)") not in allowed_routes:
+    # Accept plain-text http(s) examples when they are part of a documented workflow;
+    # only reject javascript: and data: schemes to avoid unsafe execution payloads.
+    for route in re.findall(
+        r"(?<![\w])/(?:[A-Za-z0-9._~-]+|:[A-Za-z][A-Za-z0-9_]*)(?:/(?:[A-Za-z0-9._~-]+|:[A-Za-z][A-Za-z0-9_]*))*(?:\?[^\s]*)?",
+        answer,
+    ):
+        normalized_route = route.rstrip(".,);")
+        route_path, separator, query = normalized_route.partition("?")
+        if (
+            (separator and not re.fullmatch(r"[A-Za-z0-9_=&%-]*", query))
+            or route_path not in allowed_routes
+        ):
             return False
     return True

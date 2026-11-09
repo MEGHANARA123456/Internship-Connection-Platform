@@ -91,6 +91,7 @@ export const navigationConfig: Record<NavigationRole, { topBar: NavigationItem[]
       { id: 'browse-internships', label: 'Browse Internships', route: routes.opportunities, icon: Briefcase },
       { id: 'sign-in', label: 'Sign in', route: routes.login(), icon: User },
       { id: 'join-student', label: 'Join as Student', route: routes.studentRegister, icon: PlusCircle },
+      { id: 'register-company', label: 'Register Company', route: routes.companyRegister, icon: Building2 },
     ],
   },
 }

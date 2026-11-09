@@ -6,7 +6,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select, update
 
 from app.api.v1.auth import router as auth_router
 from app.api.v1.profiles import router as profiles_router
@@ -139,11 +139,34 @@ async def student_me(user: Annotated[User, Depends(require_roles(UserRole.STUDEN
 @api_router.get("/students/me/nav-counts", tags=["student"])
 async def student_nav_counts(user: Annotated[User, Depends(require_roles(UserRole.STUDENT))], db: DbSession) -> dict[str, int]:
     """Return student navigation counts for new invitations, application updates, and saved internships."""
-    invites_new = await db.scalar(
-        select(func.count(Notification.id)).where(
+    now = datetime.now(timezone.utc)
+    actionable_interview = exists(
+        select(Interview.id)
+        .join(Application, Application.id == Interview.application_id)
+        .where(
+            Application.id == Notification.application_id,
+            Application.student_id == user.id,
+            Interview.status.in_(("SCHEDULED", "RESCHEDULED")),
+            Interview.scheduled_at > now,
+        )
+    )
+    await db.execute(
+        update(Notification)
+        .where(
             Notification.user_id == user.id,
             Notification.notification_type == "INTERVIEW_INVITE",
             Notification.read_at.is_(None),
+            ~actionable_interview,
+        )
+        .values(read_at=now)
+    )
+    await db.commit()
+    invites_new = await db.scalar(
+        select(func.count(func.distinct(Notification.id))).where(
+            Notification.user_id == user.id,
+            Notification.notification_type == "INTERVIEW_INVITE",
+            Notification.read_at.is_(None),
+            actionable_interview,
         )
     )
     app_update_types = ["APPLICATION_STATUS", "APPLICATION_SUBMITTED", "APPLICATION_NEW"]

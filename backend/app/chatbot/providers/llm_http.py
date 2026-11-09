@@ -83,15 +83,12 @@ class LLMHTTPProvider:
                 for role, text in payload.history
             ],
             "passages": passages,
-            "live_data": (
-                f"<<<UNTRUSTED_LIVE_DATA>>>\n{payload.live_data}\n<<<END_UNTRUSTED_LIVE_DATA>>>"
-                if payload.live_data is not None
-                else None
-            ),
         }
         headers = {"Content-Type": "application/json"}
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"
+        if self._config.api_key:
+            headers["Authorization"] = "Bearer " + self._config.api_key
         try:
             completion = None
             content = ""
@@ -108,6 +105,7 @@ class LLMHTTPProvider:
                 }
                 if self._config.model.lower().startswith("gpt-oss"):
                     body["reasoning_effort"] = "low"
+                body["response_format"] = {"type": "json_object"}
                 request = Request(
                     f"{self._config.base_url}/v1/chat/completions",
                     data=json.dumps(body).encode("utf-8"),
@@ -148,11 +146,15 @@ class LLMHTTPProvider:
             confidence = parsed.get("confidence")
             if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
                 raise ValueError("Provider confidence does not match the required schema.")
+            needs_clarification = parsed.get("needs_clarification")
+            if needs_clarification is not None and not isinstance(needs_clarification, str):
+                raise ValueError("Provider clarification does not match the required schema.")
             return ProviderResult(
                 parsed["answerable"],
                 parsed["answer"],
                 tuple(source_values),
                 float(confidence),
+                needs_clarification,
             )
         except (
             asyncio.TimeoutError,

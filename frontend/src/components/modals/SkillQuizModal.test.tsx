@@ -366,6 +366,35 @@ describe('server-graded skill assessment', () => {
     expect(await screen.findByText(/No assessment activity yet/)).toBeInTheDocument()
   })
 
+  it('shows a real empty subject state when the topics endpoint succeeds with no subjects', async () => {
+    mockOverview({ topics: [] })
+
+    render(<MemoryRouter><SkillQuizModal isOpen onClose={vi.fn()} /></MemoryRouter>)
+
+    expect(await screen.findByText('No assessment subjects are available right now.')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('shows a specific subjects error and retries the topics request successfully', async () => {
+    mockOverview()
+    const originalGet = vi.mocked(api.get).getMockImplementation()
+    let topicCalls = 0
+    vi.mocked(api.get).mockImplementation((url, config) => {
+      if (url === '/skills/topics' && topicCalls++ === 0) {
+        return Promise.reject({ response: { status: 503 } }) as never
+      }
+      return originalGet!(url, config)
+    })
+
+    render(<MemoryRouter><SkillQuizModal isOpen onClose={vi.fn()} /></MemoryRouter>)
+
+    expect(await screen.findByText('The assessment subjects service is temporarily unavailable.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('Python')).toBeInTheDocument()
+    expect(topicCalls).toBe(2)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('keeps subject cards visible and offers retry when history or active status fails', async () => {
     mockOverview({ historyRequestFails: true, activeRequestFails: true })
 

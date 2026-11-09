@@ -35,6 +35,7 @@ const interviews = [
     interview_type: 'VIDEO',
     status: 'SCHEDULED',
     scheduled_at: new Date(Date.now() + 86_400_000 * (index + 1)).toISOString(),
+    interview_state: 'upcoming',
     internship_title: `Scheduled Interview ${index + 1}`,
   })),
   {
@@ -42,6 +43,7 @@ const interviews = [
     interview_type: 'VIDEO',
     status: 'COMPLETED',
     scheduled_at: '2026-06-11T12:00:00Z',
+    interview_state: 'completed',
     internship_title: 'Completed Interview',
   },
   {
@@ -49,7 +51,16 @@ const interviews = [
     interview_type: 'VIDEO',
     status: 'CANCELLED',
     scheduled_at: '2026-06-12T12:00:00Z',
+    interview_state: 'completed',
     internship_title: 'Cancelled Interview',
+  },
+  {
+    id: 13,
+    interview_type: 'VIDEO',
+    status: 'SCHEDULED',
+    scheduled_at: '2026-06-13T12:00:00Z',
+    interview_state: 'completed',
+    internship_title: 'Expired Interview',
   },
 ]
 
@@ -337,9 +348,13 @@ describe('InterviewsPage status tabs and pagination', () => {
   it('shows status counts, filters interviews, and resets the page when switching tabs', async () => {
     render(<MemoryRouter><InterviewsPage /></MemoryRouter>)
 
+    await waitFor(() => {
+      expect(api.patch).toHaveBeenCalledWith('/interviews/invites/read')
+    })
     expect(await screen.findByRole('heading', { name: /Scheduled Interview 1$/ })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: 'All 12' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'All 13' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Upcoming 10' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Expired 1' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Completed 1' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Cancelled 1' })).toBeTruthy()
 
@@ -349,6 +364,9 @@ describe('InterviewsPage status tabs and pagination', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Upcoming 10' }))
     expect(await screen.findByRole('heading', { name: /Scheduled Interview 1$/ })).toBeTruthy()
     expect(screen.queryByRole('heading', { name: /Completed Interview$/ })).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Expired 1' }))
+    expect(await screen.findByRole('heading', { name: /Expired Interview$/ })).toBeTruthy()
+    expect(screen.getAllByText('Expired')).toHaveLength(2)
     expect(screen.queryByRole('button', { name: 'Previous page' })).toBeNull()
   })
 
@@ -363,6 +381,7 @@ describe('InterviewsPage status tabs and pagination', () => {
         interview_type: 'VIDEO',
         status: 'SCHEDULED',
         scheduled_at: new Date(Date.now() + 86_400_000).toISOString(),
+        interview_state: 'upcoming',
         meeting_link: 'https://meet.example.test/interview',
         notes: 'Bring a portfolio.',
       },
@@ -374,6 +393,7 @@ describe('InterviewsPage status tabs and pagination', () => {
         interview_type: 'PHONE',
         status: 'CANCELLED',
         scheduled_at: new Date(Date.now() - 86_400_000).toISOString(),
+        interview_state: 'completed',
         cancel_reason: 'TIME_PASSED',
         cancelled_at: new Date().toISOString(),
         notes: 'Discuss API design.',
@@ -402,7 +422,7 @@ describe('InterviewsPage status tabs and pagination', () => {
   })
 
   describe('Email actions', () => {
-    it('opens eligible direct and notification emails in Gmail and keeps non-Gmail mail in the app', async () => {
+    it('opens private email content in-app and offers Gmail as a secondary action', async () => {
       useAuthStore.setState({
         session: {
           accessToken: 'student-access',
@@ -416,6 +436,7 @@ describe('InterviewsPage status tabs and pagination', () => {
         if (path === '/notifications') {
           return { data: [{
             id: 4,
+            email_id: 1,
             application_id: 77,
             gmail_url: 'https://mail.google.com/mail/?authuser=student%40gmail.com#search/id',
             notification_type: 'APPLICATION_STATUS',
@@ -431,21 +452,38 @@ describe('InterviewsPage status tabs and pagination', () => {
             { id: 2, subject: 'Demo update', to: 'student@gmail.com', from: 'noreply@internship.local', created_at: '2026-06-01T11:00:00Z', gmail_url: null, body: 'Demo' },
           ] } as never
         }
+        if (path === '/emails/1') {
+          return {
+            data: {
+              id: 1,
+              from: 'recruiter@example.com',
+              to: 'student@gmail.com',
+              subject: 'Interview update',
+              created_at: '2026-06-01T12:00:00Z',
+              body: 'Your interview is scheduled.',
+              html: null,
+              gmail_url: 'https://mail.google.com/mail/?authuser=student%40gmail.com#search/id',
+            },
+          } as never
+        }
         return { data: [] } as never
       })
 
       render(<MemoryRouter><NotificationsPage /></MemoryRouter>)
-      const notificationEmail = await screen.findByRole('link', { name: 'View Email' })
-      expect(notificationEmail).toHaveAttribute('href', expect.stringContaining('mail.google.com'))
-      expect(notificationEmail).toHaveAttribute('target', '_blank')
-      expect(notificationEmail).toHaveAttribute('rel', 'noopener noreferrer')
+      fireEvent.click(await screen.findByRole('button', { name: 'View Email' }))
+      expect(await screen.findByText('Your interview is scheduled.')).toBeInTheDocument()
+      expect(screen.getByText('From:')).toBeInTheDocument()
+      expect(screen.getByText('To:')).toBeInTheDocument()
+      expect(screen.getByText('Subject:')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }))
 
       fireEvent.click(screen.getByRole('button', { name: /My Direct Emails/ }))
-      const emailLink = await screen.findByRole('link', { name: 'View Email' })
-      expect(emailLink).toHaveAttribute('href', expect.stringContaining('mail.google.com'))
-      expect(emailLink).toHaveAttribute('rel', 'noopener noreferrer')
-      expect(screen.getByRole('button', { name: 'View Email' })).toBeInTheDocument()
-      expect(screen.queryByText(/sign in to the recipient Gmail account/i)).not.toBeInTheDocument()
+      fireEvent.click(await screen.findByRole('button', { name: 'View Email' }))
+      expect(await screen.findByText('Your interview is scheduled.')).toBeInTheDocument()
+      const gmailLink = screen.getByRole('link', { name: 'Open in Gmail' })
+      expect(gmailLink).toHaveAttribute('href', expect.stringContaining('mail.google.com'))
+      expect(gmailLink).toHaveAttribute('rel', 'noopener noreferrer')
+      expect(api.get).toHaveBeenCalledWith('/emails/1')
     })
   })
 

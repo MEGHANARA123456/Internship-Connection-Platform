@@ -11,7 +11,6 @@ import {
   Search,
   Smartphone,
   X,
-  Loader2,
   Sun,
 } from 'lucide-react'
 import { api } from '../../api/client'
@@ -22,6 +21,7 @@ import { useThemeStore } from '../../store/theme'
 import { useViewModeStore } from '../../store/viewMode'
 import { useWebSocketChat } from '../../lib/useWebSocketChat'
 import { Badge } from '../ui/Badge'
+import { SearchBox, type SearchSuggestion } from '../ui/SearchBox'
 import { BottomTabBar } from './BottomTabBar'
 import { Logo } from './Logo'
 import { routes } from '../../lib/routes'
@@ -32,9 +32,6 @@ type StudentCounts = {
   application_updates: number
   saved: number
 }
-
-type SearchItem = { id: number; title: string; subtitle: string; badge: string; url: string }
-type SearchGroup = { type: string; label: string; items: SearchItem[] }
 
 const quickLinks: Record<Exclude<NavigationRole, 'GUEST'>, Array<{ label: string; url: string }>> = {
   STUDENT: [
@@ -68,21 +65,18 @@ const previewMobileItem: NavigationItem = {
 
 function GlobalSearch({ role }: { role: NavigationRole }) {
   const navigate = useNavigate()
-  const rootRef = useRef<HTMLDivElement>(null)
-  const desktopInputRef = useRef<HTMLInputElement>(null)
-  const mobileInputRef = useRef<HTMLInputElement>(null)
-  const isMobileViewport = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(max-width: 767px)').matches : false
   const [query, setQuery] = useState('')
-  const [groups, setGroups] = useState<SearchGroup[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(false)
-  const [open, setOpen] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [activeIndex, setActiveIndex] = useState(-1)
-  const [retryCount, setRetryCount] = useState(0)
-
-  const options = groups.flatMap((group) => group.items)
-  const quick = role !== 'GUEST' ? quickLinks[role] : []
+  const quick: SearchSuggestion[] = role === 'GUEST'
+    ? []
+    : quickLinks[role].map((link, index) => ({
+      id: index,
+      text: link.label,
+      kind: 'link',
+      subtitle: 'Quick link',
+      url: link.url,
+      match_text: link.label,
+    }))
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -90,193 +84,48 @@ function GlobalSearch({ role }: { role: NavigationRole }) {
       const typing = target instanceof HTMLElement && target.matches('input, textarea, select, [contenteditable="true"]')
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        const useMobile = isMobileViewport()
-        setOpen(true)
-        setMobileOpen(useMobile)
-        window.setTimeout(() => (useMobile ? mobileInputRef : desktopInputRef).current?.focus(), 0)
+        setMobileOpen(window.innerWidth < 768)
+        document.querySelector<HTMLInputElement>('[aria-label="Search InternSphere"]')?.focus()
       } else if (event.key === '/' && !typing && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault()
-        const useMobile = isMobileViewport()
-        setOpen(true)
-        setMobileOpen(useMobile)
-        window.setTimeout(() => (useMobile ? mobileInputRef : desktopInputRef).current?.focus(), 0)
+        setMobileOpen(window.innerWidth < 768)
+        document.querySelector<HTMLInputElement>('[aria-label="Search InternSphere"]')?.focus()
       }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  useEffect(() => {
-    const onOutsideClick = (event: MouseEvent) => {
-      if (open && !rootRef.current?.contains(event.target as Node)) {
-        setOpen(false)
-        setMobileOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', onOutsideClick)
-    return () => document.removeEventListener('mousedown', onOutsideClick)
-  }, [open])
-
-  useEffect(() => {
-    const term = query.trim()
-    if (!open || term.length < 2) {
-      setGroups([])
-      setError(false)
-      setLoading(false)
-      return
-    }
-    const controller = new AbortController()
-    const timer = window.setTimeout(() => {
-      setLoading(true)
-      setError(false)
-      api.get('/search', { params: { q: term, limit: 5 }, signal: controller.signal })
-        .then((response) => setGroups(Array.isArray(response.data?.groups) ? response.data.groups : []))
-        .catch((requestError: unknown) => {
-          if (!controller.signal.aborted) {
-            console.error('Global search request failed.', requestError)
-            setError(true)
-            setGroups([])
-          }
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false)
-        })
-    }, 300)
-    return () => {
-      window.clearTimeout(timer)
-      controller.abort()
-    }
-  }, [query, open, retryCount])
-
-  useEffect(() => {
-    setActiveIndex(-1)
-  }, [query, groups])
-
-  const focusSearch = () => {
-    const useMobile = isMobileViewport()
-    setOpen(true)
-    setMobileOpen(useMobile)
-    window.setTimeout(() => (useMobile ? mobileInputRef : desktopInputRef).current?.focus(), 0)
-  }
-
-  const close = () => {
-    setOpen(false)
-    setMobileOpen(false)
-    setActiveIndex(-1)
-  }
-
-  const choose = (url: string) => {
-    navigate(url)
-    close()
+  const choose = (suggestion: SearchSuggestion) => {
+    if (suggestion.url) navigate(suggestion.url)
     setQuery('')
+    setMobileOpen(false)
   }
-
-  const handleInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    const count = query.trim().length < 2 ? quick.length : options.length
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      close()
-    } else if (event.key === 'ArrowDown' && count) {
-      event.preventDefault()
-      setActiveIndex((index) => (index + 1) % count)
-    } else if (event.key === 'ArrowUp' && count) {
-      event.preventDefault()
-      setActiveIndex((index) => (index <= 0 ? count - 1 : index - 1))
-    } else if (event.key === 'Enter') {
-      event.preventDefault()
-      if (query.trim().length < 2) {
-        const selected = quick[activeIndex >= 0 ? activeIndex : 0]
-        if (selected) choose(selected.url)
-      } else {
-        const selected = options[activeIndex >= 0 ? activeIndex : 0]
-        if (selected) choose(selected.url)
-      }
-    }
-  }
-
-  const input = (ref: React.RefObject<HTMLInputElement | null>) => (
-    <div className="relative w-full">
-      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-      <input
-        ref={ref}
-        role="combobox"
-        aria-label="Search InternSphere"
-        aria-autocomplete="list"
-        aria-expanded={open}
-        aria-controls="global-search-results"
-        aria-activedescendant={activeIndex >= 0 ? `global-search-option-${activeIndex}` : undefined}
-        value={query}
-        onFocus={() => setOpen(true)}
-        onChange={(event) => { setQuery(event.target.value); setOpen(true) }}
-        onKeyDown={handleInputKeyDown}
-        placeholder="Search…"
-        className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-10 text-sm text-slate-800 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:bg-slate-900 dark:focus:ring-indigo-950"
-      />
-      {loading
-        ? <Loader2 aria-label="Searching" className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-indigo-500" />
-        : null}
-    </div>
+  const scope = role === 'STUDENT' ? 'all' : role === 'COMPANY' ? 'postings' : 'all'
+  const searchBox = () => (
+    <SearchBox
+      ariaLabel="Search InternSphere"
+      value={query}
+      onChange={setQuery}
+      onSelect={choose}
+      scope={scope}
+      placeholder="Search…"
+      staticSuggestions={quick}
+      className="h-10 rounded-xl bg-slate-50 dark:bg-slate-800"
+    />
   )
-
-  const results = (
-    <div id="global-search-results" role="listbox" aria-label="Search results" className="max-h-[65vh] overflow-y-auto">
-      {query.trim().length < 2 ? (
-        <div className="p-3">
-          <p className="mb-2 px-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">Quick links</p>
-          {quick.map((link, index) => (
-            <button key={link.label} id={`global-search-option-${index}`} role="option" aria-selected={activeIndex === index} onMouseEnter={() => setActiveIndex(index)} onClick={() => choose(link.url)} className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-indigo-50 aria-selected:bg-indigo-50 dark:text-slate-200 dark:hover:bg-slate-800 dark:aria-selected:bg-slate-800">
-              <span className="flex-1">{link.label}</span><span className="text-xs text-slate-400">Open</span>
-            </button>
-          ))}
-        </div>
-      ) : loading ? (
-        <div role="status" className="flex items-center gap-2 p-5 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />Searching…</div>
-      ) : error ? (
-        <div className="p-5 text-center text-sm text-rose-600 dark:text-rose-400">
-          <p>Search couldn’t be completed.</p>
-          <button type="button" onClick={() => setRetryCount((count) => count + 1)} className="mt-2 font-semibold underline">Retry</button>
-        </div>
-      ) : options.length === 0 ? (
-        <p className="p-5 text-center text-sm text-slate-500">No results for “{query.trim()}”.</p>
-      ) : (
-        <div className="p-2">
-          {groups.map((group) => (
-            <section key={group.type} aria-label={group.label} className="mb-2 last:mb-0">
-              <h3 className="px-2 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">{group.label}</h3>
-              {group.items.map((item) => {
-                const index = options.indexOf(item)
-                return (
-                  <button key={`${group.type}-${item.id}`} id={`global-search-option-${index}`} role="option" aria-selected={activeIndex === index} onMouseEnter={() => setActiveIndex(index)} onClick={() => choose(item.url)} className="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-indigo-50 aria-selected:bg-indigo-50 dark:hover:bg-slate-800 dark:aria-selected:bg-slate-800">
-                    <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{item.title}</span><span className="block truncate text-xs text-slate-500">{item.subtitle}</span></span>
-                    <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-slate-700 dark:text-slate-300">{item.badge}</span>
-                  </button>
-                )
-              })}
-            </section>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-
-  if (role === 'GUEST') return null
-
   return (
-    <div ref={rootRef} className="relative flex flex-1 justify-center px-3 md:px-6">
-      <div className="hidden w-full max-w-xl md:block">
-        {input(desktopInputRef)}
-        {open && <div className="absolute left-3 right-3 top-full z-[60] mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900 md:left-6 md:right-6">{results}</div>}
-      </div>
-      <button type="button" onClick={focusSearch} aria-label="Open search" className="absolute right-0 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 md:hidden">
+    <div className="relative flex flex-1 justify-center px-3 md:px-6">
+      <div className="hidden w-full max-w-xl md:block">{searchBox()}</div>
+      <button type="button" onClick={() => setMobileOpen(true)} aria-label="Open search" className="absolute right-0 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 md:hidden">
         <Search className="h-5 w-5" />
       </button>
       {mobileOpen && (
         <div className="fixed inset-0 z-[80] bg-white p-4 dark:bg-slate-950 md:hidden">
           <div className="mb-4 flex items-center gap-3">
-            <div className="flex-1">{input(mobileInputRef)}</div>
-            <button type="button" aria-label="Close search" onClick={close} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
+            <div className="flex-1">{searchBox()}</div>
+            <button type="button" aria-label="Close search" onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
           </div>
-          <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800">{results}</div>
         </div>
       )}
     </div>
@@ -363,15 +212,18 @@ export function Navbar() {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') void refresh()
     }
+    const handleCountsRefresh = () => void refresh()
     void refresh()
     window.addEventListener('focus', handleVisibilityChange)
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('app:notification', handleNotification)
+    window.addEventListener('app:navigation-counts-refresh', handleCountsRefresh)
     return () => {
       mounted = false
       window.removeEventListener('focus', handleVisibilityChange)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('app:notification', handleNotification)
+      window.removeEventListener('app:navigation-counts-refresh', handleCountsRefresh)
     }
   }, [session?.accessToken, role, location.pathname])
 
@@ -528,7 +380,7 @@ export function Navbar() {
             <Logo size="md" />
             {session && <Badge status={session.role} className="px-2 py-0.5 text-[11px] font-semibold">{session.role}</Badge>}
           </div>
-          {session && <GlobalSearch role={role} />}
+          <GlobalSearch role={role} />
           <div className="flex items-center gap-1.5">
             <button
               onClick={() => setTheme(isDark ? 'light' : 'dark')}

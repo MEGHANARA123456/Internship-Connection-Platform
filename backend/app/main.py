@@ -10,6 +10,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.exc import SQLAlchemyError
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -70,14 +71,17 @@ async def _interview_expiry_worker() -> None:
 
 
 # Check whether Mailpit is already running before starting a local one.
-def is_port_in_use(port: int) -> bool:
-    """Return whether localhost accepts a TCP connection on the specified port."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(('127.0.0.1', port)) == 0
+def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    """Return whether the given host accepts a TCP connection on the specified port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((host, port)) == 0
 
 async def _cancel_task(task: asyncio.Task | None) -> None:
     """Cancel and await a task when present, swallowing its expected cancellation."""
     if task is None:
+        return
+    if task.done():
         return
     task.cancel()
     try:
@@ -85,8 +89,13 @@ async def _cancel_task(task: asyncio.Task | None) -> None:
     except asyncio.CancelledError:
         pass
 
+async def _cancel_tasks(*tasks: asyncio.Task | None) -> None:
+    """Cancel multiple tasks sequentially and ignore anticipated shutdown cancellations."""
+    for task in tasks:
+        await _cancel_task(task)
 
-# Application startup and shutdown lifecycle.
+
+# Application startup and shutdown lifecycle. 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Migrate the database, ingest enabled chatbot knowledge, start workers, and stop them on shutdown."""
@@ -96,7 +105,16 @@ async def lifespan(app: FastAPI):
 
     chatbot_config = load_config()
     if chatbot_config.rag_enabled:
-        await ingest_knowledge(chatbot_config)
+        try:
+            await ingest_knowledge(chatbot_config)
+        except (SQLAlchemyError, OSError, RuntimeError, ValueError) as error:
+            from app.chatbot.router import _service
+
+            _service.vector_available = False
+            logger.warning(
+                "Chatbot hybrid index unavailable; using BM25 retrieval.",
+                extra={"chatbot_meta": {"reason": type(error).__name__, "retrieval": "bm25"}},
+            )
     mailpit_task: asyncio.Task | None = None
     reminder_task = asyncio.create_task(_interview_reminder_worker())
     expiry_task = asyncio.create_task(_interview_expiry_worker())
@@ -112,9 +130,7 @@ async def lifespan(app: FastAPI):
                 logger.warning("Could not start embedded Mailpit server: %s", exc)
         yield
     finally:
-        await _cancel_task(reminder_task)
-        await _cancel_task(expiry_task)
-        await _cancel_task(mailpit_task)
+        await _cancel_tasks(reminder_task, expiry_task, mailpit_task)
 
 # Set up app logging before creating the FastAPI instance.
 configure_logging()

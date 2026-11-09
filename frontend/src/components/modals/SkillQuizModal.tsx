@@ -123,6 +123,23 @@ interface SkillQuizModalProps {
   initialTopic?: string | null
 }
 
+function getAssessmentTopicsErrorMessage(error: unknown): string {
+  const response = typeof error === 'object' && error !== null && 'response' in error
+    ? error.response
+    : null
+  const status = typeof response === 'object' && response !== null && 'status' in response
+    ? response.status
+    : null
+
+  if (status === 401) return 'Your session expired. Sign in again to load assessment subjects.'
+  if (status === 403) return 'Your account is not authorized to load student assessment subjects.'
+  if (status === 404) return 'The assessment subjects service was not found. Please contact support.'
+  if (typeof status === 'number' && status >= 500) return 'The assessment subjects service is temporarily unavailable.'
+  if (status === 429) return 'Assessment subjects are temporarily rate-limited. Please wait and retry.'
+  if (!response) return 'Could not reach the assessment service. Check your connection and retry.'
+  return 'Assessment subjects could not be loaded. Please retry.'
+}
+
 function errorMessage(error: unknown): string {
   const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
   if (detail && typeof detail === 'object') {
@@ -210,6 +227,7 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
   const [topics, setTopics] = useState<SkillTopic[]>([])
   const [loadingTopics, setLoadingTopics] = useState(false)
   const [topicsError, setTopicsError] = useState(false)
+  const [topicsErrorMessage, setTopicsErrorMessage] = useState('')
   const [statsError, setStatsError] = useState(false)
   const [activeAttemptsError, setActiveAttemptsError] = useState(false)
   const [history, setHistory] = useState<SkillAttemptSummary[]>([])
@@ -236,6 +254,7 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
     const requestId = ++overviewRequest.current
     setLoadingTopics(true)
     setTopicsError(false)
+    setTopicsErrorMessage('')
     setStatsError(false)
     setActiveAttemptsError(false)
     const [topicsResult, historyResult, badgesResult, attemptsResult] = await Promise.allSettled([
@@ -250,10 +269,13 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
       ? topicsResult.value.data as SkillTopic[]
       : []
     setTopics(availableTopics)
-    setTopicsError(
-      topicsResult.status === 'rejected'
-      || !Array.isArray(topicsResult.status === 'fulfilled' ? topicsResult.value.data : null),
-    )
+    const invalidTopicsResponse = topicsResult.status === 'fulfilled' && !Array.isArray(topicsResult.value.data)
+    setTopicsError(topicsResult.status === 'rejected' || invalidTopicsResponse)
+    if (topicsResult.status === 'rejected') {
+      setTopicsErrorMessage(getAssessmentTopicsErrorMessage(topicsResult.reason))
+    } else if (invalidTopicsResponse) {
+      setTopicsErrorMessage('The assessment service returned an invalid subject list.')
+    }
     if (historyResult.status === 'fulfilled') {
       const attempts = historyResult.value.data?.attempts
       setHistory(Array.isArray(attempts) ? attempts as SkillAttemptSummary[] : [])
@@ -509,7 +531,7 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
               </div>
               {topicsError && (
                 <div role="alert" className="mb-3 flex items-center justify-between gap-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
-                  <span>Could not load assessment subjects.</span>
+                  <span>{topicsErrorMessage || 'Assessment subjects could not be loaded. Please retry.'}</span>
                   <button type="button" onClick={() => void loadAssessmentOverview()} className="rounded font-semibold underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600">Retry</button>
                 </div>
               )}
@@ -787,11 +809,10 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
                       type="button"
                       disabled={expired || submitting}
                       onClick={() => setQuestionAnswer(index)}
-                      className={`flex w-full items-center justify-between rounded-xl border p-3 text-left text-xs transition-colors disabled:cursor-not-allowed ${
-                        selected
-                          ? 'border-indigo-600 bg-indigo-50 font-medium text-indigo-900 dark:bg-indigo-950/60 dark:text-indigo-200'
-                          : 'border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
-                      }`}
+                      className={`flex w-full items-center justify-between rounded-xl border p-3 text-left text-xs transition-colors disabled:cursor-not-allowed ${selected
+                        ? 'border-indigo-600 bg-indigo-50 font-medium text-indigo-900 dark:bg-indigo-950/60 dark:text-indigo-200'
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                        }`}
                     >
                       <span>{option}</span>
                       {selected && <CheckCircle2 className="ml-2 h-4 w-4 shrink-0 text-indigo-600" />}

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 MAX_HISTORY_TURNS = 4
-MAX_HISTORY_CHARS = 1500
+MAX_HISTORY_CHARS = 500
 
 
 class ChatPage(str, Enum):
@@ -62,7 +62,25 @@ class ChatAskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     message: str = Field(min_length=1, max_length=500)
     history: list[ChatTurn] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
+    previous_suggestions: list[str] = Field(default_factory=list, max_length=3)
     page: ChatPage = ChatPage.home
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def _shorten_message(cls, value):
+        """Bound user messages at the API boundary instead of rejecting an otherwise valid question."""
+        return value.strip()[:500] if isinstance(value, str) else value
+
+    @field_validator("previous_suggestions", mode="before")
+    @classmethod
+    def _normalize_previous_suggestions(cls, value):
+        if not isinstance(value, list):
+            return value
+        return [
+            item.strip()[:200]
+            for item in value
+            if isinstance(item, str) and item.strip()
+        ][-3:]
 
     @field_validator("history", mode="before")
     @classmethod
@@ -120,6 +138,7 @@ class ChatAskResponse(BaseModel):
     suggested_followups: list[str] = Field(default_factory=list)
     category: str
     refused: bool
+    needs_clarification: str | None = None
 
 
 class ChatFeedbackRequest(BaseModel):

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowUp, Bot, Minus, Trash2, X } from 'lucide-react'
+import { ArrowUp, Bot, Trash2, X } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
 import { MessageList } from './MessageList'
 import { greetingForRole, suggestedQuestionsForPage } from './suggestions'
-import type { ChatMessage, ChatPage, ChatSourceType } from './types'
+import type { ChatFeedbackSourceType, ChatMessage, ChatPage } from './types'
 import { routes } from '../lib/routes'
 
 interface ChatWindowProps {
@@ -14,6 +14,9 @@ interface ChatWindowProps {
   role?: 'STUDENT' | 'COMPANY' | 'ADMIN'
   page: ChatPage
   mode?: 'retrieval' | 'llm'
+  retrieval?: 'bm25' | 'hybrid'
+  ragEnabled?: boolean
+  indexedChunkCount?: number
   online: boolean
   statusDisabled: boolean
   statusError: boolean
@@ -22,12 +25,12 @@ interface ChatWindowProps {
   onSend: (message: string) => Promise<boolean>
   onSummary: () => void
   onRetry: () => void
-  onFeedback: (turnId: string, rating: 'up' | 'down', sourceType: ChatSourceType) => Promise<boolean>
+  onFeedback: (turnId: string, rating: 'up' | 'down', sourceType: ChatFeedbackSourceType) => Promise<boolean>
   onClear: () => void
   onClose: () => void
 }
 
-export function ChatWindow({ messages, typing, error, role, page, mode, online, statusDisabled, statusError, statusChecking, summaryLoading, onSend, onSummary, onRetry, onFeedback, onClear, onClose }: ChatWindowProps) {
+export function ChatWindow({ messages, typing, error, role, page, mode, retrieval, ragEnabled, indexedChunkCount, online, statusDisabled, statusError, statusChecking, summaryLoading, onSend, onSummary, onRetry, onFeedback, onClear, onClose }: ChatWindowProps) {
   const session = useAuthStore((state) => state.session)
   const [draft, setDraft] = useState('')
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -102,17 +105,16 @@ export function ChatWindow({ messages, typing, error, role, page, mode, online, 
           <div>
             <h2 id="chatbot-title" className="text-sm font-bold">InternSphere AI</h2>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              {role === 'STUDENT' ? 'Internship and career help' : role === 'COMPANY' ? 'Recruiting workflow help' : 'Platform administration help'}
+              {role === 'STUDENT' ? 'Internship and career help' : role === 'COMPANY' ? 'Recruiting workflow help' : role === 'ADMIN' ? 'Platform administration help' : 'InternSphere platform help'}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-1">
           <span className="flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-200" aria-label={!online ? 'Chat connection unavailable' : statusDisabled ? 'Chatbot disabled by backend configuration' : statusError ? 'Chat connection could not be checked' : statusChecking ? 'Checking chat connection' : 'Chat connection online'}>
             <span className={`h-1.5 w-1.5 rounded-full ${!online || statusError || statusDisabled ? 'bg-rose-500' : statusChecking ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-            {!online ? 'Offline' : statusDisabled ? 'Disabled' : statusError ? 'Unavailable' : statusChecking ? 'Checking' : mode === 'retrieval' ? 'Help online' : 'Online'}
+            {!online ? 'Offline' : statusDisabled ? 'Disabled' : statusError ? 'Unavailable' : statusChecking ? 'Checking' : mode === 'retrieval' ? `${retrieval === 'hybrid' ? 'Hybrid' : 'BM25'} help` : 'AI help'}
           </span>
           <button type="button" onClick={onClear} aria-label="Start a new conversation" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-slate-800"><Trash2 className="h-4 w-4" /></button>
-          <button type="button" onClick={onClose} aria-label="Minimize chat" title="Minimize chat" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-slate-800"><Minus className="h-4 w-4" /></button>
           <button type="button" onClick={onClose} aria-label="Close chat" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-slate-800"><X className="h-4 w-4" /></button>
         </div>
       </header>
@@ -121,6 +123,7 @@ export function ChatWindow({ messages, typing, error, role, page, mode, online, 
         Please don’t share passwords or personal data. Chats are kept only in this page session.
       </p>
       {statusDisabled && <p role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-100">The help assistant is disabled by the backend. Set <code className="font-semibold">CHATBOT_ENABLED=true</code> in the backend environment and restart the backend to enable it.</p>}
+      {ragEnabled && indexedChunkCount === 0 && <p role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-100">The searchable knowledge index is empty. Documentation answers may be limited until an administrator reindexes the help content.</p>}
       {statusError && <p role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-100">Chat connection could not be checked. You can still try sending a message.</p>}
       {!online && <p role="status" className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-900 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-100">You are offline. Reconnect to send messages.</p>}
 
@@ -173,7 +176,7 @@ export function ChatWindow({ messages, typing, error, role, page, mode, online, 
             value={draft}
             rows={1}
             maxLength={500}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => setDraft(event.target.value.slice(0, 500))}
             onKeyDown={handleInputKeyDown}
             placeholder="Ask about using InternSphere…"
             disabled={typing || !online || statusDisabled}

@@ -25,6 +25,7 @@ from app.services.analytics_domains import normalize_domain_rows
 from app.services.application_funnel import cumulative_student_application_counts
 from app.services.audit import audit_action_label
 from app.services.company_metrics import company_metric_cards, get_company_metrics
+from app.services.reporting_ranges import reporting_range_cutoff
 
 router = APIRouter(tags=["analytics"])
 dashboard_user = Annotated[User, Depends(require_roles(UserRole.COMPANY, UserRole.ADMIN))]# type: ignore
@@ -39,15 +40,8 @@ SCREENED_STATUSES = {
     "REJECTED",
 }
 OFFER_STATUSES = {"SELECTED", "ACCEPTED"}
-RANGE_DAYS = {"7": 7, "30": 30, "90": 90}
 ACTIVE_ROLE_STATUSES = {"PUBLISHED"}
 INTERVIEW_APPLICATION_STATUSES = {"INTERVIEW_SCHEDULED", "SELECTED", "ACCEPTED"}
-
-
-def _cutoff(range_value: str) -> datetime | None:
-    """Return a UTC lookback timestamp for the requested number of days, or None when no limit is requested."""
-    days = RANGE_DAYS.get(range_value)
-    return datetime.now(timezone.utc) - timedelta(days=days) if days is not None else None
 
 
 def _scope(query: Any, user: User) -> Any:
@@ -61,7 +55,7 @@ def _scope(query: Any, user: User) -> Any:
 
 def _application_date_filter(query: Any, range_value: str) -> Any:
     """Apply the requested creation-date lookback to an application query."""
-    cutoff = _cutoff(range_value)
+    cutoff = reporting_range_cutoff(range_value)
     return query.where(Application.created_at >= cutoff) if cutoff is not None else query
 
 
@@ -326,7 +320,7 @@ async def student_insights(
             "definition": "Mean hours from application submission to the first recruiter-authored event beyond APPLIED.",
         },
     }
-    cutoff = _cutoff(range_value)
+    cutoff = reporting_range_cutoff(range_value)
     status_events_query = (
         select(ApplicationStatusEvent.changed_at, ApplicationStatusEvent.to_status)
         .join(Application, Application.id == ApplicationStatusEvent.application_id)
@@ -616,7 +610,7 @@ async def company_insights(
     total_roles = metrics["total_roles"]
     active_roles = metrics["active_roles"]
 
-    cutoff = _cutoff(range_value)
+    cutoff = reporting_range_cutoff(range_value)
     status_counts = metrics["status_counts"]
     total_applications = metrics["total_applicants"]
     applicants_by_role_rows = []
@@ -843,7 +837,7 @@ async def admin_insights(
     response.headers["Cache-Control"] = "no-store"
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    range_cutoff = _cutoff(range_value)
+    range_cutoff = reporting_range_cutoff(range_value)
     current_month_users = select(func.count(User.id)).where(User.created_at >= month_start)
     total_signups = int(await db.scalar(current_month_users) or 0)
     student_signups = int(await db.scalar(

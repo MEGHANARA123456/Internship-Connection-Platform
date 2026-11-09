@@ -2,6 +2,7 @@
 
 import asyncio
 from hashlib import sha256
+import json
 import logging
 from pathlib import Path
 import re
@@ -10,6 +11,7 @@ import time
 from sqlalchemy import text
 
 from app.chatbot.chatbot_config import ChatbotConfig, load_config
+from app.chatbot.retriever import _front_matter_values, _metadata_list
 from app.chatbot.rag.embeddings import embed_texts
 from app.core.database import async_session_factory
 
@@ -21,22 +23,62 @@ CHUNK_WORDS = 400
 CHUNK_OVERLAP = 50
 
 
-def _front_matter(raw: str) -> tuple[dict[str, str], str]:
-    """Parse required title/audience/route metadata and the Markdown body; reject unsupported audiences."""
+def _front_matter(raw: str) -> tuple[dict[str, str], tuple[str, ...], tuple[tuple[str, str], ...], str]:
+    """Parse required role audiences and labeled routes from Markdown front matter."""
     if not raw.startswith("---\n"):
         raise ValueError("Knowledge file must start with YAML front matter.")
     _, header, body = raw.split("---", 2)
-    values: dict[str, str] = {}
-    for line in header.splitlines():
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        values[key.strip()] = value.strip().strip("\"'")
-    if not values.get("title") or not values.get("audience") or not values.get("route"):
-        raise ValueError("Knowledge front matter requires title, audience, and route.")
-    if values["audience"] not in {"student", "company", "admin", "all"}:
-        raise ValueError(f"Unsupported knowledge audience: {values['audience']}")
-    return values, body.strip()
+    values, links = _front_matter_values(header)
+    audiences = _metadata_list(values.get("audience"))
+    allowed_audiences = {"guest", "student", "company", "admin"}
+    if not values.get("title") or not links or not audiences:
+        raise ValueError("Knowledge front matter requires title, audience, and labeled links.")
+    if set(audiences) - allowed_audiences:
+        raise ValueError("Knowledge front matter contains an unsupported audience.")
+    return values, audiences, links, body.strip()
+
+
+def _route_is_allowed(route: str, audience: str) -> bool:
+    """Keep vector-indexed links within the same role boundaries as BM25 results."""
+    common = {
+        "/", "/opportunities", "/login", "/register-student", "/register-company",
+        "/forgot-password", "/reset-password", "/verify", "/privacy", "/privacy-center",
+        "/privacy-security",
+    }
+    role_routes = {
+        "guest": common,
+        "student": common | {
+            "/applications", "/profile/student", "/interviews", "/messages",
+            "/notifications", "/saved", "/student/analytics", "/skills/history",
+        },
+        "company": common | {
+            "/company", "/company/jobs", "/company/interviews", "/company/internships/new", "/company/applicants",
+            "/company/pipeline", "/company/shortlisted", "/company/analytics",
+            "/company/settings", "/profile/company", "/interviews", "/messages", "/notifications",
+        },
+        "admin": common | {
+            "/admin", "/admin/moderation", "/admin/companies", "/admin/users",
+            "/admin/verifications", "/admin/reports", "/admin/audit-logs",
+            "/admin/skill-assessments", "/admin/students", "/notifications",
+        },
+    }
+    if audience != "guest" and route in {
+        "/login", "/register-student", "/register-company",
+        "/forgot-password", "/reset-password", "/verify",
+    }:
+        return False
+    if route in role_routes[audience]:
+        return True
+    if audience == "student":
+        return bool(re.fullmatch(r"/(?:opportunities|applications)/[1-9]\d*", route))
+    if audience == "company":
+        return bool(re.fullmatch(
+            r"/company/(?:jobs|companies)/[1-9]\d+(?:/applicants)?|/company/internships/[1-9]\d+/(?:edit|applicants)",
+            route,
+        ))
+    if audience == "admin":
+        return bool(re.fullmatch(r"/admin/(?:companies|students)/[1-9]\d+(?:/postings)?", route))
+    return False
 
 
 def _heading_sections(body: str) -> list[tuple[str, str]]:
@@ -57,7 +99,7 @@ def _heading_sections(body: str) -> list[tuple[str, str]]:
 
 def _chunks_for_file(path: Path, root: Path) -> list[dict[str, str | int]]:
     """Create overlapping word-bounded chunks with source metadata, hashes, and token counts."""
-    values, body = _front_matter(path.read_text(encoding="utf-8"))
+    values, audiences, links, body = _front_matter(path.read_text(encoding="utf-8"))
     chunks: list[dict[str, str | int]] = []
     source_path = path.relative_to(root).as_posix()
     for section, section_text in _heading_sections(body):
@@ -66,24 +108,33 @@ def _chunks_for_file(path: Path, root: Path) -> list[dict[str, str | int]]:
         while start < len(words):
             end = min(start + CHUNK_WORDS, len(words))
             content = f"## {section}\n" + " ".join(words[start:end])
-            normalized = "\n".join((
-                values["title"],
-                section,
-                values["audience"],
-                values["route"],
-                content,
-            ))
-            chunks.append({
-                "doc_id": path.stem,
-                "source_path": source_path,
-                "title": values["title"],
-                "section": section,
-                "content": content,
-                "audience": values["audience"],
-                "route_hint": values["route"],
-                "content_hash": sha256(normalized.encode("utf-8")).hexdigest(),
-                "token_count": len(WORD_PATTERN.findall(content)),
-            })
+            for audience in audiences:
+                audience_links = tuple(
+                    (label, route)
+                    for label, route in links
+                    if _route_is_allowed(route, audience)
+                )
+                if not audience_links:
+                    raise ValueError(f"No role-authorized links for {path.name} ({audience}).")
+                route_metadata = json.dumps(audience_links, ensure_ascii=False, separators=(",", ":"))
+                normalized = "\n".join((
+                    values["title"],
+                    section,
+                    audience,
+                    route_metadata,
+                    content,
+                ))
+                chunks.append({
+                    "doc_id": path.stem,
+                    "source_path": source_path,
+                    "title": values["title"],
+                    "section": section,
+                    "content": content,
+                    "audience": audience,
+                    "route_hint": route_metadata,
+                    "content_hash": sha256(normalized.encode("utf-8")).hexdigest(),
+                    "token_count": len(WORD_PATTERN.findall(content)),
+                })
             if end == len(words):
                 break
             start = end - CHUNK_OVERLAP

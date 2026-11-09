@@ -50,6 +50,7 @@ class ApplicationResponse(BaseModel):
     internship_id: int
     student_id: int
     status: ApplicationStatus
+    display_status: ApplicationStatus | Literal["EXPIRED"] | None = None
     allowed_next: list[str] = Field(default_factory=list)
     allowed_actions: list[str] = Field(default_factory=list)
     cover_note: str | None

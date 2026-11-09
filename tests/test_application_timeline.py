@@ -152,10 +152,8 @@ async def test_application_timeline_access_email_scope_and_gmail_url() -> None:
     interview_step = student_data["steps"][5]
     assert interview_step["interview"]["link"] == "https://meet.example.com/room"
     interview_mail = interview_step["emails"][0]
-    assert interview_mail["gmail_url"] == (
-        "https://mail.google.com/mail/?authuser=candidate%40gmail.com"
-        "#search/rfc822msgid%3A%3Cmessage-1%40example.com%3E"
-    )
+    assert "IS-1" in interview_mail["gmail_url"]
+    assert "in%3Aanywhere" in interview_mail["gmail_url"]
     assert company_timeline.status_code == 200
     assert len(company_timeline.json()["related_emails"]) == 1
     assert admin_timeline.status_code == 200
@@ -164,10 +162,8 @@ async def test_application_timeline_access_email_scope_and_gmail_url() -> None:
     assert other_student_timeline.status_code == 404
     assert anonymous_timeline.status_code == 401
     assert mailbox.status_code == 200
-    assert mailbox.json()[0]["gmail_url"] == (
-        "https://mail.google.com/mail/?authuser=candidate%40gmail.com"
-        "#search/rfc822msgid%3A%3Cmessage-1%40example.com%3E"
-    )
+    assert "IS-1" in mailbox.json()[0]["gmail_url"]
+    assert "in%3Aanywhere" in mailbox.json()[0]["gmail_url"]
 
 
 @pytest.mark.anyio

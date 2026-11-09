@@ -25,7 +25,7 @@ const faqs = [
 
 export function FaqSection() {
   return (
-    <section className="w-full bg-slate-50 dark:bg-slate-950 py-20 border-t border-slate-200 dark:border-slate-800">
+    <section id="faq" className="w-full scroll-mt-24 bg-slate-50 dark:bg-slate-950 py-20 border-t border-slate-200 dark:border-slate-800">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
         <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-slate-50 mb-10 text-center">
           Common <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-500 dark:from-indigo-400 dark:to-violet-400 italic">questions.</span>

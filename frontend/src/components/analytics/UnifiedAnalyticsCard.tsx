@@ -126,6 +126,7 @@ function CardMetric({
   error,
   icon,
   format,
+  info,
   period,
   sampleUnit,
   alwaysShowSample,
@@ -139,6 +140,7 @@ function CardMetric({
   error: boolean
   icon: ReactNode
   format?: (value: number) => string
+  info?: string
   period?: string
   sampleUnit?: string
   alwaysShowSample?: boolean
@@ -163,7 +165,7 @@ function CardMetric({
       caption={caption}
       icon={icon}
       href={href}
-      info={metric?.definition || 'Metric definition unavailable.'}
+      info={info || metric?.definition || 'Metric definition unavailable.'}
       loading={loading}
       error={error}
       onRetry={onRetry}
@@ -349,7 +351,7 @@ const KPI_CONFIG: Record<AnalyticsKind, KpiCardConfig[]> = {
     { label: 'Users signed up', key: 'users_signed_up', href: routes.adminUsers({ created: 'this_month' }), icon: <Users className="h-4 w-4" />, info: 'Accounts created since the start of the current UTC month.', sampleUnit: 'users' },
     { label: 'Student signups', key: 'student_signups', href: routes.adminStudents({ created: 'this_month' }), icon: <Users className="h-4 w-4" />, info: 'Student accounts created this UTC calendar month.', sampleUnit: 'students' },
     { label: 'Company signups', key: 'company_signups', href: routes.adminCompanies + '?created=this_month', icon: <Briefcase className="h-4 w-4" />, info: 'Company accounts created this UTC calendar month.', sampleUnit: 'companies' },
-    { label: 'Admin actions', key: 'admin_actions', href: routes.adminAuditLogs({ range: '14d' }), icon: <Activity className="h-4 w-4" />, info: 'Audit log records created in the last 14 days.', sampleUnit: 'actions', period: 'Last 14 days' },
+    { label: 'Admin actions', key: 'admin_actions', href: routes.adminAuditLogs(), icon: <Activity className="h-4 w-4" />, info: 'Audit log records created in the selected reporting range.', sampleUnit: 'actions' },
     { label: 'Pending verifications', key: 'pending_verifications', href: routes.adminVerifications, icon: <Check className="h-4 w-4" />, info: 'Company profiles currently awaiting verification.', sampleUnit: 'companies' },
     { label: 'Job queue', key: 'job_queue', href: routes.adminModeration, icon: <FileText className="h-4 w-4" />, info: 'Internships currently awaiting moderation.', sampleUnit: 'postings' },
     { label: 'Disputes', key: 'disputes', href: routes.adminReports({ status: 'open' }), icon: <Info className="h-4 w-4" />, info: 'Reports currently open.', sampleUnit: 'reports' },
@@ -494,6 +496,11 @@ export function UnifiedAnalyticsCard({
     : data?.kpis
   const rangeLabel = RANGE_OPTIONS.find((item) => item.value === range)?.label ?? '30 days'
   const periodLabel = range === 'all' ? 'all time' : `last ${rangeLabel.toLowerCase()}`
+  const auditRange = range === 'all' ? 'all' : `${range}d`
+  const auditActionsPeriod = range === 'all' ? 'All time' : `Last ${rangeLabel}`
+  const auditActionsInfo = range === 'all'
+    ? 'Audit records from all time. The Audit Logs page shows all-time events unless filtered.'
+    : `Audit records created in the last ${range} days. The Audit Logs page shows all-time events unless filtered.`
 
   const studentCards = [
     { label: 'Applications submitted', key: 'applications_submitted', href: routes.applications(), icon: <FileText className="h-4 w-4" />, detail: metricLinks(metrics), info: 'Count of all application records submitted by this student.' },
@@ -532,8 +539,15 @@ export function UnifiedAnalyticsCard({
                 ...metrics[card.key],
                 definition: variant === 'company' ? metrics[card.key].definition : card.info,
               } : undefined}
-              href={card.href}
-              period={card.period ?? (variant === 'admin' ? data?.period_label : undefined)}
+              href={variant === 'admin' && card.key === 'admin_actions'
+                ? routes.adminAuditLogs({ range: auditRange })
+                : card.href}
+              period={variant === 'admin' && card.key === 'admin_actions'
+                ? auditActionsPeriod
+                : card.period ?? (variant === 'admin' ? data?.period_label : undefined)}
+              info={variant === 'admin' && card.key === 'admin_actions'
+                ? auditActionsInfo
+                : card.info}
               sampleUnit={card.sampleUnit}
               alwaysShowSample={variant === 'company'}
               onRetry={() => { void loadData(); if (variant === 'company') companyMetrics.retry() }}

@@ -1,10 +1,11 @@
 import { Link } from 'react-router-dom'
 import { routes } from '../../lib/routes'
 import { Button } from '../ui/Button'
+import { scrollToSection } from '../../lib/scroll'
 
 export function CompaniesSection() {
   return (
-    <section className="w-full bg-slate-950 dark:bg-slate-950 text-slate-50 py-20 border-t border-slate-900">
+    <section className="w-full scroll-mt-24 bg-slate-950 dark:bg-slate-950 text-slate-50 py-20 border-t border-slate-900">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
           <div className="space-y-6">
@@ -23,7 +24,7 @@ export function CompaniesSection() {
                   Post an internship &rarr;
                 </Button>
               </Link>
-              <Button variant="outline" size="md" className="rounded-3xl px-6 border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white">
+              <Button variant="outline" size="md" onClick={() => scrollToSection('company-how-it-works')} className="rounded-3xl px-6 bg-transparent dark:bg-transparent border-slate-600 dark:border-slate-600 text-slate-200 dark:text-slate-200 hover:bg-slate-800 dark:hover:bg-slate-800 hover:text-white dark:hover:text-white">
                 See how it works
               </Button>
             </div>

@@ -37,6 +37,17 @@ ADMIN_INTENT_TERMS = {
 ADMIN_AUDIT_PATTERN = re.compile(
     r"\b(audits?|admin(?:istrator)?[- ]actions?|admin[- ]events?)\b", re.I
 )
+ADMIN_ONLY_PATTERNS = (
+    re.compile(r"\b(?:admin|administrator)\s+(?:dashboard|pages?|tools?|reports?|settings?)\b", re.I),
+    re.compile(r"\b(?:moderate|moderation|pending posting approvals?|pending company verification requests?|company verification queue|user management)\b", re.I),
+    re.compile(
+        r"\b(?:archive|restore|permanently delete|delete|import|manage|edit)\b.{0,40}"
+        r"\b(?:skill assessment )?(?:topics?|question bank|assessment questions?)\b"
+        r"|\b(?:skill assessment )?(?:topics?|question bank|assessment questions?)\b.{0,40}"
+        r"\b(?:archive|restore|permanently delete|delete|import|manage|edit)\b",
+        re.I,
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +62,23 @@ class ScopeDecision:
 def is_admin_audit_query(text: str) -> bool:
     """Return whether text refers to administrator audit records or actions."""
     return bool(ADMIN_AUDIT_PATTERN.search(text))
+
+
+def is_how_to_question(text: str) -> bool:
+    """Distinguish workflow instructions from requests for live records."""
+    return bool(
+        re.search(
+            r"\bhow\s+do\b|\bhow\s+(?:can|should)\s+i\b|\bwhere\s+can\s+i\b|"
+            r"\bwhere\s+(?:are|is)\b|\bwhen\s+can\s+i\b|\bcan\s+i\b|\bsteps?\s+to\b",
+            text,
+            re.I,
+        )
+    )
+
+
+def is_admin_only_query(text: str) -> bool:
+    """Identify administrative workflows that must not be answered for other roles."""
+    return bool(ADMIN_AUDIT_PATTERN.search(text) or any(pattern.search(text) for pattern in ADMIN_ONLY_PATTERNS))
 
 
 def decide_scope(
@@ -76,7 +104,7 @@ def decide_scope(
 
     tokens = set(re.findall(r"[a-z0-9]+", text.lower()))
     role_name = role.lower()
-    if is_admin_audit_query(text) and role_name != "admin":
+    if is_admin_only_query(text) and role_name != "admin":
         return ScopeDecision("admin_only", False, True, "role_restricted")
     has_intent = bool(tokens & INTENT_TERMS) or (
         role_name == "admin" and bool(tokens & ADMIN_INTENT_TERMS)

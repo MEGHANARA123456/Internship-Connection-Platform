@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -8,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.v1.dependencies import get_current_user, get_db
+from app.api.v1.skills import _question_results
 from app.main import app
 from app.models import (
     AuditLog,
@@ -98,7 +101,11 @@ async def test_admin_can_update_topic_and_read_attempt_analytics(skill_admin_db)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         update = await client.patch(
             "/api/v1/skills/admin/topics/python",
-            json={"name": "Python Systems", "active": False},
+            json={"name": "Python Systems"},
+        )
+        audit_logs = await client.get(
+            "/api/v1/admin/audit-logs",
+            params={"action": "skill_topic_updated"},
         )
         listing = await client.get("/api/v1/skills/admin/topics")
         attempts = await client.get("/api/v1/skills/admin/topics/python/attempts")
@@ -106,9 +113,12 @@ async def test_admin_can_update_topic_and_read_attempt_analytics(skill_admin_db)
 
     assert update.status_code == 200
     assert update.json()["name"] == "Python Systems"
-    assert update.json()["active"] is False
+    assert audit_logs.status_code == 200
+    assert audit_logs.json()["items"][0]["target_id"] == "python"
+    assert audit_logs.json()["items"][0]["target_label"] == "Skill topic: Python Systems"
+    assert "active" not in update.json()
     assert listing.status_code == 200
-    assert next(item for item in listing.json() if item["topic"] == "python")["active"] is False
+    assert "active" not in next(item for item in listing.json() if item["topic"] == "python")
     assert attempts.status_code == 200
     assert attempts.json()["total"] == 1
     assert attempts.json()["items"][0]["student_email"] == student.email
@@ -118,7 +128,7 @@ async def test_admin_can_update_topic_and_read_attempt_analytics(skill_admin_db)
         actions = set(await db.scalars(
             select(AuditLog.action)
         ))
-    assert actions == {"skill_topic_deactivated"}
+    assert actions == {"skill_topic_updated"}
 
 
 @pytest.mark.anyio
@@ -186,38 +196,179 @@ async def test_topic_creation_readiness_and_student_visibility(skill_admin_db) -
                     "difficulty": difficulty,
                 }))
         subtopics = await client.get("/api/v1/skills/admin/skill-topics/web-security/subtopics")
-        activated = await client.patch(
-            "/api/v1/skills/admin/topics/web-security",
-            json={"active": True},
-        )
 
     assert created.status_code == 201
     assert duplicate.status_code == 409
-    assert unready_activation.status_code == 422
-    assert "Easy: 0/4" in unready_activation.json()["detail"]
+    assert unready_activation.status_code == 200
+    assert "active" not in unready_activation.json()
     assert missing_topic_question.status_code == 404
     assert missing_topic_update.status_code == 404
     assert all(response.status_code == 201 for response in created_questions)
     assert subtopics.json() == [{"id": "system-design", "question_count": 10}]
-    assert activated.status_code == 200 and activated.json()["active"] is True
+    async with skill_admin_db() as db:
+        web_security = await db.get(SkillTopic, "web-security")
+        assert web_security is not None
+        web_security.active = False
+        await db.flush()
+        ready_topics = await db.scalars(select(SkillQuestion).where(SkillQuestion.topic == "web-security"))
+        questions = list(ready_topics)
+        assert len(questions) == 10
+        topic_ready = await db.get(SkillTopic, "web-security")
+        assert topic_ready is not None and not topic_ready.active
+        await db.commit()
+    app.dependency_overrides[get_current_user] = lambda: student
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        ready_listed = await client.get("/api/v1/skills/topics")
+        ready_search = await client.get("/api/v1/search/suggest?q=web&scope=skill_topics")
+    assert [item["id"] for item in ready_listed.json()] == ["web-security"]
+    assert [item["text"] for item in ready_search.json()["items"]] == ["Web Security"]
 
     async with skill_admin_db() as db:
         for question in await db.scalars(select(SkillQuestion).where(SkillQuestion.topic == "web-security")):
             question.active = False
         await db.commit()
-    app.dependency_overrides[get_current_user] = lambda: student
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         listed = await client.get("/api/v1/skills/topics")
-        deactivated = await client.patch(
-            "/api/v1/skills/admin/topics/web-security",
-            json={"active": False},
-        )
+        search = await client.get("/api/v1/search/suggest?q=web&scope=skill_topics")
 
-    assert [item["id"] for item in listed.json()] == ["web-security"]
-    assert listed.json()[0]["available"] is False
-    assert "Add 4 more active easy question(s)" in listed.json()[0]["unavailable_reason"]
-    assert deactivated.status_code == 403
+    assert listed.json() == []
+    assert search.json()["items"] == []
     app.dependency_overrides[get_current_user] = lambda: admin
+
+
+@pytest.mark.anyio
+async def test_student_assessment_topics_returns_only_ready_active_question_pools(skill_admin_db) -> None:
+    student = _user(1, UserRole.STUDENT)
+    now = datetime.now(timezone.utc)
+    async with skill_admin_db() as db:
+        db.add(student)
+        db.add_all(
+            [
+                SkillQuestion(
+                    topic="ready-topic",
+                    subtopic="general",
+                    prompt=f"Ready {difficulty} {index}",
+                    options=["A", "B"],
+                    correct_index=0,
+                    explanation="Explanation",
+                    difficulty=difficulty,
+                    active=True,
+                )
+                for difficulty, count in (("EASY", 4), ("MEDIUM", 4), ("HARD", 2))
+                for index in range(count)
+            ]
+            + [
+                SkillQuestion(
+                    topic="ready-topic",
+                    subtopic="general",
+                    prompt=f"Inactive {difficulty}",
+                    options=["A", "B"],
+                    correct_index=0,
+                    explanation="Explanation",
+                    difficulty=difficulty,
+                    active=False,
+                )
+                for difficulty in ("EASY", "MEDIUM", "HARD")
+            ]
+            + [
+                SkillQuestion(
+                    topic="incomplete-topic",
+                    subtopic="general",
+                    prompt=f"Incomplete {difficulty} {index}",
+                    options=["A", "B"],
+                    correct_index=0,
+                    explanation="Explanation",
+                    difficulty=difficulty,
+                    active=True,
+                )
+                for difficulty, count in (("EASY", 4), ("MEDIUM", 4), ("HARD", 1))
+                for index in range(count)
+            ]
+            + [
+                SkillAttempt(
+                    student_id=student.id,
+                    topic="ready-topic",
+                    status="COMPLETED",
+                    question_ids=[],
+                    question_snapshots=[],
+                    option_orders=[],
+                    score=75,
+                    passed=False,
+                    started_at=now - timedelta(days=2),
+                    expires_at=now - timedelta(days=2) + timedelta(minutes=15),
+                    submitted_at=now - timedelta(days=2) + timedelta(minutes=10),
+                ),
+                SkillAttempt(
+                    student_id=student.id,
+                    topic="ready-topic",
+                    status="COMPLETED",
+                    question_ids=[],
+                    question_snapshots=[],
+                    option_orders=[],
+                    score=60,
+                    passed=False,
+                    started_at=now - timedelta(days=1),
+                    expires_at=now - timedelta(days=1) + timedelta(minutes=15),
+                    submitted_at=now - timedelta(days=1) + timedelta(minutes=10),
+                ),
+            ]
+        )
+        await db.commit()
+    app.dependency_overrides[get_current_user] = lambda: student
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/skills/topics")
+
+    assert response.status_code == 200
+    assert [topic["id"] for topic in response.json()] == ["ready-topic"]
+    assert response.json()[0]["question_counts"] == {"easy": 4, "medium": 4, "hard": 2}
+    assert response.json()[0]["attempt_status"] == "COMPLETED"
+    assert response.json()[0]["best_score"] == 75
+
+
+@pytest.mark.anyio
+async def test_student_assessment_topics_skips_and_logs_a_bad_topic(
+    skill_admin_db,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import app.api.v1.skills as skills
+
+    student = _user(1, UserRole.STUDENT)
+    async with skill_admin_db() as db:
+        db.add(student)
+        db.add_all(
+            SkillQuestion(
+                topic=topic,
+                subtopic="general",
+                prompt=f"{topic} {difficulty} {index}",
+                options=["A", "B"],
+                correct_index=0,
+                explanation="Explanation",
+                difficulty=difficulty,
+                active=True,
+            )
+            for topic in ("ready-topic", "broken-topic")
+            for difficulty, count in (("EASY", 4), ("MEDIUM", 4), ("HARD", 2))
+            for index in range(count)
+        )
+        await db.commit()
+
+    class BrokenTopicDefaults(dict):
+        def get(self, key, default=None):
+            if key == "broken-topic":
+                raise ValueError("invalid topic metadata")
+            return super().get(key, default)
+
+    monkeypatch.setattr(skills, "TOPIC_INFO", BrokenTopicDefaults(skills.TOPIC_INFO))
+    app.dependency_overrides[get_current_user] = lambda: student
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/skills/topics")
+
+    assert response.status_code == 200
+    assert [topic["id"] for topic in response.json()] == ["ready-topic"]
+    assert "Skipping invalid skill assessment topic 'broken-topic'." in caplog.text
 
 
 @pytest.mark.anyio
@@ -229,7 +380,7 @@ async def test_topic_archive_preserves_history_and_delete_requires_no_history(sk
         db.add_all([
             admin,
             student,
-            SkillTopic(slug="legacy", name="Legacy Topic", description="", icon="✦", badge_title="Legacy", active=False),
+            SkillTopic(slug="legacy", name="Legacy Topic", description="", icon="✦", badge_title="Legacy", active=True),
             SkillTopic(slug="empty", name="Empty Topic", description="", icon="✦", badge_title="Empty", active=False),
         ])
         await db.flush()
@@ -237,9 +388,18 @@ async def test_topic_archive_preserves_history_and_delete_requires_no_history(sk
             student_id=student.id,
             topic="legacy",
             status="COMPLETED",
-            question_ids=[],
-            question_snapshots=[],
-            option_orders=[],
+            question_ids=list(range(10)),
+            question_snapshots=[{
+                "prompt": f"Question {index}",
+                "options": ["A", "B"],
+                "correct_index": 0,
+                "correct_answers": [0],
+                "explanation": "A is correct.",
+                "difficulty": "MEDIUM",
+                "subtopic": "general",
+                "question_type": "SINGLE",
+            } for index in range(10)],
+            option_orders=[[0, 1] for _ in range(10)],
             score=90,
             weighted_percentage=90,
             passed=True,
@@ -251,9 +411,18 @@ async def test_topic_archive_preserves_history_and_delete_requires_no_history(sk
             student_id=student.id,
             topic="legacy",
             status="IN_PROGRESS",
-            question_ids=[],
-            question_snapshots=[],
-            option_orders=[],
+            question_ids=list(range(10)),
+            question_snapshots=[{
+                "prompt": f"Question {index}",
+                "options": ["A", "B"],
+                "correct_index": 0,
+                "correct_answers": [0],
+                "explanation": "A is correct.",
+                "difficulty": "MEDIUM",
+                "subtopic": "general",
+                "question_type": "SINGLE",
+            } for index in range(10)],
+            option_orders=[[0, 1] for _ in range(10)],
             started_at=now,
             expires_at=now + timedelta(minutes=10),
         )
@@ -273,24 +442,19 @@ async def test_topic_archive_preserves_history_and_delete_requires_no_history(sk
     app.dependency_overrides[get_current_user] = lambda: admin
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        blocked = await client.post("/api/v1/skills/admin/skill-topics/legacy/archive")
-        async with skill_admin_db() as db:
-            active_attempt = await db.get(SkillAttempt, in_progress.id)
-            assert active_attempt is not None
-            active_attempt.status = "EXPIRED"
-            active_attempt.submitted_at = now
-            await db.commit()
         archived = await client.post("/api/v1/skills/admin/skill-topics/legacy/archive")
+        archived_again = await client.post("/api/v1/skills/admin/skill-topics/legacy/archive")
         archived_list = await client.get("/api/v1/skills/admin/skill-topics?include_archived=true")
         active_list = await client.get("/api/v1/skills/admin/skill-topics")
         deleted_history = await client.delete("/api/v1/skills/admin/skill-topics/legacy")
         deleted_empty = await client.delete("/api/v1/skills/admin/skill-topics/empty")
 
-    assert blocked.status_code == 409
-    assert blocked.json()["detail"]["in_progress_attempts"] == 1
     assert archived.status_code == 200
+    assert archived.json()["archived"] is True
+    assert archived_again.status_code == 200
+    assert archived_again.json()["archived"] is True
     assert archived.json()["total_attempts"] == 2
-    assert archived.json()["expired_attempts"] == 1
+    assert archived.json()["expired_attempts"] == 0
     assert archived.json()["active_badges"] == 1
     assert archived.json()["expiring_badges"] == 1
     assert "legacy" in {item["topic"] for item in archived_list.json()}
@@ -298,17 +462,187 @@ async def test_topic_archive_preserves_history_and_delete_requires_no_history(sk
     assert deleted_history.status_code == 409
     assert deleted_history.json()["detail"]["total_badges"] == 1
     assert deleted_empty.status_code == 200
+    async with skill_admin_db() as db:
+        archive_events = list(await db.scalars(
+            select(AuditLog).where(AuditLog.action == "skill_topic_archived")
+        ))
+    assert len(archive_events) == 1
+    assert archive_events[0].target_type == "skill_topic"
+    assert archive_events[0].metadata_["topic_key"] == "legacy"
+    assert archive_events[0].metadata_["topic_name"] == "Legacy Topic"
+    async with skill_admin_db() as db:
+        legacy_topic = await db.get(SkillTopic, "legacy")
+        assert legacy_topic is not None
+        assert legacy_topic.active is True
+        assert legacy_topic.archived_at is not None
 
     app.dependency_overrides[get_current_user] = lambda: student
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         student_topics = await client.get("/api/v1/skills/topics")
+        resumed = await client.post("/api/v1/skills/assessments/start", json={"topic": "legacy"})
+        submitted = await client.post(
+            f"/api/v1/skills/assessments/{in_progress.id}/submit",
+            json={"answers": [0] * 10},
+        )
         start_archived = await client.post("/api/v1/skills/assessments/start", json={"topic": "legacy"})
+        archived_search = await client.get("/api/v1/search/suggest?q=legacy&scope=skill_topics")
     assert all(item["id"] != "legacy" for item in student_topics.json())
+    assert resumed.status_code == 200
+    assert resumed.json()["resumed"] is True
+    assert submitted.status_code == 200
+    assert submitted.json()["attempt_id"] == in_progress.id
+    assert submitted.json()["score"] == 100
     assert start_archived.status_code == 404
+    assert archived_search.json()["items"] == []
 
 
 @pytest.mark.anyio
-async def test_inactive_topic_cannot_start_assessment(skill_admin_db) -> None:
+async def test_skill_topic_history_and_delete_guardrails(skill_admin_db) -> None:
+    admin = _user(1, UserRole.ADMIN)
+    async with skill_admin_db() as db:
+        db.add_all([
+            admin,
+            SkillTopic(slug="topic-a", name="Topic A", description="", icon="✦", badge_title="Topic A", active=False),
+        ])
+        await db.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: admin
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.post("/api/v1/skills/admin/skill-topics", json={
+            "topic": "topic-b",
+            "name": "Topic B",
+            "description": "Topic B",
+            "icon": "✦",
+        })
+        archive = await client.post("/api/v1/skills/admin/skill-topics/topic-b/archive")
+        archive_again = await client.post("/api/v1/skills/admin/skill-topics/topic-b/archive")
+        restore = await client.post("/api/v1/skills/admin/skill-topics/topic-b/restore")
+        restore_again = await client.post("/api/v1/skills/admin/skill-topics/topic-b/restore")
+        history = await client.get("/api/v1/skills/admin/skill-topics/topic-b/history")
+        delete_unarchived = await client.delete("/api/v1/skills/admin/skill-topics/topic-a")
+
+    assert created.status_code == 201
+    assert archive.status_code == 200
+    assert archive_again.status_code == 200
+    assert restore.status_code == 200
+    assert restore_again.status_code == 200
+    assert history.status_code == 200
+    assert any(event["label"] == "Created" for event in history.json()["events"])
+    assert any(event["label"] == "Archived" for event in history.json()["events"])
+    assert delete_unarchived.status_code == 200
+    assert delete_unarchived.json()["deleted"] is True
+
+
+@pytest.mark.anyio
+async def test_question_key_review_api_audit_and_role_access(skill_admin_db) -> None:
+    admin = _user(1, UserRole.ADMIN)
+    student = _user(2, UserRole.STUDENT)
+    now = datetime.now(timezone.utc)
+    async with skill_admin_db() as db:
+        db.add_all([
+            admin,
+            student,
+            SkillTopic(slug="python", name="Python", description="", icon="✦", badge_title="Python"),
+            SkillQuestion(
+                topic="python",
+                subtopic="syntax",
+                prompt="Legacy answer key",
+                options=["first", "second"],
+                correct_index=0,
+                explanation="Explanation",
+                source="Admin curated question",
+            ),
+            SkillQuestion(
+                topic="python",
+                subtopic="syntax",
+                prompt="Injected invalid key",
+                options=["one", "two"],
+                correct_index=7,
+                explanation="Explanation",
+                source="Admin curated question",
+            ),
+            SkillAttempt(
+                student_id=2,
+                topic="python",
+                status="SUBMITTED",
+                question_ids=[2],
+                question_snapshots=[{
+                    "prompt": "Injected invalid key",
+                    "options": ["one", "two"],
+                    "correct_index": 0,
+                    "correct_answers": [0],
+                    "explanation": "Explanation",
+                    "question_type": "SINGLE",
+                }],
+                option_orders=[[0, 1]],
+                answers=[0],
+                score=100,
+                weighted_percentage=100,
+                passed=True,
+                started_at=now - timedelta(minutes=5),
+                expires_at=now + timedelta(minutes=10),
+                submitted_at=now,
+            ),
+        ])
+        await db.commit()
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.post("/api/v1/skills/admin/questions", json={
+            "topic": "python",
+            "subtopic": "syntax",
+            "prompt": "One-based API answer",
+            "options": ["first", "second"],
+            "correct_option_number": 2,
+            "explanation": "The second option is right.",
+            "source": "Admin curated question",
+        })
+        ambiguous = await client.post("/api/v1/skills/admin/questions", json={
+            "topic": "python",
+            "subtopic": "syntax",
+            "prompt": "Ambiguous API answer",
+            "options": ["first", "second"],
+            "correct_index": 0,
+            "correct_option_number": 1,
+            "explanation": "Conflicting field formats.",
+        })
+        pending = await client.get("/api/v1/skills/admin/questions/key-review")
+        audit = await client.get("/api/v1/skills/admin/questions/key-audit")
+        fixed = await client.post(
+            "/api/v1/skills/admin/questions/2/key-review",
+            json={"correct_option_number": 2},
+        )
+        reviewed = await client.post("/api/v1/skills/admin/questions/1/key-review", json={})
+
+    assert created.status_code == 201
+    assert created.json()["correct_index"] == 1
+    assert created.json()["correct_option_number"] == 2
+    assert created.json()["key_reviewed_at"] is not None
+    assert ambiguous.status_code == 422
+    assert pending.status_code == 200
+    assert len(pending.json()) == 2
+    assert pending.json()[0]["correct_option_number"] == 1
+    assert fixed.status_code == 200
+    assert fixed.json()["correct_index"] == 1
+    assert fixed.json()["correct_option_number"] == 2
+    assert fixed.json()["key_reviewed_at"] is not None
+    assert reviewed.status_code == 200
+    async with skill_admin_db() as db:
+        old_attempt = await db.get(SkillAttempt, 1)
+        assert old_attempt is not None
+        assert old_attempt.question_snapshots[0]["correct_index"] == 0
+        assert _question_results(old_attempt)[0]["correct_answer"] == "one"
+    assert "stored_key_number" in audit.text
+    assert "key outside option range" in audit.text
+
+    app.dependency_overrides[get_current_user] = lambda: student
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        forbidden = await client.get("/api/v1/skills/admin/questions/key-review")
+    assert forbidden.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_inactive_unready_topic_is_hidden_and_cannot_start(skill_admin_db) -> None:
     student = _user(2, UserRole.STUDENT)
     async with skill_admin_db() as db:
         db.add_all(
@@ -331,7 +665,80 @@ async def test_inactive_topic_cannot_start_assessment(skill_admin_db) -> None:
         response = await client.post("/api/v1/skills/assessments/start", json={"topic": "python"})
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "This assessment topic is inactive"
+    assert response.json()["detail"] == "This assessment topic is not ready yet"
+
+
+@pytest.mark.anyio
+async def test_topic_template_round_trips_and_escapes_spreadsheet_formulas(skill_admin_db) -> None:
+    admin = _user(1, UserRole.ADMIN)
+    student = _user(2, UserRole.STUDENT)
+    async with skill_admin_db() as db:
+        db.add_all([
+            admin,
+            student,
+            SkillTopic(slug="source-topic", name="Source", description="", icon="✦", badge_title="Source"),
+            SkillTopic(slug="target-topic", name="Target", description="", icon="✦", badge_title="Target"),
+            SkillTopic(slug="empty-topic", name="Empty", description="", icon="✦", badge_title="Empty"),
+            SkillQuestion(
+                topic="source-topic",
+                subtopic="general",
+                prompt="=SUM(1,1)",
+                options=["=2+2", "four"],
+                correct_index=1,
+                explanation="Four is correct.",
+                difficulty="EASY",
+                question_type="SINGLE",
+                source="@source",
+            ),
+        ])
+        await db.commit()
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        template = await client.get(
+            "/api/v1/skills/admin/questions/import/template?topic_id=source-topic"
+        )
+        empty_template = await client.get(
+            "/api/v1/skills/admin/questions/import/template?topic_id=empty-topic"
+        )
+        imported = await client.post(
+            "/api/v1/skills/admin/questions/import?topic_id=target-topic",
+            files={"file": ("template.csv", template.content, "text/csv")},
+        )
+
+    assert template.status_code == 200
+    assert "skill-source-topic-template-" in template.headers["content-disposition"]
+    template_text = template.content.decode("utf-8")
+    rows = list(csv.DictReader(io.StringIO(template_text)))
+    assert "correct_option" in rows[0]
+    assert rows[0]["prompt"] == "'=SUM(1,1)"
+    assert rows[0]["source"] == "'@source"
+    assert rows[0]["correct_option"] == "2"
+    assert empty_template.status_code == 200
+    empty_rows = list(csv.DictReader(io.StringIO(empty_template.content.decode("utf-8"))))
+    assert len(empty_rows) == 1
+    assert "EXAMPLE" in empty_rows[0]["prompt"]
+    assert imported.status_code == 200
+    assert imported.json()["errors"] == []
+    assert imported.json()["imported"] == 1
+    async with skill_admin_db() as db:
+        round_trip = await db.scalar(
+            select(SkillQuestion).where(
+                SkillQuestion.topic == "target-topic",
+                SkillQuestion.prompt == "=SUM(1,1)",
+            )
+        )
+        assert round_trip is not None
+        assert round_trip.options == ["=2+2", "four"]
+        assert round_trip.correct_index == 1
+        assert round_trip.source == "@source"
+
+    app.dependency_overrides[get_current_user] = lambda: student
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        forbidden = await client.get(
+            "/api/v1/skills/admin/questions/import/template?topic_id=source-topic"
+        )
+    assert forbidden.status_code == 403
 
 
 @pytest.mark.anyio

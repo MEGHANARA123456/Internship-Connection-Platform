@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { api, downloadAuthenticatedFile } from '../api/client'
 import { useAuthStore } from '../store/auth'
 import { Input } from '../components/ui/Input'
+import { SearchBox } from '../components/ui/SearchBox'
 import { Textarea } from '../components/ui/Textarea'
 import { Button } from '../components/ui/Button'
 import { DropdownSelect } from '../components/ui/DropdownSelect'
@@ -31,6 +32,7 @@ import { GmailActionLink } from '../components/mail/GmailActionLink'
 import { routes } from '../lib/routes'
 import { confirmAction, showToast } from '../lib/feedback'
 import { parseGithubHandle, parseLeetCodeHandle } from '../lib/handles'
+import { stripMarkdownPreview } from '../lib/search'
 import {
   Search,
   MapPin,
@@ -546,17 +548,14 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
       {/* Filter Toolbar */}
       {activeTab === 'applied' ? (
         <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <label className="relative block w-full sm:max-w-sm">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-            <input
-              type="search"
-              aria-label="Search applied internships"
-              placeholder="Search by title or company..."
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              className="h-10 w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-            />
-          </label>
+          <SearchBox
+            value={searchTerm}
+            onChange={setSearchTerm}
+            scope="applications"
+            ariaLabel="Search applied internships"
+            placeholder="Search by title or company..."
+            className="text-xs sm:max-w-sm"
+          />
           <p className="text-xs text-slate-500 dark:text-slate-400">
             Found <strong className="text-slate-900 dark:text-white">{total}</strong> {total === 1 ? 'opportunity' : 'opportunities'}
           </p>
@@ -565,16 +564,14 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
       <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200/90 dark:border-slate-800 shadow-2xs mb-6 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
 
-          <div className="relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-            <input
-              type="text"
-              placeholder="Search by title or company..."
-              value={searchTerm}
-              onChange={(e) => { setSearchTerm(e.target.value); setPage(1) }}
-              className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-            />
-          </div>
+          <SearchBox
+            value={searchTerm}
+            onChange={(value) => { setSearchTerm(value); setPage(1) }}
+            scope={activeTab === 'saved' ? 'saved' : 'internships'}
+            ariaLabel={`Search ${activeTab === 'saved' ? 'saved' : 'available'} internships`}
+            placeholder="Search by title or company..."
+            className="text-xs"
+          />
 
           <div className="relative">
             <MapPin className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
@@ -783,7 +780,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                   </div>
 
                   <p className="text-xs text-slate-500 line-clamp-2 max-w-3xl leading-relaxed">
-                    {job.description}
+                    {stripMarkdownPreview(job.description || '')}
                   </p>
                   {job.match_score != null && Array.isArray(job.skills) && (
                     <div className="flex flex-wrap gap-2">
@@ -1483,9 +1480,12 @@ export function ApplicationsPage() {
                       <h3 className="text-base font-bold text-slate-900 dark:text-white">
                         {app.internship_title || `Internship #${app.internship_id}`}
                       </h3>
-                      <Badge status={app.status}>{app.status === 'ACCEPTED' ? 'Offer Accepted' : app.status}</Badge>
+                      <Badge status={app.display_status || app.status}>{app.display_status === 'EXPIRED' ? 'Expired' : app.status === 'ACCEPTED' ? 'Offer Accepted' : app.status.replaceAll('_', ' ')}</Badge>
                       {app.internship_status === 'CLOSED' && <Badge variant="slate">ROLE CLOSED</Badge>}
                     </div>
+                    {app.display_status === 'EXPIRED' && (
+                      <p className="text-xs text-amber-700 dark:text-amber-300">Interview date has passed. Waiting for the recruiter's decision.</p>
+                    )}
                     {app.company_name && (
                       <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
                         <Building2 className="w-3.5 h-3.5 text-indigo-500" />
@@ -1676,8 +1676,11 @@ export function ApplicationTimelinePage() {
                   Applied {summary.applied_at || summary.created_at ? new Date(summary.applied_at || summary.created_at).toLocaleDateString() : 'date unavailable'}
                 </p>
               </div>
-              <Badge status={status}>{status.replaceAll('_', ' ')}</Badge>
+              <Badge status={summary.display_status || status}>{summary.display_status === 'EXPIRED' ? 'Expired' : status.replaceAll('_', ' ')}</Badge>
             </div>
+            {summary.display_status === 'EXPIRED' && (
+              <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Interview date has passed. Waiting for the recruiter's decision.</p>
+            )}
             <div className="mt-5 flex flex-wrap gap-2">
               <Link to={routes.messages()}><Button variant="outline" size="sm" leftIcon={<MessageSquare className="h-4 w-4" />}>Message Recruiter</Button></Link>
               <Button variant="danger" size="sm" disabled={!canWithdraw || withdrawing} onClick={() => { setWithdrawError(null); setWithdrawTarget(summary) }} title={!canWithdraw ? `Withdrawal is unavailable for ${status.toLowerCase().replaceAll('_', ' ')} applications` : 'Withdraw this application'}>
@@ -1735,11 +1738,13 @@ export function ApplicationTimelinePage() {
                           <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
                             {[step.interview.date, step.interview.time, step.interview.type].filter(Boolean).join(' · ')}
                           </p>
-                          {step.interview.link && <a href={step.interview.link} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400">Meeting link</a>}
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <Link to={routes.interviews({ tab: 'upcoming', highlight: step.interview.id })}><Button size="sm">Launch / View interview</Button></Link>
-                            <Link to={routes.interviews({ tab: 'upcoming', highlight: step.interview.id })}><Button size="sm" variant="outline">Sync .ics</Button></Link>
-                          </div>
+                          {step.interview.interview_state !== 'completed' && step.interview.link && <a href={step.interview.link} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400">Meeting link</a>}
+                          {step.interview.interview_state !== 'completed' && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <Link to={routes.interviews({ tab: 'upcoming', highlight: step.interview.id })}><Button size="sm">Launch / View interview</Button></Link>
+                              <Link to={routes.interviews({ tab: 'upcoming', highlight: step.interview.id })}><Button size="sm" variant="outline">Sync .ics</Button></Link>
+                            </div>
+                          )}
                         </div>
                       )}
                       {eventEmails.map((mail: any) => (

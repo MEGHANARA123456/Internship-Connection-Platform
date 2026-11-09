@@ -7,7 +7,7 @@ from app.chatbot.orchestrator import classify_intent
 from app.chatbot.guardrails import detect_cross_account_request
 from app.chatbot.tools.read_only import ToolResult
 from app.chatbot.tools.read_only import execute_read_tool
-from app.models import User, UserRole
+from app.models import CompanyProfile, Internship, User, UserRole
 
 
 @pytest.mark.parametrize(
@@ -15,12 +15,35 @@ from app.models import User, UserRole
     [
         ("How do I withdraw an application?", "student", "rag_help", None),
         ("What is my application status?", "student", "live_data", "student_applications"),
+        ("Show my application status.", "student", "live_data", "student_applications"),
+        ("Where can I see my applications?", "student", "rag_help", None),
+        ("How many assessments have I attended?", "student", "live_data", "student_skill_assessments"),
+        ("How do I manage assessment questions?", "admin", "rag_help", None),
+        ("How do I archive a skill topic?", "admin", "rag_help", None),
+        ("How do I manage assessment questions?", "student", "out_of_scope", None),
         ("What is my application status, and what does pending mean?", "student", "both", "student_applications"),
         ("Who applied to my internship?", "company", "live_data", "company_applicants"),
         ("How do I shortlist a candidate?", "company", "rag_help", None),
         ("Explain recent audit events.", "admin", "live_data", "admin_audit_events"),
         ("How many postings are pending approval?", "admin", "live_data", "admin_pending_approvals"),
+        ("How do I review pending postings?", "admin", "rag_help", None),
+        ("How do I review company verification requests?", "admin", "rag_help", None),
+        ("Show company verification counts.", "admin", "live_data", "admin_verification_counts"),
+        ("how many topics in skill assessment", "admin", "live_data", "admin_skill_assessment_stats"),
+        ("How do I import assessment questions?", "admin", "rag_help", None),
+        ("How many applications i have", "student", "live_data", "student_applications"),
+        ("shortlisted count of applications", "student", "live_data", "student_applications"),
+        ("how many applications are applied", "student", "live_data", "student_applications"),
+        ("When can I retake a skill assessment?", "student", "both", "student_skill_retake"),
+        ("what are my skills and where i have to improve", "student", "live_data", "student_skills_improvement"),
+        ("Find internships matching my profile.", "student", "live_data", "student_recommended_internships"),
+        ("how many applicants do I have", "company", "live_data", "company_applicants"),
+        ("shortlisted candidates", "company", "live_data", "company_shortlisted"),
+        ("my active postings", "company", "live_data", "company_internships"),
+        ("How do I schedule an interview?", "company", "rag_help", None),
         ("How do I verify a company?", "admin", "rag_help", None),
+        ("How many applicants do I have?", "company", "live_data", "company_applicants"),
+        ("How many interviews are scheduled for my company?", "company", "live_data", "company_interviews"),
         ("What's the weather?", "student", "out_of_scope", None),
     ],
 )
@@ -41,6 +64,141 @@ def test_cross_account_request_is_refused_before_tool_selection() -> None:
         assert intent.refusal_reason == "cross_account_request"
         assert intent.tool_name is None
         assert detect_cross_account_request(message)
+
+
+@pytest.mark.anyio
+async def test_live_admin_and_public_counts_use_dashboard_rules() -> None:
+    from datetime import date, timedelta
+
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.models.base import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with sessions() as db:
+        verified_company = User(
+            email="verified@example.test",
+            password_hash="unused",
+            role=UserRole.COMPANY,
+        )
+        pending_company = User(
+            email="pending@example.test",
+            password_hash="unused",
+            role=UserRole.COMPANY,
+        )
+        active_student = User(
+            email="active-student@example.test",
+            password_hash="unused",
+            role=UserRole.STUDENT,
+        )
+        suspended_student = User(
+            email="suspended-student@example.test",
+            password_hash="unused",
+            role=UserRole.STUDENT,
+            suspended_at=None,
+        )
+        suspended_student.is_active = False
+        db.add_all((verified_company, pending_company, active_student, suspended_student))
+        await db.flush()
+        db.add_all((
+            CompanyProfile(
+                user_id=verified_company.id,
+                company_name="Verified Co",
+                industry="Technology",
+                verification_status="VERIFIED",
+            ),
+            CompanyProfile(
+                user_id=pending_company.id,
+                company_name="Pending Co",
+                industry="Technology",
+                verification_status="PENDING",
+            ),
+            Internship(
+                company_id=verified_company.id,
+                title="Current verified posting",
+                description="Description",
+                location="Remote",
+                industry="Technology",
+                duration_months=3,
+                work_mode="REMOTE",
+                deadline=date.today() + timedelta(days=3),
+                status="PUBLISHED",
+            ),
+            Internship(
+                company_id=pending_company.id,
+                title="Current pending-company posting",
+                description="Description",
+                location="Remote",
+                industry="Technology",
+                duration_months=3,
+                work_mode="REMOTE",
+                deadline=date.today() + timedelta(days=3),
+                status="PUBLISHED",
+            ),
+            Internship(
+                company_id=verified_company.id,
+                title="Expired posting",
+                description="Description",
+                location="Remote",
+                industry="Technology",
+                duration_months=3,
+                work_mode="REMOTE",
+                deadline=date.today() - timedelta(days=1),
+                status="PUBLISHED",
+            ),
+        ))
+        await db.commit()
+
+        admin = SimpleNamespace(role=UserRole.ADMIN)
+        companies = await execute_read_tool("admin_company_counts", {}, admin, db)
+        students = await execute_read_tool("admin_student_counts", {}, admin, db)
+        postings = await execute_read_tool("admin_posting_counts", {}, admin, db)
+        public = await execute_read_tool("public_open_internships_count", {}, None, db)
+        student_public = await execute_read_tool(
+            "public_open_internships_count",
+            {},
+            SimpleNamespace(role=UserRole.STUDENT),
+            db,
+        )
+        registrations = await execute_read_tool("admin_recent_registrations", {}, admin, db)
+        deletion_status = await execute_read_tool(
+            "admin_recent_posting_deletions", {}, admin, db
+        )
+        dashboard_live_postings = int(await db.scalar(
+            select(func.count(Internship.id)).where(
+                Internship.status == "PUBLISHED",
+                Internship.deadline >= date.today(),
+            )
+        ) or 0)
+
+        assert "2 registered company accounts: 1 verified and 1 pending" in companies.answer
+        assert "2 registered student accounts; 1 are currently active" in students.answer
+        assert "3 internship postings in total" in postings.answer
+        assert f"{dashboard_live_postings} published and not expired" in postings.answer
+        assert f"{dashboard_live_postings} current internships" in public.answer
+        assert student_public.answer == public.answer
+        assert dashboard_live_postings == 2
+        assert "1 verified companies" in public.answer
+        assert "v***@example.test" in registrations.answer
+        assert "active-student@example.test" not in registrations.answer
+        assert "suspended-student@example.test" not in registrations.answer
+        assert "Draft internship deletions are not recorded" in deletion_status.answer
+        assert "/admin/audit-logs" == deletion_status.route
+        with pytest.raises(HTTPException) as error:
+            await execute_read_tool(
+                "admin_company_counts",
+                {},
+                SimpleNamespace(role=UserRole.STUDENT),
+                db,
+            )
+        assert error.value.status_code == 403
+
+    await engine.dispose()
 
 
 @pytest.mark.parametrize(
@@ -272,6 +430,9 @@ async def test_live_tool_executes_read_only_query_without_writing() -> None:
     class ReadOnlyDb:
         async def execute(self, *_args, **_kwargs):
             return EmptyRows()
+
+        async def scalar(self, *_args, **_kwargs):
+            return 0
 
         def add(self, *_args, **_kwargs):
             raise AssertionError("Chatbot tools must not write database records.")

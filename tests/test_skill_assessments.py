@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -13,9 +14,10 @@ from app.core.security import create_token
 from app.main import app
 from app.models import SkillAttempt, SkillBadge, SkillQuestion, SkillTopic, User, UserRole
 from app.models.base import Base
-from app.api.v1.skills import _badge_level
+from app.api.v1.skills import SkillQuestionCreate, SkillQuestionUpdate, _badge_level
 from app.services.question_import import parse_question_import_file
 from app.services.skill_badges import apply_verified_badge_boost
+from app.services.question_key_audit import question_key_audit_rows
 
 
 async def _setup_skill_app(sqlite_path: Path | None = None):
@@ -61,6 +63,96 @@ async def _setup_skill_app(sqlite_path: Path | None = None):
 def _headers(user: User) -> dict[str, str]:
     token = create_token(str(user.id), user.role.value, "access", timedelta(minutes=30))
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_admin_option_number_conversion_preserves_zero_based_storage() -> None:
+    single = SkillQuestionCreate(
+        topic="python", prompt="Single", options=["A", "B"], correct_option_number=1,
+        explanation="Explanation",
+    )
+    true_false = SkillQuestionCreate(
+        topic="python", prompt="True false", options=["True", "False"],
+        correct_option_number=2, question_type="TRUE_FALSE", explanation="Explanation",
+    )
+    multi = SkillQuestionCreate(
+        topic="python", prompt="Multi", options=["A", "B", "C"],
+        correct_option_numbers=[3, 1], question_type="MULTI", explanation="Explanation",
+    )
+
+    assert single.correct_index == 0
+    assert single.model_dump()["correct_index"] == 0
+    assert true_false.correct_index == 1
+    assert multi.correct_answers == [0, 2]
+    updated_single = SkillQuestionUpdate(correct_option_number=2)
+    updated_multi = SkillQuestionUpdate(correct_option_numbers=[3, 1])
+    assert updated_single.model_dump(exclude_unset=True, exclude={"correct_option_number"})["correct_index"] == 1
+    assert updated_multi.model_dump(exclude_unset=True, exclude={"correct_option_numbers"})["correct_answers"] == [0, 2]
+    with pytest.raises(ValidationError):
+        SkillQuestionCreate(
+            topic="python", prompt="Ambiguous", options=["A", "B"],
+            correct_index=0, correct_option_number=1, explanation="Explanation",
+        )
+    with pytest.raises(ValidationError):
+        SkillQuestionUpdate(correct_answers=[0, 1], correct_option_numbers=[1, 2])
+
+
+def test_question_key_audit_reports_out_of_range_keys() -> None:
+    question = SkillQuestion(
+        id=1,
+        topic="python",
+        subtopic="syntax",
+        prompt="Bad key",
+        options=["A", "B"],
+        correct_index=4,
+        explanation="Explanation",
+        question_type="SINGLE",
+        source="test",
+    )
+
+    row = question_key_audit_rows([question])[0]
+    assert row["stored_key_number"] == "5"
+    assert row["numbered_options"] == "1. A | 2. B"
+    assert row["audit_issues"] == "key outside option range"
+
+
+@pytest.mark.anyio
+async def test_question_import_accepts_new_and_legacy_keys_and_rejects_conflicts() -> None:
+    engine, sessions, _, admin = await _setup_skill_app()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            new_key_csv = b'topic,prompt,options,correct_option,explanation,difficulty,question_type\npython,New key,A|B|C,2,Explanation,medium,SINGLE\n'
+            new_key = await client.post(
+                "/api/v1/skills/admin/questions/import?partial=false",
+                headers=_headers(admin),
+                files={"file": ("new.csv", new_key_csv, "text/csv")},
+            )
+            legacy_csv = b'topic,prompt,options,correct_index,explanation,difficulty,question_type\npython,Legacy key,A|B|C,0,Explanation,medium,SINGLE\n'
+            legacy = await client.post(
+                "/api/v1/skills/admin/questions/import?partial=false",
+                headers=_headers(admin),
+                files={"file": ("legacy.csv", legacy_csv, "text/csv")},
+            )
+            conflict_csv = b'topic,prompt,options,correct_index,correct_option,explanation,difficulty,question_type\npython,Conflicting key,A|B|C,0,2,Explanation,medium,SINGLE\n'
+            conflict = await client.post(
+                "/api/v1/skills/admin/questions/import?partial=true",
+                headers=_headers(admin),
+                files={"file": ("conflict.csv", conflict_csv, "text/csv")},
+            )
+        assert new_key.status_code == 200
+        assert new_key.json()["imported"] == 1
+        assert legacy.status_code == 200
+        assert legacy.json()["imported"] == 1
+        assert conflict.status_code == 422
+
+        async with sessions() as session:
+            imported = list(await session.scalars(
+                select(SkillQuestion).where(SkillQuestion.prompt.in_(["New key", "Legacy key"]))
+            ))
+        assert {question.prompt: question.correct_index for question in imported} == {"New key": 1, "Legacy key": 0}
+        assert all(question.key_reviewed_at is not None for question in imported)
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
 
 
 @pytest.mark.anyio

@@ -10,13 +10,14 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
 from app.models import User, UserRole
 from .chatbot_config import load_config, provider_configured
 from .guardrails import is_role_capability_question
 from ..schemas.chatbot import ChatAskRequest, ChatAskResponse, ChatFeedbackRequest, ChatLink, ChatSource
-from .orchestrator import classify_intent
+from .orchestrator import Intent, classify_intent_with_examples
 from .rag.ingest import ingest_knowledge
 from .scope import ScopeDecision, decide_scope
 from .tools.read_only import execute_read_tool
@@ -69,7 +70,19 @@ async def ask(
     """Apply availability, role, rate, scope, intent, and live-tool checks before returning an answer."""
     config = _service.config
     if not config.enabled:
-        raise HTTPException(status_code=404, detail="Not found")
+        return ChatAskResponse(
+            answer="The assistant isn't available right now.",
+            links=[],
+            sources=[],
+            source_type="none",
+            suggested_followups=[
+                "How do I search internships?",
+                "How do I track an application?",
+                "How do I manage a company posting?",
+            ],
+            category="disabled",
+            refused=True,
+        )
     role_value = getattr(getattr(user, "role", None), "value", "guest")
     role = str(role_value).lower()
     if role not in {"student", "company", "admin"}:
@@ -92,7 +105,22 @@ async def ask(
     live_answer: str | None = None
     live_route: str | None = None
     live_links: tuple[tuple[str, str], ...] = ()
-    intent = classify_intent(body.message, role)
+    intent = (
+        Intent("out_of_scope", refusal_reason=preflight.refusal_reason)
+        if preflight.refused and preflight.refusal_reason != "no_product_intent_or_knowledge_match"
+        else await classify_intent_with_examples(body.message, role, config.embedding_model)
+    )
+    if intent.needs_clarification:
+        return ChatAskResponse(
+            answer=intent.needs_clarification,
+            links=[],
+            sources=[],
+            source_type="none",
+            suggested_followups=[],
+            category="clarification",
+            refused=False,
+            needs_clarification=intent.needs_clarification,
+        )
     router_intent = None
     if (
         config.mode == "llm"
@@ -106,7 +134,9 @@ async def ask(
         not preflight.refused
         or preflight.refusal_reason == "no_product_intent_or_knowledge_match"
     ) and intent.category in {"live_data", "both"}:
-        if intent.tool_name and isinstance(user, User):
+        if intent.tool_name and (
+            isinstance(user, User) or intent.tool_name == "public_open_internships_count"
+        ):
             try:
                 tool_result = await execute_read_tool(
                     intent.tool_name,
@@ -118,8 +148,14 @@ async def ask(
                 live_route = tool_result.route
                 live_links = tool_result.links
             except asyncio.TimeoutError:
-                logger.warning("chatbot_tool_timeout")
+                logger.warning("chatbot_tool_timeout", extra={"chatbot_meta": {"category": "live_data"}})
                 live_answer = "Live platform data is taking longer than expected. Please retry."
+            except SQLAlchemyError as error:
+                logger.warning(
+                    "chatbot_tool_database_fallback",
+                    extra={"chatbot_meta": {"category": "live_data", "reason": type(error).__name__}},
+                )
+                live_answer = "Live platform data is temporarily unavailable. Please retry."
         elif intent.tool_name and user is None:
             live_answer = (
                 "Sign in to InternSphere to view live information for your own account."
@@ -136,6 +172,8 @@ async def ask(
         live_answer=live_answer,
         live_route=live_route,
         live_links=live_links,
+        previous_suggestions=body.previous_suggestions,
+        matched_intent=intent.tool_name,
     )
     return ChatAskResponse(
         answer=result.answer,
@@ -148,30 +186,49 @@ async def ask(
         suggested_followups=list(result.suggested_followups),
         category=result.category,
         refused=result.refused,
+        needs_clarification=result.needs_clarification,
     )
 
 
 @router.get("/status")
-async def chatbot_status(db: DbSession) -> dict[str, bool | str | int | None]:
+async def chatbot_status(
+    db: DbSession,
+    user: Annotated[object | None, Depends(get_current_user_optional)],
+) -> dict[str, object]:
     """Report chatbot configuration and, when RAG is enabled, indexed chunk totals and latest update."""
     from sqlalchemy import text
 
     indexed_chunks = 0
     last_indexed_at = None
-    if _settings.rag_enabled:
-        row = (await db.execute(
-            text("SELECT count(*) AS chunk_count, max(updated_at) AS indexed_at FROM kb_chunks")
-        )).mappings().one()
-        indexed_chunks = int(row["chunk_count"])
-        last_indexed_at = row["indexed_at"].isoformat() if row["indexed_at"] else None
-    return {
+    vector_enabled = _settings.uses_vector and _service.vector_available
+    if vector_enabled:
+        try:
+            row = (await db.execute(
+                text("SELECT count(*) AS chunk_count, max(updated_at) AS indexed_at FROM kb_chunks")
+            )).mappings().one()
+            indexed_chunks = int(row["chunk_count"])
+            last_indexed_at = row["indexed_at"].isoformat() if row["indexed_at"] else None
+        except SQLAlchemyError as error:
+            await db.rollback()
+            _service.vector_available = False
+            vector_enabled = False
+            logger.warning(
+                "chatbot_status_vector_fallback",
+                extra={"chatbot_meta": {"reason": type(error).__name__, "retrieval": "bm25"}},
+            )
+    result: dict[str, object] = {
         "enabled": _settings.enabled,
         "mode": _settings.mode,
+        "retrieval": "hybrid" if vector_enabled else "bm25",
+        "provider_ok": provider_configured(_settings),
         "provider_configured": provider_configured(_settings),
-        "rag_enabled": _settings.rag_enabled,
+        "rag_enabled": vector_enabled,
         "indexed_chunk_count": indexed_chunks,
         "last_indexed_at": last_indexed_at,
     }
+    if getattr(getattr(user, "role", None), "value", "").lower() == "admin":
+        result["metrics"] = dict(_service.metrics)
+    return result
 
 
 @router.post("/reindex")

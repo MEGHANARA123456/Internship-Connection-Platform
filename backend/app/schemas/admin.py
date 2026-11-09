@@ -96,7 +96,7 @@ class AuditLogResponse(BaseModel):
     actor_role: str | None = None
     action: str
     target_type: str | None
-    target_id: int | None
+    target_id: int | str | None
     target_label: str | None = None
     target_url: str | None = None
     metadata: dict[str, Any] | None = Field(None, alias="metadata_", serialization_alias="metadata")

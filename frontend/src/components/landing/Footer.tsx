@@ -26,6 +26,7 @@ export function Footer() {
             <h4 className="text-white font-bold text-sm tracking-wide">For Companies</h4>
             <ul className="space-y-2 text-sm">
               <li><Link to={routes.companyRegister} className="hover:text-indigo-400 transition-colors">Post an internship</Link></li>
+              <li><Link to={routes.companyRegister} className="hover:text-indigo-400 transition-colors">Register</Link></li>
               <li><Link to={routes.login()} className="hover:text-indigo-400 transition-colors">Login</Link></li>
             </ul>
           </div>

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Building2, Search } from 'lucide-react'
+import { Building2 } from 'lucide-react'
 import { api } from '../../api/client'
 import { Button } from '../../components/ui/Button'
 import { EmptyState } from '../../components/ui/EmptyState'
+import { SearchBox } from '../../components/ui/SearchBox'
 import { routes } from '../../lib/routes'
 import type { AdminCompany, AdminPage } from './types'
 
@@ -95,11 +96,15 @@ export function AdminCompaniesPage() {
       </header>
 
       <section aria-label="Company filters" className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-4">
-        <label className="relative sm:col-span-2">
-          <span className="sr-only">Search companies</span>
-          <Search aria-hidden="true" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input value={searchText} onChange={(event) => setSearchText(event.target.value)} maxLength={100} placeholder="Search name, industry, location or recruiter" className="h-11 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
-        </label>
+        <SearchBox
+          ariaLabel="Search companies"
+          value={searchText}
+          onChange={setSearchText}
+          scope="companies"
+          placeholder="Search name, industry, location or recruiter"
+          maxLength={100}
+          className="h-11 sm:col-span-2"
+        />
         <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">Verification status
           <select aria-label="Filter by verification status" value={params.get('verification_status') ?? ''} onChange={(event) => updateParam('verification_status', event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-950">
             <option value="">All statuses</option><option value="PENDING">Pending</option><option value="VERIFIED">Verified</option><option value="REJECTED">Rejected</option>

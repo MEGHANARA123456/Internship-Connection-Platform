@@ -8,7 +8,7 @@ import logging
 import re
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
@@ -20,6 +20,7 @@ from app.services.skill_badges import apply_verified_badge_boost, get_valid_badg
 from app.services.mail import send_dev_email
 from app.services.notify import notify
 from app.services.internship_closing import close_internship as close_internship_service, send_closure_emails
+from app.services.search_matching import match_search_text, search_conditions, search_rank_expression
 
 router = APIRouter(prefix="/internships", tags=["internships"])
 logger = logging.getLogger(__name__)
@@ -63,18 +64,24 @@ async def get_company_name(company_id: int, db: DbSession) -> str:
     return profile.company_name if (profile and profile.company_name) else "Enterprise Partner"
 
 
-def _search_filter(search: str | None):
+def _search_filter(search: str | None, *, postgres: bool = False):
     """Add the supported free-text search conditions to an internship query."""
-    tokens = re.findall(r"[a-z0-9]+", (search or "").casefold())
-    if not tokens:
+    if not search or not search.strip():
         return None
-    title = (" " + func.replace(func.lower(Internship.title), "/", " ") + " ")
-    title_matches = [title.contains(f" {token} ") for token in tokens]
-    company_matches = select(CompanyProfile.user_id).where(
-        CompanyProfile.user_id == Internship.company_id,
-        CompanyProfile.company_name.ilike(f"%{search.strip()}%"),
-    ).exists()
-    return or_(*title_matches, company_matches)
+    company_name = (
+        select(CompanyProfile.company_name)
+        .where(CompanyProfile.user_id == Internship.company_id)
+        .scalar_subquery()
+    )
+    fields = (
+        Internship.title,
+        company_name,
+        Internship.skills,
+        Internship.location,
+        Internship.industry,
+    )
+    conditions = search_conditions(search, fields, postgres=postgres)
+    return and_(*conditions) if conditions else None
 
 
 def transition_allowed(current: str, target: str) -> bool:
@@ -170,8 +177,9 @@ async def list_saved_internships(
         filters.append(Internship.stipend >= min_stipend)
     if skills:
         filters.extend(Internship.skills.ilike(f"%{skill.strip()}%") for skill in skills.split(",") if skill.strip())
-    search_filter = _search_filter(search)
-    if search_filter is not None:
+    postgres = db.get_bind().dialect.name == "postgresql"
+    search_filter = _search_filter(search, postgres=postgres)
+    if search_filter is not None and postgres:
         filters.append(search_filter)
     if filters:
         query = query.where(*filters)
@@ -182,6 +190,28 @@ async def list_saved_internships(
     company_ids = {item.company_id for item in items}
     comp_profiles = (await db.scalars(select(CompanyProfile).where(CompanyProfile.user_id.in_(company_ids)))).all() if company_ids else []
     comp_map = {cp.user_id: cp.company_name for cp in comp_profiles if cp.company_name}
+    if search and not postgres:
+        scored_items = [
+            (match_search_text(
+                search,
+                (
+                    item.title,
+                    comp_map.get(item.company_id),
+                    item.skills,
+                    item.location,
+                    item.industry,
+                ),
+            ), item)
+            for item in items
+        ]
+        items = [
+            item
+            for score, item in sorted(
+                (entry for entry in scored_items if entry[0] is not None),
+                key=lambda entry: (entry[0], entry[1].created_at),
+                reverse=True,
+            )
+        ]
 
     student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
     student_skills = [s.strip() for s in (student_prof.skills if student_prof else "").split(",") if s.strip()]
@@ -295,8 +325,6 @@ async def browse_internships(
     if min_stipend is not None: filters.append(Internship.stipend >= min_stipend)
     if max_stipend is not None: filters.append(Internship.stipend <= max_stipend)
     if work_mode: filters.append(Internship.work_mode == work_mode.upper())
-    search_filter = _search_filter(search)
-    if search_filter is not None: filters.append(search_filter)
     if skills: filters.extend(Internship.skills.ilike(f"%{skill.strip()}%") for skill in skills.split(","))
     if posted_after: filters.append(Internship.created_at >= datetime.combine(posted_after, datetime.min.time(), timezone.utc))
     if deadline_before: filters.append(Internship.deadline <= deadline_before)
@@ -308,9 +336,58 @@ async def browse_internships(
                 Application.status != "WITHDRAWN",
             ).exists()
         )
+    postgres = db.get_bind().dialect.name == "postgresql"
+    search_filter = _search_filter(search, postgres=postgres)
+    base_filters = list(filters)
+    if search_filter is not None:
+        filters.append(search_filter)
     if filters: query = query.where(*filters)
-    total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    items = list(await db.scalars(query.order_by(Internship.created_at.desc()).offset((page - 1) * page_size).limit(page_size)))
+    if search and not postgres:
+        company_name = (
+            select(CompanyProfile.company_name)
+            .where(CompanyProfile.user_id == Internship.company_id)
+            .scalar_subquery()
+        )
+        candidates = (
+            await db.execute(
+                select(Internship, company_name.label("company_name")).where(*base_filters)
+            )
+        ).all()
+        scored_candidates = [
+            (
+                match_search_text(
+                    search,
+                    (item.title, company, item.skills, item.location, item.industry),
+                ),
+                item,
+            )
+            for item, company in candidates
+        ]
+        ranked_candidates = sorted(
+            (entry for entry in scored_candidates if entry[0] is not None),
+            key=lambda entry: (entry[0], entry[1].created_at),
+            reverse=True,
+        )
+        total = len(ranked_candidates)
+        search_scores = {item.id: score for score, item in ranked_candidates}
+        items = [
+            item for _, item in ranked_candidates[(page - 1) * page_size : page * page_size]
+        ]
+    else:
+        if search_filter is not None:
+            fields = (
+                Internship.title,
+                Internship.skills,
+                Internship.location,
+                Internship.industry,
+                select(CompanyProfile.company_name)
+                .where(CompanyProfile.user_id == Internship.company_id)
+                .scalar_subquery(),
+            )
+            query = query.order_by(search_rank_expression(search or "", fields, postgres=postgres).desc())
+        total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
+        items = list(await db.scalars(query.order_by(Internship.created_at.desc()).offset((page - 1) * page_size).limit(page_size)))
+        search_scores = {}
     company_ids = {item.company_id for item in items}
     comp_profiles = (await db.scalars(select(CompanyProfile).where(CompanyProfile.user_id.in_(company_ids)))).all() if company_ids else []
     comp_map = {cp.user_id: cp.company_name for cp in comp_profiles if cp.company_name}
@@ -359,7 +436,27 @@ async def browse_internships(
         )
 
     if sort_by == "match" and user and user.role == UserRole.STUDENT:
-        output_items.sort(key=lambda x: x["match_score"] or 0, reverse=True)
+        if search:
+            for item in output_items:
+                search_scores.setdefault(
+                    item["id"],
+                    match_search_text(
+                        search,
+                        (
+                            item["title"],
+                            item["company_name"],
+                            ",".join(item["skills"]),
+                            item["location"],
+                            item["industry"],
+                        ),
+                    ) or 0,
+                )
+            output_items.sort(
+                key=lambda item: (search_scores.get(item["id"], 0), item["match_score"] or 0),
+                reverse=True,
+            )
+        else:
+            output_items.sort(key=lambda x: x["match_score"] or 0, reverse=True)
 
     return InternshipPage(items=output_items, page=page, page_size=page_size, total=total)
 

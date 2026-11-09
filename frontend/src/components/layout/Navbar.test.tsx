@@ -33,7 +33,7 @@ describe('Navbar menus', () => {
     fireEvent.keyDown(screen.getByLabelText('Text input'), { key: '/' })
     fireEvent.keyDown(screen.getByLabelText('Text area'), { key: '/' })
     expect(screen.queryByText('Quick links')).not.toBeInTheDocument()
-    expect(screen.queryByRole('combobox', { name: 'Search InternSphere' })).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Search InternSphere' })).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('renders the student destinations once across the desktop menus', async () => {
@@ -84,6 +84,30 @@ describe('Navbar menus', () => {
     expect(within(internshipMenu).getByText('3')).toBeInTheDocument()
   })
 
+  it('hides the interview-invite badge when the actionable count is zero', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'token',
+      refreshToken: 'refresh',
+      userId: 1,
+      role: 'STUDENT',
+      email: 'student@example.com',
+    })
+    vi.mocked(api.get).mockImplementation(async (path) => {
+      if (path === '/navigation/counts') {
+        return {
+          data: { unread_notifications: 0, invites_new: 0, application_updates: 0, saved: 0 },
+        } as never
+      }
+      return { data: [] } as never
+    })
+    render(<MemoryRouter><Navbar /></MemoryRouter>)
+
+    fireEvent.click(screen.getByRole('button', { name: /Internships/ }))
+    const internshipMenu = screen.getByRole('menu', { name: 'Internships' })
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/navigation/counts'))
+    expect(within(internshipMenu).queryByText(/New/)).not.toBeInTheDocument()
+  })
+
   it('opens search with Ctrl+K and navigates its quick links with the keyboard', async () => {
     useAuthStore.getState().setSession({
       accessToken: 'token', refreshToken: 'refresh', userId: 2, role: 'STUDENT', email: 'student@example.com',
@@ -110,10 +134,10 @@ describe('Navbar menus', () => {
     })
     let searches = 0
     vi.mocked(api.get).mockImplementation(async (path) => {
-      if (path === '/search') {
+      if (path === '/search/suggest') {
         searches += 1
         if (searches === 1) throw new Error('offline')
-        return { data: { groups: [{ type: 'audit_logs', label: 'Audit logs', items: [{ id: 7, title: 'Audit event', subtitle: 'admin', badge: 'Audit log', url: '/admin/audit-logs' }] }] } } as never
+        return { data: { items: [{ id: 7, text: 'Audit event', kind: 'audit log', subtitle: 'admin', url: '/admin/audit-logs' }] } } as never
       }
       return { data: {} } as never
     })

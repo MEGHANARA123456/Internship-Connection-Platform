@@ -3,10 +3,11 @@ import { routes } from '../../lib/routes'
 import { Button } from '../ui/Button'
 import { Search, Building } from 'lucide-react'
 import { Badge } from '../ui/Badge'
+import { scrollToSection } from '../../lib/scroll'
 
 export function StudentsSection() {
   return (
-    <section className="w-full bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-50 py-20 border-t border-slate-200 dark:border-slate-800">
+    <section className="w-full scroll-mt-24 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-50 py-20 border-t border-slate-200 dark:border-slate-800">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
           <div className="space-y-6 order-2 lg:order-1">
@@ -25,7 +26,7 @@ export function StudentsSection() {
                   Sign up for free &rarr;
                 </Button>
               </Link>
-              <Button variant="outline" size="md" className="rounded-3xl px-6 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
+              <Button variant="outline" size="md" onClick={() => scrollToSection('faq')} className="rounded-3xl px-6 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
                 Learn more
               </Button>
             </div>

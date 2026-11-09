@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { api, downloadAuthenticatedFile } from '../api/client'
 import { Input } from '../components/ui/Input'
 import { DropdownSelect } from '../components/ui/DropdownSelect'
+import { SearchBox } from '../components/ui/SearchBox'
 import { Textarea } from '../components/ui/Textarea'
 import { Button } from '../components/ui/Button'
 import { Badge } from '../components/ui/Badge'
@@ -45,7 +46,6 @@ import {
   Menu,
   X,
   BarChart3,
-  Search,
   ArrowUpDown,
   ChevronDown,
 } from 'lucide-react'
@@ -54,6 +54,7 @@ import { AccountSecurityCard } from '../components/security/AccountSecurityCard'
 import { StatusFilterMenu } from '../components/applications/StatusFilterMenu'
 import { CompanyApplicantsRedesign } from './CompanyApplicantsRedesign'
 import { invalidateCompanyMetrics, useCompanyMetrics } from '../hooks/useCompanyMetrics'
+import { searchTextMatches } from '../lib/search'
 
 // --- 1. Company Jobs Management ---
 
@@ -95,8 +96,8 @@ export function CompanyPortalShell() {
         title={compact ? label : undefined}
         aria-current={selected ? 'page' : undefined}
         className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${selected
-            ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300'
-            : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+          ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300'
+          : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
           }`}
       >
         <Icon className="h-4 w-4 shrink-0" />
@@ -254,17 +255,17 @@ export function CompanyOverviewPage() {
             ? `Based on ${sample.toLocaleString()} applications in the last 7 days`
             : `Based on ${sample.toLocaleString()} ${unit}`
           return (
-          <KpiCard
-            key={key}
-            label={label}
-            value={value.toLocaleString()}
-            caption={caption}
-            icon={icon}
-            href={to}
-            info={metric?.definition ?? (key === 'interviews_scheduled'
-              ? 'Future interviews in SCHEDULED or RESCHEDULED status.'
-              : `Current ${label.toLowerCase()} count.`)}
-          />
+            <KpiCard
+              key={key}
+              label={label}
+              value={value.toLocaleString()}
+              caption={caption}
+              icon={icon}
+              href={to}
+              info={metric?.definition ?? (key === 'interviews_scheduled'
+                ? 'Future interviews in SCHEDULED or RESCHEDULED status.'
+                : `Current ${label.toLowerCase()} count.`)}
+            />
           )
         })}
       </div>
@@ -564,11 +565,15 @@ export function LegacyCompanyApplicantsPage({
       </header>
       {!pipeline && (
         <Card className="grid gap-3 bg-white p-4 dark:bg-slate-900 sm:grid-cols-2 xl:grid-cols-5">
-          <label className="relative sm:col-span-2 xl:col-span-1">
-            <span className="sr-only">Search candidate name</span>
-            <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') applyFilters() }} placeholder="Search candidate" className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white" />
-          </label>
+          <SearchBox
+            ariaLabel="Search candidate name"
+            value={search}
+            onChange={setSearch}
+            onSubmit={applyFilters}
+            scope="applicants"
+            placeholder="Search candidate"
+            className="sm:col-span-2 xl:col-span-1"
+          />
           <label><span className="sr-only">Filter by internship ID</span><input aria-label="Filter by internship ID" inputMode="numeric" value={searchParams.get('internship') ?? ''} onChange={(event) => updateFilter('internship', event.target.value)} placeholder="Internship ID" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
           <label><span className="sr-only">Filter by skills</span><input value={skills} onChange={(event) => setSkills(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') applyFilters() }} placeholder="Skills" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
           <label><span className="sr-only">Filter by education</span><input value={education} onChange={(event) => setEducation(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') applyFilters() }} placeholder="Education" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
@@ -700,7 +705,7 @@ export function CompanyJobsPage() {
   const isExpired = (job: any) => job.status === 'PUBLISHED' && job.deadline && new Date(`${job.deadline}T23:59:59`) < new Date()
   const visibleJobs = jobs
     .filter((job) => {
-      const titleMatches = !jobSearch.trim() || String(job.title).toLowerCase().includes(jobSearch.trim().toLowerCase())
+      const titleMatches = !jobSearch.trim() || searchTextMatches(jobSearch, [job.title, job.skills, job.location, job.industry])
       const statusMatches = selectedJobStatus === 'ALL'
         || (selectedJobStatus === 'EXPIRED' ? isExpired(job) : selectedJobStatus === 'PUBLISHED' ? job.status === 'PUBLISHED' && !isExpired(job) : job.status === selectedJobStatus)
       return titleMatches && statusMatches
@@ -783,8 +788,8 @@ export function CompanyJobsPage() {
 
       {companyProfile && companyProfile.verification_status !== 'VERIFIED' && (
         <div role="status" className={`mb-6 flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${companyProfile.verification_status === 'REJECTED'
-            ? 'border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200'
-            : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200'
+          ? 'border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200'
+          : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200'
           }`}>
           <div>
             <p className="text-sm font-semibold">
@@ -840,7 +845,7 @@ export function CompanyJobsPage() {
 
       <div className="mb-4 space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <Input aria-label="Search internships by title" value={jobSearch} onChange={(event) => setJobSearch(event.target.value)} placeholder="Search internships by title" className="sm:max-w-sm" />
+          <SearchBox ariaLabel="Search internships by title" value={jobSearch} onChange={setJobSearch} scope="postings" placeholder="Search internships by title" className="sm:max-w-sm" />
           <div className="flex gap-2">
             <Button variant={sortBy === 'date' ? 'primary' : 'outline'} size="sm" onClick={() => setSortBy('date')}>Posting date</Button>
             <Button variant={sortBy === 'applicants' ? 'primary' : 'outline'} size="sm" onClick={() => setSortBy('applicants')}>Applicant count</Button>
@@ -1256,7 +1261,7 @@ export function JobFormPage() {
               />
 
               <Input
-                label="Monthly Stipend ($USD)"
+                label="Monthly Stipend"
                 type="number"
                 min={0}
                 error={errors.stipend?.message}
@@ -1559,8 +1564,8 @@ export function JobApplicantsPage() {
             <button
               onClick={() => setViewMode('kanban')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${viewMode === 'kanban'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
                 }`}
             >
               <Kanban className="w-3.5 h-3.5" />
@@ -1569,8 +1574,8 @@ export function JobApplicantsPage() {
             <button
               onClick={() => setViewMode('table')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${viewMode === 'table'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
                 }`}
             >
               <LayoutList className="w-3.5 h-3.5" />
@@ -1652,8 +1657,8 @@ export function JobApplicantsPage() {
               type="button"
               onClick={() => setMobileStageFilter('ALL')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-colors cursor-pointer ${mobileStageFilter === 'ALL'
-                  ? 'bg-indigo-600 text-white shadow-2xs'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                ? 'bg-indigo-600 text-white shadow-2xs'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                 }`}
             >
               All Stages ({applicants.length})
@@ -1666,8 +1671,8 @@ export function JobApplicantsPage() {
                   type="button"
                   onClick={() => setMobileStageFilter(s.id)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-colors flex items-center gap-1.5 cursor-pointer ${mobileStageFilter === s.id
-                      ? 'bg-indigo-600 text-white shadow-2xs'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                    ? 'bg-indigo-600 text-white shadow-2xs'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                     }`}
                 >
                   <span>{s.title}</span>

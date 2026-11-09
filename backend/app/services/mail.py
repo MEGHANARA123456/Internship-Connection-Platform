@@ -3,10 +3,11 @@
 # -----------------------------------------------------------------------------
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage as SmtpEmailMessage
-from email.utils import formataddr, make_msgid
+from email.utils import formataddr
 import logging
+import secrets
 import smtplib
 import ssl
 import threading
@@ -64,7 +65,7 @@ def get_emails_for_recipient(recipient_email: str) -> list[dict[str, Any]]:
 
 
 def visible_gmail_url(email: DbEmailMessage, recipient_email: str) -> str | None:
-    """Return a Gmail search URL only for Gmail recipients and configured SMTP."""
+    """Return a Gmail search URL only for Gmail recipients with real SMTP delivery."""
     stored_recipient = (email.recipient_email or "").strip().lower()
     recipient = (recipient_email or "").strip().lower()
     if not recipient or stored_recipient != recipient:
@@ -72,17 +73,22 @@ def visible_gmail_url(email: DbEmailMessage, recipient_email: str) -> str | None
     if recipient.rpartition("@")[2] not in {"gmail.com", "googlemail.com"}:
         return None
 
-    if email.message_id:
-        query = f"rfc822msgid:{email.message_id}"
+    if not email.delivered_via_smtp:
+        return None
+    if email.id:
+        query = f'"IS-{email.id}" in:anywhere'
     else:
-        settings = get_settings()
-        if not (settings.mail_server and settings.mail_username and settings.mail_password):
-            return None
         sender = (email.sender_email or "").strip()
-        subject = (email.subject or "").strip()
-        if not sender or not subject or sender.rpartition("@")[2].lower() in FAKE_EMAIL_DOMAINS:
-            return None
-        query = f'from:{sender} subject:"{subject}"'
+        subject = (email.subject or "").replace('"', '\\"').strip()
+        created_at = email.created_at or datetime.now(timezone.utc)
+        date_filter = ""
+        if created_at is not None:
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            after = (created_at - timedelta(days=1)).date().isoformat().replace("-", "/")
+            before = (created_at + timedelta(days=2)).date().isoformat().replace("-", "/")
+            date_filter = f" after:{after} before:{before}"
+        query = f'from:{sender} subject:"{subject}" in:anywhere{date_filter}'
 
     return (
         "https://mail.google.com/mail/?authuser="
@@ -115,9 +121,6 @@ def _send_real_smtp(settings: Any, to: str, subject: str, body: str, html: str |
     try:
         msg = SmtpEmailMessage()
         sender_email = settings.mail_from or settings.mail_username
-        sender_domain = sender_email.rpartition("@")[2] or None
-        message_id = make_msgid(domain=sender_domain)
-        msg["Message-ID"] = message_id
         msg["Subject"] = subject
         sender_display_name = getattr(settings, "mail_from_name", "Internship Platform") or "Internship Platform"
         msg["From"] = formataddr((sender_display_name, sender_email))
@@ -151,7 +154,7 @@ def _send_real_smtp(settings: Any, to: str, subject: str, body: str, html: str |
                 if refused:
                     raise smtplib.SMTPRecipientsRefused(refused)
                 logger.info("Real email successfully sent to %s via SMTP TLS (port %s)", to, port)
-        return message_id, True
+        return None, True
     except Exception as exc:
         logger.warning("SMTP delivery failed for recipient %s: %s", to, exc)
         return None, False
@@ -169,8 +172,6 @@ async def send_dev_email(
     """Record an email locally, optionally persist it for a user, then try Mailpit and configured SMTP delivery."""
     settings = get_settings()
     clean_to = to.strip().lower()
-    record_email_locally(clean_to, subject, body, html)
-
     email_record: DbEmailMessage | None = None
     if db is not None:
         try:
@@ -191,6 +192,25 @@ async def send_dev_email(
                 await db.refresh(email_record)
         except Exception as exc:
             logger.warning("Could not persist user email record for %s: %s", clean_to, exc)
+
+    reference = f"IS-{email_record.id}" if email_record is not None else f"IS-{secrets.token_hex(4).upper()}"
+    footer_text = f"\n\nInternSphere reference: {reference}"
+    body = body.rstrip() + footer_text
+    if html:
+        html = html.rstrip() + (
+            f'<p style="font-size:12px;color:#64748b">InternSphere reference: {reference}</p>'
+        )
+    else:
+        html = None
+    if email_record is not None and db is not None:
+        email_record.body = body
+        email_record.html = html
+        try:
+            await db.commit()
+        except Exception as exc:
+            logger.warning("Could not persist email reference for %s: %s", clean_to, exc)
+            await db.rollback()
+    record_email_locally(clean_to, subject, body, html)
 
     # 1. Send to Mailpit HTTP API (Try configured host, then fallback to 127.0.0.1)
     hosts_to_try = [settings.mailpit_host, "127.0.0.1", "localhost"]
@@ -224,7 +244,6 @@ async def send_dev_email(
             _send_real_smtp, settings, clean_to, subject, body, html
         )
         if delivered and email_record is not None and db is not None:
-            email_record.message_id = message_id
             email_record.delivered_via_smtp = True
             try:
                 await db.commit()

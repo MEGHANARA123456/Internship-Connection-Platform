@@ -26,4 +26,12 @@ describe('navigation configuration', () => {
     expect(new Set(statusRoutes).size).toBe(statusRoutes.length)
     expect(statusRoutes.some((route) => topLevelRoutes.includes(route))).toBe(false)
   })
+
+  it('includes a distinct company registration destination in the guest menu', () => {
+    expect(navigationConfig.GUEST.hamburger).toContainEqual(expect.objectContaining({
+      id: 'register-company',
+      label: 'Register Company',
+      route: '/register-company',
+    }))
+  })
 })

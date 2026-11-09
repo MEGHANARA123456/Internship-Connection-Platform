@@ -5,7 +5,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+
+from app.services.interview_display import InterviewState, get_interview_state
 
 def _clean_meeting_link(v: str | None) -> str | None:
     """Normalize blank links to None and reject nonempty URLs without an HTTP(S) scheme."""
@@ -65,6 +67,8 @@ class InterviewUpdate(BaseModel):
 
 
 class InterviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     application_id: int
     scheduled_by: int
@@ -78,6 +82,11 @@ class InterviewResponse(BaseModel):
     candidate_name: str | None = None
     internship_title: str | None = None
     company_name: str | None = None
+
+    @computed_field
+    @property
+    def interview_state(self) -> InterviewState:
+        return get_interview_state(self)
 
 
 class InterviewFeedbackUpdate(BaseModel):
@@ -109,6 +118,7 @@ class ApplicationNoteResponse(BaseModel):
 class NotificationResponse(BaseModel):
     id: int
     application_id: int | None = None
+    email_id: int | None = None
     gmail_url: str | None = None
     notification_type: str
     title: str

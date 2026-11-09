@@ -4,7 +4,7 @@ import { Button } from '../ui/Button'
 
 export function FinalCta() {
   return (
-    <section className="w-full bg-slate-950 text-white py-24 border-t border-slate-900 relative overflow-hidden">
+    <section className="w-full scroll-mt-24 bg-slate-950 text-white py-24 border-t border-slate-900 relative overflow-hidden">
       <div className="absolute inset-0 flex justify-center items-center pointer-events-none">
         <div className="w-[500px] h-[500px] bg-indigo-600/20 rounded-full blur-[120px]"></div>
       </div>
@@ -21,7 +21,7 @@ export function FinalCta() {
             </Button>
           </Link>
           <Link to={routes.companyRegister}>
-            <Button variant="outline" size="md" className="rounded-3xl px-8 border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white">
+            <Button variant="outline" size="md" className="rounded-3xl px-8 bg-transparent dark:bg-transparent border-slate-600 dark:border-slate-600 text-slate-200 dark:text-slate-200 hover:bg-slate-800 dark:hover:bg-slate-800 hover:text-white dark:hover:text-white">
               Start hiring
             </Button>
           </Link>

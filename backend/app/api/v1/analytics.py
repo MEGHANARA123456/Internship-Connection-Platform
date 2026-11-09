@@ -3,9 +3,9 @@
 # -----------------------------------------------------------------------------
 
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import case, func, select
 
 from app.api.v1.dependencies import DbSession, get_current_user_optional, require_roles
@@ -61,6 +61,77 @@ def _elapsed_seconds(start: datetime, end: datetime) -> float:
     if end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
     return (end - start).total_seconds()
+
+
+@router.get("/public-summary")
+async def public_summary(db: DbSession, response: Response) -> dict[str, Any]:
+    """Return cacheable aggregate platform statistics without account-level data."""
+    live_filters = (
+        Internship.status == "PUBLISHED",
+        Internship.deadline >= date.today(),
+    )
+    live_internships = int(
+        await db.scalar(select(func.count(Internship.id)).where(*live_filters)) or 0
+    )
+    verified_companies = int(
+        await db.scalar(
+            select(func.count(CompanyProfile.id)).where(
+                CompanyProfile.verification_status == "VERIFIED"
+            )
+        ) or 0
+    )
+    registered_students = int(
+        await db.scalar(select(func.count(StudentProfile.id))) or 0
+    )
+    offers_made = int(
+        await db.scalar(
+            select(func.count(Application.id)).where(
+                Application.status.in_(("SELECTED", "ACCEPTED"))
+            )
+        ) or 0
+    )
+
+    field_rows = (
+        await db.execute(
+            select(Internship.industry, func.count(Internship.id))
+            .where(*live_filters)
+            .group_by(Internship.industry)
+        )
+    ).all()
+    normalized_fields = normalize_domain_rows(
+        [(industry, int(count)) for industry, count in field_rows],
+        limit=5,
+    )
+    openings_by_field = []
+    for item in normalized_fields:
+        name = item.get("name")
+        count = item.get("count")
+        if isinstance(name, str) and isinstance(count, int):
+            openings_by_field.append({"name": name, "count": count})
+
+    mode_rows = (
+        await db.execute(
+            select(Internship.work_mode, func.count(Internship.id))
+            .where(*live_filters)
+            .group_by(Internship.work_mode)
+            .order_by(func.count(Internship.id).desc(), Internship.work_mode)
+        )
+    ).all()
+    openings_by_work_mode = [
+        {"name": str(work_mode).title(), "count": int(count)}
+        for work_mode, count in mode_rows
+    ]
+
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return {
+        "live_internships": live_internships,
+        "verified_companies": verified_companies,
+        "registered_students": registered_students,
+        "offers_made": offers_made,
+        "openings_by_field": openings_by_field,
+        "openings_by_work_mode": openings_by_work_mode,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.get("/company/performance")

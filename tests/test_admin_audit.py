@@ -24,6 +24,9 @@ from app.models import (
     CompanyProfile,
     Internship,
     Report,
+    SkillLearningResource,
+    SkillQuestion,
+    SkillTopic,
     User,
     UserRole,
 )
@@ -517,8 +520,9 @@ async def test_admin_chatbot_reads_audit_records_but_student_cannot(db_setup, mo
         )
 
     assert admin_response.status_code == 200
-    assert "Admin #1 recorded postings approved for posting #77" in admin_response.json()["answer"]
-    assert "Oct 28, 2026" in admin_response.json()["answer"]
+    assert "Admin postings approved for posting" in admin_response.json()["answer"]
+    assert "days ago" in admin_response.json()["answer"]
+    assert "example.com" not in admin_response.json()["answer"]
     assert student_response.status_code == 200
     assert student_response.json()["refused"] is True
     assert "posting #77" not in student_response.json()["answer"]
@@ -594,3 +598,129 @@ async def test_legacy_admin_review_route_writes_audit_record(db_setup) -> None:
             )
         )
     assert audit is not None
+
+
+@pytest.mark.anyio
+async def test_audit_log_resolves_skill_and_metadata_targets(db_setup) -> None:
+    _, sessions = db_setup
+    admin = _make_admin()
+    long_prompt = "Explain how Python manages asynchronous task scheduling and cooperative concurrency."
+    async with sessions() as session:
+        session.add_all([
+            admin,
+            SkillTopic(slug="ai", name="Artificial Intelligence", description="AI topics"),
+            SkillQuestion(
+                id=1,
+                topic="Python",
+                prompt=long_prompt,
+                options=["A", "B"],
+                correct_index=0,
+                explanation="Because.",
+            ),
+            SkillLearningResource(
+                id=2,
+                topic="python",
+                subtopic="asyncio",
+                title="Asyncio documentation",
+                url="https://example.test/asyncio",
+            ),
+        ])
+        await session.flush()
+        session.add_all([
+            AuditLog(
+                actor_id=admin.id,
+                action="skill_topic_archived",
+                target_type="skill_topic",
+                metadata_={"topic": "ai", "topic_key": "ai", "topic_name": "Artificial Intelligence"},
+            ),
+            AuditLog(
+                actor_id=admin.id,
+                action="skill_question_updated",
+                target_type="skill_question",
+                target_id=1,
+            ),
+            AuditLog(
+                actor_id=admin.id,
+                action="skill_question_deleted",
+                target_type="skill_question",
+                target_id=404,
+            ),
+            AuditLog(
+                actor_id=admin.id,
+                action="skill_learning_resource_updated",
+                target_type="skill_learning_resource",
+                target_id=2,
+            ),
+            AuditLog(
+                actor_id=admin.id,
+                action="skill_learning_resource_deleted",
+                target_type="skill_learning_resource",
+                target_id=405,
+            ),
+            AuditLog(
+                actor_id=admin.id,
+                action="unknown_target_action",
+                target_type="skill_portfolio",
+                target_id=12,
+            ),
+            AuditLog(
+                actor_id=admin.id,
+                action="file_exported",
+                metadata_={"file_name": "skill-topics.csv"},
+            ),
+            AuditLog(actor_id=admin.id, action="maintenance_started"),
+        ])
+        await session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: admin
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/admin/audit-logs?page_size=50")
+        searched = await client.get(
+            "/api/v1/admin/audit-logs?search_target=Artificial%20Intelligence"
+        )
+
+    assert response.status_code == 200
+    labels = {item["action"]: item["target_label"] for item in response.json()["items"]}
+    assert labels["skill_topic_archived"] == "Skill topic: Artificial Intelligence (ai)"
+    assert labels["skill_question_updated"].startswith("Python: Explain how Python manages")
+    assert len(labels["skill_question_updated"].split(": ", 1)[1]) <= 63
+    assert labels["skill_question_deleted"] == "Deleted question"
+    assert labels["skill_learning_resource_updated"] == "Asyncio documentation"
+    assert labels["skill_learning_resource_deleted"] == "Deleted resource"
+    assert labels["unknown_target_action"] == "Skill portfolio #12"
+    assert labels["file_exported"] == "File: skill-topics.csv"
+    assert labels["maintenance_started"] == "System-wide"
+    assert searched.status_code == 200
+    assert searched.json()["total"] == 1
+
+
+@pytest.mark.anyio
+async def test_audit_log_range_matches_admin_actions_kpi(db_setup) -> None:
+    _, sessions = db_setup
+    admin = _make_admin()
+    now = datetime.now(timezone.utc)
+    async with sessions() as session:
+        session.add(admin)
+        await session.flush()
+        session.add_all([
+            AuditLog(
+                actor_id=admin.id,
+                action=f"range_action_{days}",
+                created_at=now - timedelta(days=days),
+            )
+            for days in (1, 20, 40)
+        ])
+        await session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: admin
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        dashboard = await client.get("/api/v1/admin/insights?range=30")
+        recent_logs = await client.get("/api/v1/admin/audit-logs?range=30d")
+        all_time_dashboard = await client.get("/api/v1/admin/insights?range=all")
+        all_time_logs = await client.get("/api/v1/admin/audit-logs?range=all")
+        unfiltered_logs = await client.get("/api/v1/admin/audit-logs")
+
+    assert dashboard.status_code == recent_logs.status_code == 200
+    assert dashboard.json()["kpis"]["admin_actions"]["value"] == recent_logs.json()["total"] == 2
+    assert all_time_dashboard.json()["kpis"]["admin_actions"]["value"] == all_time_logs.json()["total"] == 3
+    assert unfiltered_logs.json()["total"] == 3

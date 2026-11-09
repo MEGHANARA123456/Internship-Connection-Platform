@@ -4,13 +4,12 @@
 
 from typing import Annotated
 import logging
-import re
 from datetime import date, datetime, timedelta, timezone
 from html import escape
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy import extract, func, or_, select
+from sqlalchemy import and_, extract, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
@@ -21,6 +20,16 @@ from app.services.mail import visible_gmail_url
 from app.services.notify import dispatch_notification, notify
 from app.services.application_rules import check_eligibility
 from app.services.company_metrics import get_company_metrics
+from app.services.interview_display import (
+    derive_application_display_status,
+    get_application_display_status,
+    get_interview_state,
+)
+from app.services.search_matching import (
+    escape_search_term,
+    match_search_text,
+    search_conditions,
+)
 from app.services.skill_badges import apply_verified_badge_boost, badge_response, get_valid_badges
 from app.schemas.application import (
     ApplicationCreate,
@@ -84,18 +93,27 @@ def _response_time_hours(applied_at: datetime, response_at: datetime) -> float:
     return max(0.0, round((response_at - applied_at).total_seconds() / 3600, 1))
 
 
-def _application_search_filter(search: str | None):
+def _application_search_filter(search: str | None, *, postgres: bool = False):
     """Add the supported text-search conditions to an application query."""
-    tokens = re.findall(r"[a-z0-9]+", (search or "").casefold())
-    if not tokens:
+    if not search or not search.strip():
         return None
-    normalized_title = " " + func.replace(func.lower(Internship.title), "/", " ") + " "
-    title_matches = [normalized_title.contains(f" {token} ") for token in tokens]
-    company_match = select(CompanyProfile.user_id).where(
-        CompanyProfile.user_id == Internship.company_id,
-        CompanyProfile.company_name.ilike(f"%{search.strip()}%"),
-    ).exists()
-    return or_(*title_matches, company_match)
+    company_name = (
+        select(CompanyProfile.company_name)
+        .where(CompanyProfile.user_id == Internship.company_id)
+        .scalar_subquery()
+    )
+    conditions = search_conditions(
+        search,
+        (
+            Internship.title,
+            company_name,
+            Internship.skills,
+            Internship.location,
+            Internship.industry,
+        ),
+        postgres=postgres,
+    )
+    return and_(*conditions) if conditions else None
 
 
 def application_transition_allowed(current: str, target: str) -> bool:
@@ -201,6 +219,7 @@ async def serialize(
         "company_id": internship.company_id if internship else None,
         "student_id": application.student_id,
         "status": application.status,
+        "display_status": await get_application_display_status(db, application),
         "allowed_next": allowed_next_statuses(application.status),
         "allowed_actions": allowed_actions_for_status(application.status),
         "cover_note": application.cover_note,
@@ -480,9 +499,20 @@ async def get_application_timeline(
         if terminal_event and terminal_event.from_status in status_order
         else 0
     )
-    current_interview = next((item for item in reversed(interviews) if item.status != "CANCELLED"), None)
-    if current_interview is None and interviews:
-        current_interview = interviews[-1]
+    latest_interview = interviews[-1] if interviews else None
+    current_interview = (
+        latest_interview
+        if latest_interview is not None
+        and (
+            latest_interview.status in {"SCHEDULED", "RESCHEDULED", "COMPLETED"}
+            or (
+                latest_interview.status == "CANCELLED"
+                and latest_interview.cancel_reason == "TIME_PASSED"
+            )
+        )
+        else None
+    )
+    display_status = derive_application_display_status(application.status, interviews)
 
     email_payloads = []
     email_by_key: dict[str, list[dict]] = {}
@@ -515,7 +545,7 @@ async def get_application_timeline(
             rank = status_order.index(key)
             reached = rank <= status_rank
             state = (
-                "done" if rank < status_rank or application.status == "ACCEPTED"
+                "done" if rank < status_rank or application.status == "ACCEPTED" or (key == "INTERVIEW_SCHEDULED" and display_status == "EXPIRED")
                 else "current" if rank == status_rank and application.status not in {"REJECTED", "WITHDRAWN"}
                 else "done" if reached else "upcoming"
             )
@@ -524,10 +554,22 @@ async def get_application_timeline(
                 timestamp = timestamp or application.created_at
         step: dict = {
             "key": key,
-            "label": label,
+            "label": (
+                f"Interview completed on {current_interview.scheduled_at:%Y-%m-%d}"
+                if key == "INTERVIEW_SCHEDULED"
+                and current_interview is not None
+                and get_interview_state(current_interview) == "completed"
+                else label
+            ),
             "state": state,
             "timestamp": timestamp,
-            "description": description,
+            "description": (
+                "The interview time has passed. Waiting for the recruiter's decision."
+                if key == "INTERVIEW_SCHEDULED"
+                and current_interview is not None
+                and get_interview_state(current_interview) == "completed"
+                else description
+            ),
             "emails": email_by_key.get(key, []),
         }
         if key == "INTERVIEW_SCHEDULED" and current_interview:
@@ -539,6 +581,7 @@ async def get_application_timeline(
                 "type": current_interview.interview_type,
                 "link": current_interview.meeting_link,
                 "status": current_interview.status,
+                "interview_state": get_interview_state(current_interview),
             }
         steps.append(step)
 
@@ -576,6 +619,7 @@ async def get_application_timeline(
         "summary": {
             "id": application.id,
             "status": application.status,
+            "display_status": display_status,
             "internship_id": internship.id,
             "title": internship.title,
             "company_name": (await db.scalar(
@@ -607,8 +651,9 @@ async def student_dashboard(
     applications_query = select(Application).where(Application.student_id == user.id)
     if status and status.upper() != "ALL":
         applications_query = applications_query.where(Application.status == status.upper())
-    search_filter = _application_search_filter(search)
-    if search_filter is not None:
+    postgres = db.get_bind().dialect.name == "postgresql"
+    search_filter = _application_search_filter(search, postgres=postgres)
+    if search_filter is not None and postgres:
         applications_query = applications_query.where(
             Application.internship_id.in_(select(Internship.id).where(search_filter))
         )
@@ -640,6 +685,20 @@ async def student_dashboard(
         item["has_company_response"] = application.id in response_times
         item["response_time_hours"] = response_times.get(application.id)
         items.append(item)
+    if search and not postgres:
+        items = [
+            item
+            for item in items
+            if match_search_text(
+                search,
+                (
+                    item.get("internship_title"),
+                    item.get("company_name"),
+                    ", ".join(item.get("student_skills", [])),
+                    item.get("internship_location"),
+                ),
+            ) is not None
+        ]
     return {"counts": counts, "applications": items, "total": len(items)}
 
 
@@ -670,6 +729,10 @@ async def search_company_applications(
     created: str | None = None,
     skills: str | None = None,
     education: str | None = None,
+    applicant_filter: str | None = Query(
+        default=None,
+        pattern="^(verified_skill|shortlisted|high_match|not_reviewed)$",
+    ),
     verified_skill: bool = False,
     sort: str = "newest",
     page: int = Query(default=1, ge=1),
@@ -680,6 +743,7 @@ async def search_company_applications(
         select(Application)
         .join(Internship, Application.internship_id == Internship.id)
         .outerjoin(StudentProfile, StudentProfile.user_id == Application.student_id)
+        .join(User, User.id == Application.student_id)
         .where(Internship.company_id == user.id)
     )
     if status and status.upper() != "ALL":
@@ -688,8 +752,22 @@ async def search_company_applications(
         query = query.where(Application.status != "WITHDRAWN")
     if internship_id is not None:
         query = query.where(Internship.id == internship_id)
-    if search and search.strip():
-        query = query.where(StudentProfile.full_name.ilike(f"%{search.strip()}%"))
+    postgres = db.get_bind().dialect.name == "postgresql"
+    python_search = bool(search and search.strip() and not postgres)
+    if search and search.strip() and postgres:
+        query = query.where(
+            *search_conditions(
+                search,
+                (
+                    StudentProfile.full_name,
+                    User.email,
+                    StudentProfile.skills,
+                    StudentProfile.university,
+                    StudentProfile.major,
+                ),
+                postgres=True,
+            )
+        )
     if date_from is not None:
         query = query.where(func.date(Application.created_at) >= date_from.isoformat())
     if date_to is not None:
@@ -697,12 +775,24 @@ async def search_company_applications(
     if created == "week":
         query = query.where(Application.created_at >= datetime.now(timezone.utc) - timedelta(days=7))
     if skills and skills.strip():
-        query = query.where(StudentProfile.skills.ilike(f"%{skills.strip()}%"))
+        escaped_skills = escape_search_term(skills.strip()[:100])
+        query = query.where(StudentProfile.skills.ilike(f"%{escaped_skills}%", escape="\\"))
     if education and education.strip():
+        escaped_education = escape_search_term(education.strip()[:100])
         query = query.where(
-            (StudentProfile.university.ilike(f"%{education.strip()}%"))
-            | (StudentProfile.major.ilike(f"%{education.strip()}%"))
+            StudentProfile.university.ilike(f"%{escaped_education}%", escape="\\")
+            | StudentProfile.major.ilike(f"%{escaped_education}%", escape="\\")
         )
+    if verified_skill:
+        applicant_filter = applicant_filter or "verified_skill"
+    if applicant_filter in {"shortlisted", "not_reviewed"}:
+        query = query.where(
+            Application.status == (
+                "SHORTLISTED" if applicant_filter == "shortlisted" else "APPLIED"
+            )
+        )
+    if applicant_filter == "verified_skill":
+        verified_skill = True
     if verified_skill:
         now = datetime.now(timezone.utc)
         query = query.where(
@@ -715,24 +805,7 @@ async def search_company_applications(
                 )
             )
         )
-    company_metrics = await get_company_metrics(db, user.id, internship_id)
-    has_extra_filters = any((
-        search and search.strip(),
-        date_from is not None,
-        date_to is not None,
-        created == "week",
-        skills and skills.strip(),
-        education and education.strip(),
-        verified_skill,
-    ))
-    if not has_extra_filters and not internship_id and status in (None, "", "ALL"):
-        total = company_metrics["total_applicants"]
-    elif not has_extra_filters and not internship_id and status and status.upper() == "SHORTLISTED":
-        total = company_metrics["shortlisted"]
-    else:
-        count_query = select(func.count()).select_from(query.order_by(None).subquery())
-        total = int(await db.scalar(count_query) or 0)
-    status_counts = company_metrics["all_status_counts"]
+
     if sort == "response_time":
         first_response_at = (
             select(func.min(ApplicationEvent.created_at))
@@ -748,25 +821,115 @@ async def search_company_applications(
             response_duration = func.julianday(first_response_at) - func.julianday(Application.created_at)
         else:
             response_duration = extract("epoch", first_response_at - Application.created_at)
-        query = query.order_by(response_duration.asc().nullslast(), Application.created_at.desc())
+        sort_order = (response_duration.asc().nullslast(), Application.created_at.desc())
     elif sort == "oldest":
-        query = query.order_by(Application.created_at.asc(), Application.id.asc())
+        sort_order = (Application.created_at.asc(), Application.id.asc())
     elif sort == "name":
-        query = query.order_by(StudentProfile.full_name.asc(), Application.id.asc())
+        sort_order = (StudentProfile.full_name.asc(), Application.id.asc())
     else:
-        query = query.order_by(Application.created_at.desc(), Application.id.desc())
-    applications = list(
-        (
-            await db.scalars(
-                query.offset((page - 1) * page_size).limit(page_size)
+        sort_order = (Application.created_at.desc(), Application.id.desc())
+
+    needs_all_candidates = python_search or applicant_filter == "high_match" or sort == "best_match"
+    if needs_all_candidates:
+        candidate_rows = (
+            await db.execute(
+                query.order_by(None).add_columns(
+                    StudentProfile.full_name,
+                    User.email,
+                    StudentProfile.skills,
+                    StudentProfile.university,
+                    StudentProfile.major,
+                )
             )
         ).all()
-    )
-    return {
-        "items": [
-            await serialize(application, db, include_match=True, include_verified_badges=True)
+        matched_items: list[dict] = []
+        for (
+            application,
+            student_name,
+            student_email,
+            student_skills,
+            university,
+            major,
+        ) in candidate_rows:
+            if python_search and match_search_text(
+                search or "",
+                (student_name, student_email, student_skills, university, major),
+            ) is None:
+                continue
+            item = await serialize(
+                application,
+                db,
+                include_match=True,
+                include_verified_badges=True,
+            )
+            if applicant_filter == "high_match" and (
+                item["match_score"] is None or item["match_score"] < 70
+            ):
+                continue
+            matched_items.append(item)
+
+        if sort == "best_match":
+            matched_items.sort(
+                key=lambda item: (
+                    item["match_score"] is not None,
+                    item["match_score"] if item["match_score"] is not None else -1,
+                    item["created_at"],
+                    item["id"],
+                ),
+                reverse=True,
+            )
+        elif sort == "oldest":
+            matched_items.sort(key=lambda item: (item["created_at"], item["id"]))
+        elif sort == "name":
+            matched_items.sort(
+                key=lambda item: (
+                    (item["student_name"] or "").casefold(),
+                    item["id"],
+                )
+            )
+        else:
+            matched_items.sort(
+                key=lambda item: (item["created_at"], item["id"]),
+                reverse=True,
+            )
+
+        total = len(matched_items)
+        status_counts: dict[str, int] = {}
+        for item in matched_items:
+            status_counts[item["status"]] = status_counts.get(item["status"], 0) + 1
+        items = matched_items[(page - 1) * page_size : page * page_size]
+    else:
+        filtered_query = query.order_by(None).subquery()
+        total = int(await db.scalar(
+            select(func.count()).select_from(filtered_query)
+        ) or 0)
+        status_counts = {
+            str(app_status): int(count)
+            for app_status, count in (await db.execute(
+                select(filtered_query.c.status, func.count())
+                .group_by(filtered_query.c.status)
+            )).all()
+        }
+        applications = list(
+            (
+                await db.scalars(
+                    query.order_by(*sort_order)
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            ).all()
+        )
+        items = [
+            await serialize(
+                application,
+                db,
+                include_match=True,
+                include_verified_badges=True,
+            )
             for application in applications
-        ],
+        ]
+    return {
+        "items": items,
         "total": total,
         "status_counts": status_counts,
         "page": page,

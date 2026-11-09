@@ -9,7 +9,7 @@ import {
   type ChatTurn,
 } from './api'
 import { fetchPersonalSummary } from './summaryApi'
-import type { ChatMessage, ChatPage, ChatResponse, ChatSourceType, PersonalSummary } from './types'
+import type { ChatFeedbackSourceType, ChatMessage, ChatPage, ChatResponse, PersonalSummary } from './types'
 
 function pageForPath(path: string): ChatPage {
   if (path.startsWith('/student/analytics')) return 'student-dashboard'
@@ -104,13 +104,10 @@ export function useChatbot() {
   ): Promise<boolean> => {
     const text = question.trim()
     if (!text) return false
-    if (text.length > MAX_CHAT_MESSAGE_CHARS) {
-      setError(`Message too long (max ${MAX_CHAT_MESSAGE_CHARS} characters)`)
-      return false
-    }
+    const shortenedText = text.slice(0, MAX_CHAT_MESSAGE_CHARS)
     if (typing || summaryLoading || requestInFlight.current) return false
     requestInFlight.current = true
-    setPendingQuestion(text)
+    setPendingQuestion(shortenedText)
     setError('')
     setTyping(true)
     const priorMessages = messages.filter((message) => !message.summary)
@@ -123,17 +120,25 @@ export function useChatbot() {
       .map((message) => ({ role: message.role, content: message.content }))
     const requestGeneration = generation.current
     retryHistory.current = turnHistory
-    if (appendUserMessage) setMessages((current) => [...current, newMessage('user', text)])
+    if (appendUserMessage) setMessages((current) => [...current, newMessage('user', shortenedText)])
     try {
-      const result: ChatResponse = await askChatbot(text, turnHistory, pageForPath(location.pathname))
+      const previousSuggestions = [...priorMessages].reverse()
+        .find((message) => message.role === 'assistant')?.suggestedFollowups ?? []
+      const result: ChatResponse = await askChatbot(
+        shortenedText,
+        turnHistory,
+        pageForPath(location.pathname),
+        previousSuggestions,
+      )
       if (generation.current === requestGeneration) {
         setMessages((current) => [...current, newMessage('assistant', result.answer, {
           links: result.links,
           sources: result.sources,
           sourceType: result.source_type,
           suggestedFollowups: result.suggested_followups,
-          noEvidence: !result.refused && result.category === 'in_scope'
-            && result.source_type === 'docs' && result.sources.length === 0,
+          noEvidence: !result.refused && result.category === 'low_confidence'
+            && result.source_type === 'none' && result.sources.length === 0,
+          needsClarification: result.needs_clarification,
         })])
         setPendingQuestion('')
         return true
@@ -183,7 +188,7 @@ export function useChatbot() {
   const sendFeedback = useCallback(async (
     turnId: string,
     rating: 'up' | 'down',
-    sourceType: ChatSourceType,
+    sourceType: ChatFeedbackSourceType,
   ): Promise<boolean> => {
     try {
       await sendChatbotFeedback(turnId, rating, sourceType)

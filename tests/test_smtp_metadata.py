@@ -1,7 +1,5 @@
 from datetime import date, timedelta
 from types import SimpleNamespace
-from urllib.parse import quote
-
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -121,11 +119,12 @@ async def test_smtp_metadata_is_persisted_only_after_success(monkeypatch) -> Non
         assert sent is not None
         assert sent.application_id == application.id
         assert sent.delivered_via_smtp is True
-        assert sent.message_id == SuccessfulSMTP.message_id
-        assert sent.message_id.startswith("<") and sent.message_id.endswith(">")
+        assert sent.message_id is None
+        assert sent.delivered_via_smtp
+        assert f"IS-{sent.id}" in sent.body
         assert mail.visible_gmail_url(sent, user.email) == (
             "https://mail.google.com/mail/?authuser=candidate%40gmail.com"
-            "#search/rfc822msgid%3A" + quote(sent.message_id, safe="")
+            f"#search/%22IS-{sent.id}%22%20in%3Aanywhere"
         )
 
         monkeypatch.setattr(mail.smtplib, "SMTP", FailedSMTP)
@@ -176,33 +175,25 @@ def test_gmail_links_require_google_recipient_domain_and_smtp_delivery() -> None
         sender_email="sender@example.com",
         subject="Test",
         body="Test",
+        id=42,
         message_id="<message@example.com>",
         delivered_via_smtp=True,
     )
     assert mail.visible_gmail_url(email, "candidate@googlemail.com") == (
         "https://mail.google.com/mail/?authuser=candidate%40googlemail.com"
-        "#search/rfc822msgid%3A%3Cmessage%40example.com%3E"
+        "#search/%22IS-42%22%20in%3Aanywhere"
     )
     email.recipient_email = "candidate@example.com"
     assert mail.visible_gmail_url(email, "candidate@example.com") is None
     email.recipient_email = "candidate@gmail.com"
     email.delivered_via_smtp = False
-    assert mail.visible_gmail_url(email, "candidate@gmail.com") == (
-        "https://mail.google.com/mail/?authuser=candidate%40gmail.com"
-        "#search/rfc822msgid%3A%3Cmessage%40example.com%3E"
-    )
+    assert mail.visible_gmail_url(email, "candidate@gmail.com") is None
     email.delivered_via_smtp = True
     email.message_id = None
-    assert mail.visible_gmail_url(email, "candidate@gmail.com") is None
+    assert mail.visible_gmail_url(email, "candidate@gmail.com") is not None
 
 
-def test_legacy_gmail_message_uses_safe_sender_and_subject_search(monkeypatch) -> None:
-    settings = SimpleNamespace(
-        mail_server="smtp.example.test",
-        mail_username="sender@example.test",
-        mail_password="configured",
-    )
-    monkeypatch.setattr(mail, "get_settings", lambda: settings)
+def test_legacy_gmail_message_uses_safe_sender_and_subject_search() -> None:
     email = EmailMessage(
         user_id=1,
         recipient_email="candidate@gmail.com",
@@ -210,16 +201,16 @@ def test_legacy_gmail_message_uses_safe_sender_and_subject_search(monkeypatch) -
         subject='Interview "next steps"',
         body="This private body must not be included",
         message_id=None,
-        delivered_via_smtp=False,
+        delivered_via_smtp=True,
     )
     url = mail.visible_gmail_url(email, "candidate@gmail.com")
-    assert url == (
-        "https://mail.google.com/mail/?authuser=candidate%40gmail.com"
-        "#search/from%3Arecruiter%40company.com%20subject%3A%22Interview%20%22next%20steps%22%22"
-    )
+    assert url is not None
+    assert "from%3Arecruiter%40company.com" in url
+    assert "subject%3A%22Interview" in url
+    assert "in%3Aanywhere" in url
+    assert "after%3A" in url and "before%3A" in url
+    assert "rfc822msgid" not in url
     assert "private" not in url
 
-    monkeypatch.setattr(mail, "get_settings", lambda: SimpleNamespace(
-        mail_server=None, mail_username=None, mail_password=None
-    ))
+    email.delivered_via_smtp = False
     assert mail.visible_gmail_url(email, "candidate@gmail.com") is None

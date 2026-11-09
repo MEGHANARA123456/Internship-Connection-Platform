@@ -4,13 +4,13 @@ import { Link } from 'react-router-dom'
 import { isKnownInternalRoute } from './safeRoutes'
 import { SafeText } from './safeText'
 import { PersonalSummaryCard } from './PersonalSummaryCard'
-import type { ChatMessage, ChatSourceType } from './types'
+import type { ChatFeedbackSourceType, ChatMessage } from './types'
 
 interface MessageListProps {
   messages: ChatMessage[]
   typing: boolean
   onSend: (question: string) => Promise<boolean>
-  onFeedback: (turnId: string, rating: 'up' | 'down', sourceType: ChatSourceType) => Promise<boolean>
+  onFeedback: (turnId: string, rating: 'up' | 'down', sourceType: ChatFeedbackSourceType) => Promise<boolean>
 }
 
 function uniqueByRoute<T extends { route: string }>(
@@ -51,7 +51,7 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
   const submitFeedback = async (
     messageId: string,
     rating: 'up' | 'down',
-    sourceType: ChatSourceType,
+    sourceType: ChatFeedbackSourceType,
   ) => {
     const sent = await onFeedback(messageId, rating, sourceType)
     setFeedback((current) => ({ ...current, [messageId]: sent ? rating : 'error' }))
@@ -72,20 +72,25 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
       {messages.map((message) => (
         <article key={message.id} className={`max-w-[92%] rounded-2xl px-3 py-2.5 ${message.role === 'user' ? 'ml-auto bg-indigo-600 text-white' : 'mr-auto border border-slate-200 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'}`}>
           <SafeText text={message.content} />
+          {message.needsClarification && (
+            <p role="status" className="mt-2 text-xs font-semibold text-amber-800 dark:text-amber-200">
+              Please clarify
+            </p>
+          )}
           {message.summary && <PersonalSummaryCard summary={message.summary} />}
           {uniqueByRoute(message.links).map((link) => (
             <Link key={`${link.route}-${link.label}`} to={link.route} className="mt-2 inline-flex rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-200 dark:hover:bg-indigo-900">
               {link.label} →
             </Link>
           ))}
-          {message.sourceType && (
+          {message.sourceType && message.sourceType !== 'none' && (
             <span className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-100">
-              {message.sourceType === 'docs' ? 'Help docs' : message.sourceType === 'live data' ? 'Your live data' : 'Help docs + your live data'}
+              {message.sourceType === 'docs' ? 'General help' : message.sourceType === 'live data' ? 'Live platform data' : 'General help + live platform data'}
             </span>
           )}
           {message.noEvidence && (
             <div className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950/50 dark:text-amber-100">
-              <p>Couldn’t find this in the help docs. Try asking about one of these topics:</p>
+              <p>Here are related questions I can help with:</p>
               <div className="mt-1 flex flex-wrap gap-1">
                 {[...new Set(message.suggestedFollowups)].map((question) => (
                   <button key={question} type="button" disabled={typing} onClick={() => void onSend(question)} className="rounded-full border border-amber-300 px-2 py-1 text-[10px] font-medium hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:hover:bg-amber-900">
@@ -99,7 +104,7 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
             <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-200/70 pt-2 text-[10px] dark:border-slate-600">
               {uniqueByRoute(message.sources, new Set((message.links ?? []).map((link) => link.route))).map((source) => (
                 <Link key={source.id} to={source.route} className="rounded-full bg-indigo-50 px-2.5 py-1 font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-200 dark:hover:bg-indigo-900">
-                  {source.title}
+                  Go to page: {source.title}
                 </Link>
               ))}
             </div>
@@ -113,7 +118,7 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
               </button>
             )}
           </div>
-          {message.role === 'assistant' && message.sourceType && (
+          {message.role === 'assistant' && message.sourceType && message.sourceType !== 'none' && (
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
               {[...new Set(message.suggestedFollowups)].filter(() => !message.noEvidence).map((question) => (
                 <button key={question} type="button" disabled={typing} onClick={() => void onSend(question)} className="rounded-full border border-slate-300 px-2 py-1 text-[10px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
@@ -126,7 +131,9 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
                 title="Helpful"
                 disabled={feedback[message.id] === 'up' || feedback[message.id] === 'down'}
                 onClick={() => {
-                  if (message.sourceType) void submitFeedback(message.id, 'up', message.sourceType)
+                  if (message.sourceType && message.sourceType !== 'none') {
+                    void submitFeedback(message.id, 'up', message.sourceType)
+                  }
                 }}
                 className="rounded p-1 text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:opacity-60 dark:text-slate-300 dark:hover:bg-slate-700"
               >
@@ -138,7 +145,9 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
                 title="Not helpful"
                 disabled={feedback[message.id] === 'up' || feedback[message.id] === 'down'}
                 onClick={() => {
-                  if (message.sourceType) void submitFeedback(message.id, 'down', message.sourceType)
+                  if (message.sourceType && message.sourceType !== 'none') {
+                    void submitFeedback(message.id, 'down', message.sourceType)
+                  }
                 }}
                 className="rounded p-1 text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:opacity-60 dark:text-slate-300 dark:hover:bg-slate-700"
               >

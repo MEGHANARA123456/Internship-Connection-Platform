@@ -23,6 +23,7 @@ export const USER_SCOPED_KEYS = [
   'internsphere_resume_builder',
   'student_github_handle',
   'student_leetcode_handle',
+  'internsphere_recent_searches',
 ]
 const SESSION_KEY = 'session'
 const SESSION_CHANGED_NOTICE_KEY = 'session_changed_notice'

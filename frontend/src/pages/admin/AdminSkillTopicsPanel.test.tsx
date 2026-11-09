@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../api/client'
 import { AdminSkillTopicsPanel } from './AdminSkillTopicsPanel'
@@ -77,11 +77,19 @@ describe('AdminSkillTopicsPanel', () => {
 
   it('shows an empty state and allows retry when topic analytics fail', async () => {
     vi.mocked(api.get).mockRejectedValueOnce(new Error('offline'))
-    render(<AdminSkillTopicsPanel />)
-    expect(await screen.findByRole('alert')).toHaveTextContent('Topic analytics could not be loaded.')
+    const onNotice = vi.fn()
+    render(<AdminSkillTopicsPanel onNotice={onNotice} />)
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith(expect.objectContaining({
+        title: "Couldn't load topics",
+        sectionKey: 'topics',
+        retry: expect.any(Function),
+      }))
+    })
 
     vi.mocked(api.get).mockResolvedValueOnce({ data: [] } as never)
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    const retry = onNotice.mock.calls[0][0].retry
+    await act(async () => retry?.())
     expect(await screen.findByText('No assessment topics are configured yet.')).toBeInTheDocument()
   })
 
@@ -110,7 +118,7 @@ describe('AdminSkillTopicsPanel', () => {
     })
   })
 
-  it('creates a new inactive topic through the topic form', async () => {
+  it('creates a new topic without a topic-level active flag', async () => {
     vi.mocked(api.get).mockImplementation(async (url) => {
       if (url.startsWith('/skills/admin/skill-topics?')) return { data: [topic] } as never
       if (url.includes('/subtopics')) return { data: [] } as never
@@ -118,7 +126,7 @@ describe('AdminSkillTopicsPanel', () => {
       if (url.includes('/attempts?')) return { data: { items: [], total: 0, filtered_total: 0, page: 1, page_size: 10 } } as never
       return { data: topic } as never
     })
-    vi.mocked(api.post).mockResolvedValue({ data: { topic: 'data-science', active: false } } as never)
+    vi.mocked(api.post).mockResolvedValue({ data: { topic: 'data-science' } } as never)
 
     render(<AdminSkillTopicsPanel />)
     fireEvent.click(await screen.findByRole('button', { name: 'Add topic' }))
@@ -131,11 +139,10 @@ describe('AdminSkillTopicsPanel', () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledWith('/skills/admin/skill-topics', expect.objectContaining({
       topic: 'data-science',
       name: 'Data Science',
-      active: false,
     })))
   })
 
-  it('shows topic impact and blocks archiving while a non-expired attempt is in progress', async () => {
+  it('allows archiving while an in-progress attempt can finish or expire', async () => {
     const inactiveTopic = { ...topic, active: false }
     vi.mocked(api.get).mockImplementation(async (url) => {
       if (url.startsWith('/skills/admin/skill-topics?')) return { data: [inactiveTopic] } as never
@@ -157,9 +164,14 @@ describe('AdminSkillTopicsPanel', () => {
 
     render(<AdminSkillTopicsPanel />)
     fireEvent.click(await screen.findByRole('button', { name: 'Archive Python' }))
-    expect(await screen.findByText(/Wait until all 1 non-expired attempt/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Archive topic' })).toBeDisabled()
+    const dialog = await screen.findByRole('dialog', { name: 'Archive skill topic?' })
+    expect(dialog).toHaveTextContent('In-progress attempts may finish or expire normally')
     expect(screen.getByText('1 (0 completed, 0 expired, 1 in progress)')).toBeInTheDocument()
-    expect(api.post).not.toHaveBeenCalled()
+    const archiveButton = within(dialog).getByRole('button', { name: 'Archive topic' })
+    expect(archiveButton).toBeEnabled()
+    fireEvent.click(archiveButton)
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith('/skills/admin/skill-topics/python/archive')
+    })
   })
 })

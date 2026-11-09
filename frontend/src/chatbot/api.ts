@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { api } from '../api/client'
-import type { ChatPage, ChatResponse, ChatRole, ChatSourceType, ChatbotStatus } from './types'
+import type { ChatFeedbackSourceType, ChatPage, ChatResponse, ChatRole, ChatbotStatus } from './types'
 
 class InvalidChatbotResponseError extends Error {}
 
@@ -33,7 +33,7 @@ function isChatResponse(value: unknown): value is ChatResponse {
       && typeof source.route === 'string'
     ))
     && 'source_type' in value
-    && (value.source_type === 'docs' || value.source_type === 'live data' || value.source_type === 'docs + live data')
+    && (value.source_type === 'docs' || value.source_type === 'live data' || value.source_type === 'docs + live data' || value.source_type === 'none')
     && 'suggested_followups' in value
     && Array.isArray(value.suggested_followups)
     && value.suggested_followups.every((item) => typeof item === 'string')
@@ -41,6 +41,8 @@ function isChatResponse(value: unknown): value is ChatResponse {
     && typeof value.category === 'string'
     && 'refused' in value
     && typeof value.refused === 'boolean'
+    && 'needs_clarification' in value
+    && (typeof value.needs_clarification === 'string' || value.needs_clarification === null)
 }
 
 function isChatbotStatus(value: unknown): value is ChatbotStatus {
@@ -50,6 +52,10 @@ function isChatbotStatus(value: unknown): value is ChatbotStatus {
     && typeof value.enabled === 'boolean'
     && 'mode' in value
     && (value.mode === 'retrieval' || value.mode === 'llm')
+    && 'retrieval' in value
+    && (value.retrieval === 'bm25' || value.retrieval === 'hybrid')
+    && 'provider_ok' in value
+    && typeof value.provider_ok === 'boolean'
     && 'provider_configured' in value
     && typeof value.provider_configured === 'boolean'
     && 'rag_enabled' in value
@@ -67,7 +73,7 @@ export interface ChatTurn {
 
 export const MAX_CHAT_MESSAGE_CHARS = 500
 const MAX_HISTORY_TURNS = 4
-const MAX_HISTORY_CHARS = 1500
+const MAX_HISTORY_CHARS = 500
 
 function plainHistoryText(content: string, limit: number): string {
   return content
@@ -89,33 +95,26 @@ function trimmedHistory(history: ChatTurn[], limit = MAX_HISTORY_CHARS): ChatTur
     .filter((turn) => turn.content.length > 0)
 }
 
-function isHistoryValidationError(error: unknown): boolean {
-  if (!axios.isAxiosError(error) || error.response?.status !== 422) return false
-  const details = error.response.data && typeof error.response.data === 'object'
-    && 'detail' in error.response.data
-    ? error.response.data.detail
-    : undefined
-  return Array.isArray(details) && details.some((item) => (
-    item !== null
-    && typeof item === 'object'
-    && 'loc' in item
-    && Array.isArray(item.loc)
-    && item.loc.includes('history')
-  ))
-}
-
-export async function askChatbot(message: string, history: ChatTurn[], page: ChatPage): Promise<ChatResponse> {
+export async function askChatbot(
+  message: string,
+  history: ChatTurn[],
+  page: ChatPage,
+  previousSuggestions: string[] = [],
+): Promise<ChatResponse> {
   const send = (turns: ChatTurn[]) => api.post<ChatResponse>(
     '/chatbot/ask',
-    { message, history: turns, page },
-    { timeout: 20_000 },
+    { message: message.slice(0, MAX_CHAT_MESSAGE_CHARS), history: turns, page, previous_suggestions: previousSuggestions.slice(-3) },
+    { timeout: 10_000 },
   )
   let response: Awaited<ReturnType<typeof send>>
   try {
     response = await send(trimmedHistory(history))
   } catch (error) {
-    if (!isHistoryValidationError(error)) throw error
-    response = await send(trimmedHistory(history, 500))
+    if (axios.isAxiosError(error) && !error.response) {
+      response = await send(trimmedHistory(history, 500))
+    } else {
+      throw error
+    }
   }
   const result: unknown = response.data
   if (!isChatResponse(result)) throw new InvalidChatbotResponseError()
@@ -132,7 +131,7 @@ export async function getChatbotStatus(): Promise<ChatbotStatus> {
 export async function sendChatbotFeedback(
   turnId: string,
   rating: 'up' | 'down',
-  sourceType: ChatSourceType,
+  sourceType: ChatFeedbackSourceType,
 ): Promise<void> {
   await api.post('/chatbot/feedback', {
     turn_id: turnId,

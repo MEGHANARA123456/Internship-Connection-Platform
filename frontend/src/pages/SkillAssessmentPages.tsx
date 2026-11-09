@@ -296,7 +296,6 @@ export function SkillAssessmentResultPage() {
                 <span className="text-xs text-slate-500">{question.difficulty.toLowerCase()} · {question.time_seconds}s · {question.earned_credit} credit</span>
               </div>
               <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">Your answer: {formatAnswer(question.selected_answer)}</p>
-              <p className="mt-1 text-sm text-indigo-700 dark:text-indigo-300">Correct answer: {formatAnswer(question.correct_answer)}</p>
               <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">{question.explanation}</p>
             </article>
           ))}

@@ -27,7 +27,6 @@ export function ChatbotWidget() {
   const session = useAuthStore((state) => state.session)
   const location = useLocation()
   const chat = useChatbot()
-  const authenticated = Boolean(session)
   const authenticationPage = isAuthenticationPage(location.pathname)
   const identity = session
     ? `${session.userId ?? ''}:${session.email?.trim().toLowerCase() ?? ''}`
@@ -38,7 +37,7 @@ export function ChatbotWidget() {
     failed: boolean
   }>({ identity: '', status: null, failed: false })
   useEffect(() => {
-    if (!authenticated || authenticationPage) return
+    if (authenticationPage) return
     let active = true
     getChatbotStatus()
       .then((currentStatus) => {
@@ -48,7 +47,7 @@ export function ChatbotWidget() {
         if (active) setStatusResult({ identity, status: null, failed: true })
       })
     return () => { active = false }
-  }, [authenticated, authenticationPage, identity])
+  }, [authenticationPage, identity])
   const status = statusResult.identity === identity ? statusResult.status : null
   const statusError = statusResult.identity === identity && statusResult.failed
   const statusDisabled = status?.enabled === false
@@ -56,7 +55,7 @@ export function ChatbotWidget() {
   const close = useCallback(() => {
     setOpen(false)
   }, [])
-  if (!authenticated || authenticationPage) return null
+  if (authenticationPage) return null
   return (
     <>
       {!open && (
@@ -80,6 +79,9 @@ export function ChatbotWidget() {
           role={chat.role}
           page={chat.page}
           mode={status?.mode}
+          retrieval={status?.retrieval}
+          ragEnabled={status?.rag_enabled}
+          indexedChunkCount={status?.indexed_chunk_count}
           online={chat.online}
           statusDisabled={statusDisabled}
           statusError={statusError}

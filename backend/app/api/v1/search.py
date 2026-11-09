@@ -1,11 +1,14 @@
 """Role-scoped global search for authenticated platform users."""
 
+from datetime import date
+from difflib import SequenceMatcher
 from typing import Annotated, Any
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import String, cast, or_, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import String, and_, cast, func, or_, select
 
-from app.api.v1.dependencies import DbSession, get_current_user
+from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional
 from app.models import (
     Application,
     AuditLog,
@@ -15,18 +18,38 @@ from app.models import (
     Internship,
     Report,
     SavedInternship,
+    SkillQuestion,
+    SkillTopic,
     StudentProfile,
     User,
     UserRole,
 )
+from app.services.search_matching import (
+    escape_search_term,
+    match_search_text,
+    normalize_search_text,
+    search_conditions,
+)
 
 router = APIRouter(tags=["search"])
+_SUGGEST_SCOPES = {
+    "all",
+    "internships",
+    "saved",
+    "applications",
+    "postings",
+    "applicants",
+    "students",
+    "companies",
+    "users",
+    "skill_topics",
+}
+_SKILL_TOPIC_POOL_REQUIREMENTS = {"EASY": 4, "MEDIUM": 4, "HARD": 2}
 
 
 def _contains(value: str) -> str:
     """Escape SQL LIKE wildcard characters and wrap a search term for a contains match."""
-    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    return f"%{escape_search_term(value)}%"
 
 
 def _item(item_id: int, title: str, subtitle: str, badge: str, url: str) -> dict[str, Any]:
@@ -39,11 +62,269 @@ def _group(group_type: str, label: str, items: list[dict[str, Any]]) -> dict[str
     return {"type": group_type, "label": label, "items": items} if items else None
 
 
+def _suggestion_match_text(text: str, query: str) -> str:
+    """Return the title word most closely matching the user's query."""
+    query_terms = normalize_search_text(query).split()
+    words = normalize_search_text(text).split()
+    if not query_terms or not words:
+        return text
+    best_word = max(
+        words,
+        key=lambda word: max(
+            (SequenceMatcher(None, term, word).ratio() for term in query_terms),
+            default=0,
+        ),
+    )
+    return best_word
+
+
+@router.get("/search/suggest")
+async def search_suggestions(
+    db: DbSession,
+    user: Annotated[User | None, Depends(get_current_user_optional)],
+    q: str = Query("", max_length=100),
+    scope: str = Query("all"),
+) -> dict[str, list[dict[str, Any]]]:
+    """Suggest role-visible titles, companies, and skills without exposing applicant PII."""
+    if scope not in _SUGGEST_SCOPES:
+        raise HTTPException(422, "Unsupported suggestion scope")
+    if len(normalize_search_text(q)) < 2:
+        return {"items": []}
+
+    role = user.role if user is not None else None
+    if scope in {"students", "companies", "users"} and role != UserRole.ADMIN:
+        raise HTTPException(403, "Directory suggestions are admin-only")
+    if scope in {"postings", "applicants"} and role not in {UserRole.COMPANY, UserRole.ADMIN}:
+        raise HTTPException(403, "Posting suggestions are not available for this role")
+    if scope in {"saved", "applications"} and role != UserRole.STUDENT:
+        raise HTTPException(403, "Student application suggestions are not available for this role")
+
+    if scope == "users":
+        users = list(
+            (
+                await db.execute(
+                    select(User.id, User.email, User.role)
+                    .order_by(User.id.desc())
+                    .limit(1000)
+                )
+            ).all()
+        )
+        candidates = [
+            {
+                "id": item.id,
+                "text": item.email,
+                "kind": "user",
+                "subtitle": item.role.value.title(),
+                "url": "/admin/users",
+            }
+            for item in users
+        ]
+    elif scope == "students":
+        profiles = list(
+            (
+                await db.execute(
+                    select(StudentProfile.user_id, StudentProfile.skills, StudentProfile.university, StudentProfile.major)
+                    .order_by(StudentProfile.user_id.desc())
+                    .limit(1000)
+                )
+            ).all()
+        )
+        candidates = [
+            {
+                "id": profile.user_id,
+                "text": value.strip(),
+                "kind": "skill",
+                "subtitle": "Student profile search term",
+                "url": "/admin/students",
+            }
+            for profile in profiles
+            for value in (profile.skills or "").split(",") + [profile.university or "", profile.major or ""]
+            if value.strip()
+        ]
+    elif scope == "companies":
+        companies = list(
+            (
+                await db.execute(
+                    select(CompanyProfile.user_id, CompanyProfile.company_name, CompanyProfile.industry, CompanyProfile.location)
+                    .order_by(CompanyProfile.company_name)
+                    .limit(1000)
+                )
+            ).all()
+        )
+        candidates = [
+            {
+                "id": company.user_id,
+                "text": value.strip(),
+                "kind": "company",
+                "subtitle": "Company profile search term",
+                "url": "/admin/companies",
+            }
+            for company in companies
+            for value in (company.company_name or "", company.industry or "", company.location or "")
+            if value.strip()
+        ]
+    elif scope == "skill_topics":
+        topic_query = select(SkillTopic).where(SkillTopic.archived_at.is_(None))
+        if role != UserRole.ADMIN:
+            question_rows = (await db.execute(
+                select(SkillQuestion.topic, SkillQuestion.difficulty, func.count(SkillQuestion.id))
+                .where(SkillQuestion.active.is_(True))
+                .group_by(SkillQuestion.topic, SkillQuestion.difficulty)
+            )).all()
+            counts: dict[str, dict[str, int]] = {}
+            for topic_id, difficulty, count in question_rows:
+                counts.setdefault(topic_id, {})[difficulty.upper()] = int(count)
+            ready_topics = {
+                topic_id for topic_id, pool in counts.items()
+                if all(
+                    pool.get(difficulty, 0) >= needed
+                    for difficulty, needed in _SKILL_TOPIC_POOL_REQUIREMENTS.items()
+                )
+            }
+            if ready_topics:
+                topic_query = topic_query.where(SkillTopic.slug.in_(ready_topics))
+            else:
+                topic_query = topic_query.where(SkillTopic.slug == "")
+        topics = list(await db.scalars(topic_query.order_by(SkillTopic.name)))
+        topic_items = [(topic.slug, topic.name) for topic in topics]
+        if role != UserRole.ADMIN:
+            known_topic_slugs = set(await db.scalars(select(SkillTopic.slug)))
+            topic_items.extend(
+                (topic_id, topic_id.replace("-", " ").replace("_", " ").title())
+                for topic_id in sorted(ready_topics - known_topic_slugs)
+            )
+        candidates = [
+            {
+                "id": index,
+                "text": name,
+                "kind": "skill",
+                "subtitle": "Skill assessment topic",
+                "url": "/admin/skill-assessments" if role == UserRole.ADMIN else "/profile/student",
+            }
+            for index, (_, name) in enumerate(topic_items, start=1)
+        ]
+    else:
+        candidates = []
+    internship_query = (
+        select(Internship, CompanyProfile.company_name)
+        .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
+        .order_by(Internship.created_at.desc())
+    )
+    if role == UserRole.STUDENT:
+        own_applications = Internship.id.in_(
+            select(Application.internship_id).where(Application.student_id == user.id)
+        )
+        public_postings = and_(
+            Internship.status == "PUBLISHED",
+            Internship.deadline >= date.today(),
+        )
+        internship_query = internship_query.where(
+            own_applications
+            if scope == "applications"
+            else or_(public_postings, own_applications)
+            if scope == "all"
+            else public_postings
+        )
+    elif role is None:
+        internship_query = internship_query.where(
+            Internship.status == "PUBLISHED",
+            Internship.deadline >= date.today(),
+        )
+    elif role == UserRole.COMPANY:
+        internship_query = internship_query.where(Internship.company_id == user.id)
+    if scope == "saved" and role == UserRole.STUDENT:
+        internship_query = internship_query.where(
+            Internship.id.in_(
+                select(SavedInternship.internship_id).where(SavedInternship.student_id == user.id)
+            )
+        )
+    elif scope == "applications" and role == UserRole.STUDENT:
+        internship_query = internship_query.where(
+            Internship.id.in_(
+                select(Application.internship_id).where(Application.student_id == user.id)
+            )
+        )
+    elif scope == "applicants" and role == UserRole.COMPANY:
+        internship_query = internship_query.where(
+            Internship.id.in_(
+                select(Application.internship_id)
+                .join(Internship, Internship.id == Application.internship_id)
+                .where(Internship.company_id == user.id)
+            )
+        )
+
+    if scope not in {"users", "students", "companies", "skill_topics"}:
+        postgres = db.get_bind().dialect.name == "postgresql"
+        if postgres:
+            fields = (
+                Internship.title,
+                CompanyProfile.company_name,
+                Internship.skills,
+                Internship.location,
+                Internship.industry,
+            )
+            internship_query = internship_query.where(
+                *search_conditions(q, fields, postgres=True)
+            )
+        rows = (await db.execute(internship_query.limit(1000))).all()
+        for internship, company_name in rows:
+            base_url = (
+                f"/company/internships/{internship.id}/edit"
+                if role == UserRole.COMPANY
+                else f"/opportunities/{internship.id}"
+            )
+            candidates.append(
+                {
+                    "id": internship.id,
+                    "text": internship.title,
+                    "kind": "internship",
+                    "subtitle": company_name or "Internship",
+                    "url": base_url,
+                }
+            )
+            if company_name:
+                candidates.append(
+                    {
+                        "id": internship.company_id,
+                        "text": company_name,
+                        "kind": "company",
+                        "subtitle": "Company",
+                        "url": f"/opportunities?search={quote(company_name)}",
+                    }
+                )
+            for skill in (internship.skills or "").split(","):
+                if skill.strip():
+                    candidates.append(
+                        {
+                            "id": internship.id,
+                            "text": skill.strip(),
+                            "kind": "skill",
+                            "subtitle": internship.title,
+                            "url": base_url,
+                        }
+                    )
+
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    seen: set[tuple[str, str]] = set()
+    for candidate in candidates:
+        score = match_search_text(q, (candidate["text"],))
+        if score is None:
+            continue
+        key = (candidate["kind"], normalize_search_text(candidate["text"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        candidate["match_text"] = _suggestion_match_text(candidate["text"], q)
+        ranked.append((score, candidate))
+    ranked.sort(key=lambda result: (result[0], result[1]["kind"] == "internship"), reverse=True)
+    return {"items": [candidate for _, candidate in ranked[:8]]}
+
+
 @router.get("/search")
 async def global_search(
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
-    q: str = Query(""),
+    q: str = Query("", max_length=100),
     limit: int = Query(5, ge=1, le=20),
 ) -> dict[str, list[dict[str, Any]]]:
     """Search only records visible to the authenticated user's role."""

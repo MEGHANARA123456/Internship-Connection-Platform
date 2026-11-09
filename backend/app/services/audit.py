@@ -55,8 +55,15 @@ class AuditEventSummary:
     actor_id: int | None
     actor_role: str | None
     target_type: str | None
-    target_id: int | None
+    target_id: int | str | None
     created_at: datetime
+
+
+def audit_target_id_response(target_id: int | str | None) -> int | str | None:
+    """Keep numeric audit IDs numeric in API responses while supporting string keys."""
+    if isinstance(target_id, str) and target_id.isdecimal():
+        return int(target_id)
+    return target_id
 
 
 async def get_recent_admin_audit_events(
@@ -79,7 +86,7 @@ async def get_recent_admin_audit_events(
             actor_id=audit_log.actor_id,
             actor_role=actor_role.value if actor_role is not None else None,
             target_type=audit_log.target_type,
-            target_id=audit_log.target_id,
+            target_id=audit_target_id_response(audit_log.target_id),
             created_at=audit_log.created_at,
         )
         for audit_log, actor_role in rows
@@ -91,7 +98,7 @@ async def write_audit(
     actor: User | None,
     action: str,
     target_type: str | None = None,
-    target_id: int | None = None,
+    target_id: int | str | None = None,
     metadata: dict[str, Any] | None = None,
     ip_address: str | None = None,
 ) -> AuditLog:
@@ -121,7 +128,7 @@ async def write_audit(
         actor_email=actor.email if actor else None,
         action=action,
         target_type=target_type,
-        target_id=target_id,
+        target_id=str(target_id) if target_id is not None else None,
         metadata_=metadata,
         ip_address=ip_address,
     )

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, downloadAuthenticatedFile } from '../api/client'
@@ -11,6 +11,8 @@ import { TableSkeleton, CardSkeleton } from '../components/ui/LoadingSkeleton'
 import { ErrorState } from '../components/ui/ErrorState'
 import { Modal } from '../components/ui/Modal'
 import { Textarea } from '../components/ui/Textarea'
+import { SearchBox } from '../components/ui/SearchBox'
+import { searchTextMatches, stripMarkdownPreview } from '../lib/search'
 import {
   Users,
   ShieldCheck,
@@ -18,7 +20,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   XCircle,
-  Search,
   ExternalLink,
   Ban,
   RotateCcw,
@@ -613,7 +614,7 @@ export function AdminUsersPage() {
   }
 
   const filtered = users.filter((u) => {
-    const matchesSearch = u.email.toLowerCase().includes(search.toLowerCase())
+    const matchesSearch = searchTextMatches(search, [u.email])
     const matchesRole = roleFilter ? u.role === roleFilter : true
     return matchesSearch && matchesRole
   })
@@ -640,16 +641,14 @@ export function AdminUsersPage() {
 
       {/* Filter Bar */}
       <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-900 sm:flex-row">
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-          <input
-            type="text"
-            placeholder="Search users by email..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-          />
-        </div>
+        <SearchBox
+          ariaLabel="Search users by email"
+          value={search}
+          onChange={setSearch}
+          scope="users"
+          placeholder="Search users by email..."
+          className="flex-1 text-xs"
+        />
 
         <DropdownSelect aria-label="Filter users by role" value={roleFilter} onChange={setRoleFilter} options={[{ label: 'All Roles', value: '' }, { label: 'Student', value: 'STUDENT' }, { label: 'Company', value: 'COMPANY' }, { label: 'Admin', value: 'ADMIN' }]} />
         <span className="self-center whitespace-nowrap text-xs font-semibold text-slate-500 dark:text-slate-400">{users.length} users</span>
@@ -1204,7 +1203,7 @@ export function AdminModerationPage() {
                     {job.duration_months} mo • {job.work_mode}
                   </p>
                   <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-md border border-slate-100 mt-2 leading-relaxed">
-                    {job.description}
+                    {stripMarkdownPreview(job.description || '')}
                   </p>
                 </div>
 
@@ -1489,7 +1488,7 @@ export function AdminAuditLogsPage() {
   const [page, setPage] = useState(1)
   const [actor, setActor] = useState('')
   const [action, setAction] = useState(() => searchParams.get('action') || '')
-  const [range] = useState(() => searchParams.get('range') === '14d' ? '14d' : '')
+  const [range, setRange] = useState(() => searchParams.get('range') || '')
   const [targetType, setTargetType] = useState('')
   const [targetSearch, setTargetSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -1504,6 +1503,10 @@ export function AdminAuditLogsPage() {
     setTotal(res.data.total || 0)
   }
   useEffect(() => { fetchLogs() }, [page, actor, action, range, targetType, targetSearch, dateFrom, dateTo])
+
+  useEffect(() => {
+    setRange(searchParams.get('range') || '')
+  }, [searchParams])
 
   useEffect(() => {
     const next = new URLSearchParams()
@@ -1523,8 +1526,16 @@ export function AdminAuditLogsPage() {
   const targetLabel = (value?: string | null) => {
     if (!value) return null
     if (value.toLowerCase() === 'posting' || value.toLowerCase() === 'internship') return 'Internship'
+    if (value.toLowerCase() === 'skill_topic') return 'Skill topic'
+    if (value.toLowerCase() === 'skill_question') return 'Skill question'
+    if (value.toLowerCase() === 'skill_learning_resource') return 'Learning resource'
     return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase()
   }
+  const activeWindow = range === 'all'
+    ? 'All time'
+    : range
+      ? `Last ${range.replace('d', '')} days`
+      : 'All time'
 
   return (
     <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
@@ -1548,23 +1559,37 @@ export function AdminAuditLogsPage() {
           { label: 'Company', value: 'company' },
           { label: 'Internship', value: 'internship' },
           { label: 'Report', value: 'report' },
+          { label: 'Skill topic', value: 'skill_topic' },
+          { label: 'Skill question', value: 'skill_question' },
+          { label: 'Learning resource', value: 'skill_learning_resource' },
         ]} />
-        <input value={targetSearch} onChange={(event) => { setPage(1); setTargetSearch(event.target.value) }} placeholder="Search target" className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 text-sm" />
+        <SearchBox
+          ariaLabel="Search audit targets"
+          value={targetSearch}
+          onChange={(value) => { setPage(1); setTargetSearch(value) }}
+          scope="all"
+          placeholder="Search target"
+          className="h-10 min-w-0 flex-1"
+        />
 
         <label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-slate-500">From<input type="date" value={dateFrom} onChange={(event) => { setPage(1); setDateFrom(event.target.value) }} className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm text-slate-700" />
         </label><label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-slate-500">To<input type="date" value={dateTo} onChange={(event) => { setPage(1); setDateTo(event.target.value) }} className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm text-slate-700" /></label></div>
       {logs.length === 0 ? <EmptyState icon={ClipboardList} title="No audit events" description="No actions match the current filters." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Actor</th><th className="p-3">Action</th><th className="p-3">Target</th><th className="p-3">Timestamp</th><th className="p-3" /></tr></thead><tbody className="divide-y divide-slate-100">{logs.map((log) => {
         const typeLabel = targetLabel(log.target_type)
         const isDeleted = String(log.target_label || '').startsWith('Deleted ')
+        const resolvedTarget = log.target_label
+          || (log.target_type
+            ? `${typeLabel || 'Target'}${log.target_id == null ? '' : ` #${log.target_id}`}`
+            : null)
         return <tr key={log.id}>
           <td className="p-3 text-slate-700">{log.actor_email ? <span className="inline-flex flex-wrap items-center gap-1.5">{log.actor_email}{log.actor_role && <Badge status={log.actor_role} className="px-1.5 py-0 text-[9px]">{log.actor_role}</Badge>}</span> : 'System'}</td>
           <td className="p-3"><span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${actionColor(log.action)}`}>{auditActionLabel(log.action)}</span></td>
-          <td className="p-3 text-slate-600">{!log.target_type || log.target_id == null ? '—' : <span className="inline-flex flex-wrap items-center gap-1.5"><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-300">{typeLabel || 'Target'}</span><span className={isDeleted ? 'text-slate-400 italic' : ''}>{log.target_label || `Deleted ${typeLabel?.toLowerCase() || 'target'}`}</span>{log.target_url && <Link to={log.target_url} className="font-semibold text-indigo-600 hover:underline dark:text-indigo-400">View</Link>}</span>}</td>
+          <td className="p-3 text-slate-600">{!resolvedTarget ? '—' : <span className="inline-flex flex-wrap items-center gap-1.5">{log.target_type && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-300">{typeLabel || 'Target'}</span>}{log.target_url ? <Link to={log.target_url} className={`hover:underline ${isDeleted ? 'text-slate-400 italic' : 'font-medium text-indigo-600 dark:text-indigo-400'}`}>{resolvedTarget}</Link> : <span className={isDeleted ? 'text-slate-400 italic' : ''}>{resolvedTarget}</span>}</span>}</td>
           <td className="p-3 text-slate-500">{new Date(log.created_at).toLocaleString()}</td>
           <td className="p-3 text-right"><Button size="sm" variant="outline" onClick={() => setExpanded(expanded === log.id ? null : log.id)} leftIcon={expanded === log.id ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}>Metadata</Button>{expanded === log.id && <pre className="mt-2 max-w-xs overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-left text-[10px] text-emerald-300">{JSON.stringify(log.metadata || {}, null, 2)}</pre>}</td>
         </tr>
       })}</tbody></table></div>}
-      <div className="flex items-center justify-between text-xs text-slate-500"><span>{total} total events</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</Button><span className="px-2 py-2">Page {page}</span><Button size="sm" variant="outline" disabled={page * pageSize >= total} onClick={() => setPage((current) => current + 1)}>Next</Button></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500"><span>{total} events · {activeWindow}</span><div className="flex items-center gap-2">{range && range !== 'all' && <Button size="sm" variant="outline" onClick={() => { setPage(1); setRange('') }}>Show all time</Button>}<Button size="sm" variant="outline" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</Button><span className="px-2 py-2">Page {page}</span><Button size="sm" variant="outline" disabled={page * pageSize >= total} onClick={() => setPage((current) => current + 1)}>Next</Button></div></div>
     </div>
   )
 }
@@ -1577,23 +1602,15 @@ type AdminSkillQuestion = {
   options: string[]
   correct_index: number
   correct_answers: number[] | null
+  correct_option_number?: number
+  correct_option_numbers?: number[]
+  key_reviewed_at?: string | null
+  key_reviewed_by?: number | null
   explanation: string
   difficulty: string
   question_type: string
   source: string
   active: boolean
-}
-
-type SkillTopicStats = {
-  topic: string
-  attempts: number
-  pass_rate: number
-  average_score: number | null
-  active_questions: number
-  difficulty_pool_sizes: Record<string, number>
-  bank_warnings: string[]
-  weakest_subtopics: Array<{ subtopic: string; average_percentage: number; attempts: number }>
-  hardest_questions: Array<{ question_id: number; prompt: string; attempts: number; correct_rate: number | null }>
 }
 
 type AdminLearningResource = {
@@ -1605,6 +1622,18 @@ type AdminLearningResource = {
   active: boolean
 }
 
+type AdminPageNotice = {
+  id: number
+  kind: 'error' | 'success'
+  title: string
+  message: string
+  details?: Array<{ row?: number; field?: string; message?: string }>
+  retry?: () => void
+  sectionKey?: string
+}
+
+type AdminPageNoticeInput = Omit<AdminPageNotice, 'id'>
+
 const SKILL_FORM_FIELD_CLASS = 'h-10 w-full rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500 disabled:cursor-not-allowed disabled:opacity-60'
 
 const EMPTY_SKILL_QUESTION = {
@@ -1612,7 +1641,7 @@ const EMPTY_SKILL_QUESTION = {
   subtopic: 'general',
   prompt: '',
   options: '',
-  correct_index: '0',
+  correct_index: '1',
   correct_answers: '',
   explanation: '',
   difficulty: 'MEDIUM',
@@ -1623,29 +1652,82 @@ const EMPTY_SKILL_QUESTION = {
 export function AdminSkillAssessmentsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { session } = useAuthStore()
+  const sessionUserId = session?.userId
   const selectedTopic = searchParams.get('topic') ?? ''
   const [questions, setQuestions] = useState<AdminSkillQuestion[]>([])
-  const [stats, setStats] = useState<SkillTopicStats[]>([])
+  const [keyReviewQuestions, setKeyReviewQuestions] = useState<AdminSkillQuestion[]>([])
+  const [keyReviewNumbers, setKeyReviewNumbers] = useState<Record<number, string>>({})
   const [topicOptions, setTopicOptions] = useState<string[]>([])
   const [subtopicOptions, setSubtopicOptions] = useState<string[]>(['general'])
-  const [subtopicError, setSubtopicError] = useState('')
   const [resources, setResources] = useState<AdminLearningResource[]>([])
   const [resourceSubtopicFilter, setResourceSubtopicFilter] = useState('ALL')
   const [resourceDraft, setResourceDraft] = useState({ topic: '', subtopic: 'general', title: '', url: '' })
   const [editingResourceId, setEditingResourceId] = useState<number | null>(null)
   const [draft, setDraft] = useState(EMPTY_SKILL_QUESTION)
   const [editingId, setEditingId] = useState<number | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [sectionLoading, setSectionLoading] = useState({
+    questions: true,
+    resources: true,
+    keyReview: true,
+  })
+  const [sectionErrors, setSectionErrors] = useState({
+    questions: false,
+    resources: false,
+    keyReview: false,
+  })
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+  const [notices, setNotices] = useState<AdminPageNotice[]>([])
+  const bannerRef = useRef<HTMLDivElement | null>(null)
+  const nextNoticeId = useRef(0)
+  const noticeTimers = useRef(new Map<number, number>())
   const importPartial = true
   const [importTopic, setImportTopic] = useState('')
-  const [importStatus, setImportStatus] = useState<{ imported: number; errors: Array<{ row?: number; field?: string; message?: string }> }>({ imported: 0, errors: [] })
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
   const [resourceValidationErrors, setResourceValidationErrors] = useState<Record<string, string>>({})
   const loadController = useRef<AbortController | null>(null)
   const subtopicController = useRef<AbortController | null>(null)
+
+  const dismissNotice = useCallback((noticeId: number) => {
+    const timerId = noticeTimers.current.get(noticeId)
+    if (timerId !== undefined) window.clearTimeout(timerId)
+    noticeTimers.current.delete(noticeId)
+    setNotices((current) => current.filter((notice) => notice.id !== noticeId))
+  }, [])
+
+  const addNotice = useCallback((notice: AdminPageNoticeInput) => {
+    if (notice.sectionKey) {
+      setNotices((current) => current.filter((item) => item.sectionKey !== notice.sectionKey))
+    }
+    const id = ++nextNoticeId.current
+    setNotices((current) => [...current.filter((item) => !notice.sectionKey || item.sectionKey !== notice.sectionKey), { ...notice, id }])
+    if (notice.kind === 'success') {
+      const timerId = window.setTimeout(() => dismissNotice(id), 5000)
+      noticeTimers.current.set(id, timerId)
+    }
+  }, [dismissNotice])
+
+  const resolveSectionNotice = useCallback((sectionKey: string) => {
+    setNotices((current) => current.filter((notice) => notice.sectionKey !== sectionKey))
+  }, [])
+
+  const reportError = useCallback((
+    title: string,
+    message: string,
+    retry?: () => void,
+    sectionKey?: string,
+    details?: AdminPageNoticeInput['details'],
+  ) => {
+    addNotice({ kind: 'error', title, message, retry, sectionKey, details })
+  }, [addNotice])
+
+  const reportSuccess = useCallback((message: string) => {
+    addNotice({ kind: 'success', title: 'Success', message })
+  }, [addNotice])
+  const setLoadedTopicOptions = useCallback((topics: string[]) => setTopicOptions(topics), [])
+
+  useEffect(() => () => {
+    for (const timerId of noticeTimers.current.values()) window.clearTimeout(timerId)
+  }, [])
 
   const fieldClassName = (field: string) => `${SKILL_FORM_FIELD_CLASS} ${validationErrors[field] ? 'border-rose-400 focus-visible:ring-rose-500' : 'border-slate-300 focus-visible:border-indigo-500 focus-visible:ring-indigo-500 dark:border-slate-700'}`
   const resourceFieldClassName = (field: string) => `${SKILL_FORM_FIELD_CLASS} ${resourceValidationErrors[field] ? 'border-rose-400 focus-visible:ring-rose-500' : 'border-slate-300 focus-visible:border-indigo-500 focus-visible:ring-indigo-500 dark:border-slate-700'}`
@@ -1669,6 +1751,12 @@ export function AdminSkillAssessmentsPage() {
     })
   }
 
+  const parseOptionNumbers = (values: string) => {
+    const rawNumbers = values.split(',').map((value) => value.trim())
+    if (!rawNumbers.length || rawNumbers.some((value) => !/^[1-9]\d*$/.test(value))) return []
+    return rawNumbers.map(Number)
+  }
+
   const validateQuestionDraft = (nextDraft: typeof draft = draft) => {
     const nextErrors: Record<string, string> = {}
     if (!nextDraft.topic.trim()) nextErrors.topic = 'Topic is required.'
@@ -1677,13 +1765,17 @@ export function AdminSkillAssessmentsPage() {
     const optionLines = nextDraft.options.split(/\r?\n/).map((option) => option.trim()).filter(Boolean)
     if (optionLines.length < 2) nextErrors.options = 'Add at least two answer options.'
     if (!nextDraft.explanation.trim()) nextErrors.explanation = 'Explanation is required.'
+    const optionNumbers = parseOptionNumbers(nextDraft.correct_answers)
     if (nextDraft.question_type === 'MULTI') {
-      const indexes = nextDraft.correct_answers.split(',').map((value) => Number(value.trim())).filter((value) => Number.isInteger(value))
-      if (indexes.length === 0) nextErrors.correct_answers = 'Provide at least one valid correct-answer index.'
+      if (optionNumbers.length < 2 || optionNumbers.some((number) => number > optionLines.length)) {
+        nextErrors.correct_answers = `Choose at least two option numbers from 1 to ${optionLines.length}.`
+      } else if (new Set(optionNumbers).size !== optionNumbers.length) {
+        nextErrors.correct_answers = 'Choose each correct option number only once.'
+      }
     } else {
       const indexValue = Number(nextDraft.correct_index)
-      if (!Number.isInteger(indexValue) || indexValue < 0 || indexValue >= optionLines.length) {
-        nextErrors.correct_index = 'Correct index must match one of the listed options.'
+      if (!Number.isInteger(indexValue) || indexValue < 1 || indexValue > optionLines.length) {
+        nextErrors.correct_index = `Choose a number from 1 to ${optionLines.length}.`
       }
     }
     if (!nextDraft.source.trim()) nextErrors.source = 'Source is required.'
@@ -1702,39 +1794,165 @@ export function AdminSkillAssessmentsPage() {
     return Object.keys(nextErrors).length === 0
   }
 
-  const load = async () => {
+  const loadQuestionBank = useCallback(async function loadQuestionBank(signal?: AbortSignal) {
     if (!selectedTopic) {
-      setLoading(false)
+      setQuestions([])
+      setSectionErrors((current) => ({ ...current, questions: false }))
+      setSectionLoading((current) => ({ ...current, questions: false }))
       return
     }
+    setSectionLoading((current) => ({ ...current, questions: true }))
+    try {
+      const response = await api.get<AdminSkillQuestion[]>(
+        `/skills/admin/questions?topic_id=${encodeURIComponent(selectedTopic)}`,
+        signal ? { signal } : undefined,
+      )
+      if (signal?.aborted) return
+      if (!Array.isArray(response.data)) throw new Error('Question bank response was not a list.')
+      setQuestions(response.data)
+      setSectionErrors((current) => ({ ...current, questions: false }))
+      resolveSectionNotice('question-bank')
+    } catch (requestError) {
+      if (signal?.aborted) return
+      console.error(`Unable to load skill question bank for ${selectedTopic}.`, requestError)
+      setSectionErrors((current) => ({ ...current, questions: true }))
+      reportError(
+        "Couldn't load question bank",
+        `Questions for ${selectedTopic} could not be loaded.`,
+        () => void loadQuestionBank(),
+        'question-bank',
+      )
+    } finally {
+      if (!signal?.aborted) setSectionLoading((current) => ({ ...current, questions: false }))
+    }
+  }, [selectedTopic, resolveSectionNotice, reportError])
+
+  const loadStudyResources = useCallback(async function loadStudyResources(signal?: AbortSignal) {
+    if (!selectedTopic) {
+      setResources([])
+      setSectionErrors((current) => ({ ...current, resources: false }))
+      setSectionLoading((current) => ({ ...current, resources: false }))
+      return
+    }
+    setSectionLoading((current) => ({ ...current, resources: true }))
+    try {
+      const response = await api.get<AdminLearningResource[]>(
+        `/skills/admin/resources?topic_id=${encodeURIComponent(selectedTopic)}`,
+        signal ? { signal } : undefined,
+      )
+      if (signal?.aborted) return
+      if (!Array.isArray(response.data)) throw new Error('Study resources response was not a list.')
+      setResources(response.data)
+      setSectionErrors((current) => ({ ...current, resources: false }))
+      resolveSectionNotice('study-resources')
+    } catch (requestError) {
+      if (signal?.aborted) return
+      console.error(`Unable to load study resources for ${selectedTopic}.`, requestError)
+      setSectionErrors((current) => ({ ...current, resources: true }))
+      reportError(
+        "Couldn't load study resources",
+        `Study resources for ${selectedTopic} could not be loaded.`,
+        () => void loadStudyResources(),
+        'study-resources',
+      )
+    } finally {
+      if (!signal?.aborted) setSectionLoading((current) => ({ ...current, resources: false }))
+    }
+  }, [selectedTopic, resolveSectionNotice, reportError])
+
+  const loadKeyReview = useCallback(async function loadKeyReview(signal?: AbortSignal) {
+    setSectionLoading((current) => ({ ...current, keyReview: true }))
+    try {
+      const response = await api.get<AdminSkillQuestion[]>(
+        '/skills/admin/questions/key-review',
+        signal ? { signal } : undefined,
+      )
+      if (signal?.aborted) return
+      if (!Array.isArray(response.data)) throw new Error('Key-review response was not a list.')
+      setKeyReviewQuestions(response.data)
+      setKeyReviewNumbers(Object.fromEntries(response.data.map((question) => [
+        question.id,
+        (question.correct_option_numbers ?? [question.correct_option_number ?? question.correct_index + 1]).join(', '),
+      ])))
+      setSectionErrors((current) => ({ ...current, keyReview: false }))
+      resolveSectionNotice('key-review')
+    } catch (requestError) {
+      if (signal?.aborted) return
+      console.error('Unable to load answer keys requiring review.', requestError)
+      setSectionErrors((current) => ({ ...current, keyReview: true }))
+      reportError(
+        "Couldn't load key review",
+        'Questions requiring key verification could not be loaded.',
+        () => void loadKeyReview(),
+        'key-review',
+      )
+    } finally {
+      if (!signal?.aborted) setSectionLoading((current) => ({ ...current, keyReview: false }))
+    }
+  }, [resolveSectionNotice, reportError])
+
+  const load = useCallback(async () => {
     loadController.current?.abort()
     const controller = new AbortController()
     loadController.current = controller
-    setLoading(true)
-    setError('')
-    try {
-      const [questionResponse, statsResponse, resourceResponse] = await Promise.all([
-        api.get(`/skills/admin/questions?topic_id=${encodeURIComponent(selectedTopic)}`, { signal: controller.signal }),
-        api.get(`/skills/admin/stats?topic_id=${encodeURIComponent(selectedTopic)}`, { signal: controller.signal }),
-        api.get(`/skills/admin/resources?topic_id=${encodeURIComponent(selectedTopic)}`, { signal: controller.signal }),
-      ])
-      if (controller.signal.aborted) return
-      setQuestions(questionResponse.data || [])
-      setStats(statsResponse.data || [])
-      setResources(resourceResponse.data || [])
-    } catch (requestError) {
-      if (controller.signal.aborted) return
-      console.error('Unable to load skill assessment administration data.', requestError)
-      setError('Could not load skill assessment questions and statistics.')
-    } finally {
-      if (!controller.signal.aborted) setLoading(false)
+    await Promise.allSettled([
+      loadQuestionBank(controller.signal),
+      loadStudyResources(controller.signal),
+      loadKeyReview(controller.signal),
+    ])
+  }, [loadQuestionBank, loadStudyResources, loadKeyReview])
+  const lastNoticeId = notices[notices.length - 1]?.id
+
+  const loadSubtopics = useCallback(async function loadSubtopics(signal?: AbortSignal) {
+    if (!selectedTopic) {
+      setSubtopicOptions(['general'])
+      resolveSectionNotice('subtopics')
+      return
     }
-  }
+    try {
+      const response = await api.get<Array<{ id: string; question_count: number }>>(
+        `/skills/admin/skill-topics/${encodeURIComponent(selectedTopic)}/subtopics`,
+        signal ? { signal } : undefined,
+      )
+      if (signal?.aborted) return
+      const available = response.data.map((item) => item.id)
+      const choices = available.length ? available : ['general']
+      setSubtopicOptions(choices)
+      let savedSubtopic: string | null = null
+      try {
+        savedSubtopic = window.sessionStorage.getItem(`admin-skill-subtopic:${sessionUserId ?? 'anonymous'}:${selectedTopic}`)
+      } catch {
+        savedSubtopic = null
+      }
+      const nextSubtopic = savedSubtopic && choices.includes(savedSubtopic) ? savedSubtopic : choices[0]
+      setDraft((current) => ({ ...current, topic: selectedTopic, subtopic: nextSubtopic }))
+      resolveSectionNotice('subtopics')
+    } catch (requestError) {
+      if (signal?.aborted) return
+      console.error(`Unable to load subtopics for ${selectedTopic}.`, requestError)
+      setSubtopicOptions(['general'])
+      setDraft((current) => ({ ...current, topic: selectedTopic, subtopic: 'general' }))
+      reportError(
+        "Couldn't load subtopics",
+        `Subtopic options for ${selectedTopic} could not be loaded. Using general for now.`,
+        () => void loadSubtopics(),
+        'subtopics',
+      )
+    }
+  }, [selectedTopic, sessionUserId, resolveSectionNotice, reportError])
+
+  useEffect(() => {
+    if (notices.length === 0 || !bannerRef.current) return
+    if (typeof bannerRef.current.scrollIntoView === 'function') {
+      bannerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+    bannerRef.current.focus()
+  }, [notices.length, lastNoticeId])
 
   useEffect(() => {
     void load()
     return () => loadController.current?.abort()
-  }, [selectedTopic])
+  }, [load])
   useEffect(() => {
     if (selectedTopic) {
       setImportTopic(selectedTopic)
@@ -1746,48 +1964,21 @@ export function AdminSkillAssessmentsPage() {
     setDraft((current) => ({ ...current, topic: selectedTopic, subtopic: 'general' }))
     setEditingId(null)
     setSubtopicOptions(['general'])
-    setSubtopicError('')
-    if (!selectedTopic) {
-      return
-    }
     subtopicController.current?.abort()
     const controller = new AbortController()
     subtopicController.current = controller
-    setSubtopicError('')
-    api.get<Array<{ id: string; question_count: number }>>(
-      `/skills/admin/skill-topics/${encodeURIComponent(selectedTopic)}/subtopics`,
-      { signal: controller.signal },
-    ).then((response) => {
-      if (controller.signal.aborted) return
-      const available = response.data.map((item) => item.id)
-      const choices = available.length ? available : ['general']
-      setSubtopicOptions(choices)
-      let savedSubtopic: string | null = null
-      try {
-        savedSubtopic = window.sessionStorage.getItem(`admin-skill-subtopic:${session?.userId ?? 'anonymous'}:${selectedTopic}`)
-      } catch {
-        savedSubtopic = null
-      }
-      const nextSubtopic = savedSubtopic && choices.includes(savedSubtopic) ? savedSubtopic : choices[0]
-      setDraft((current) => ({ ...current, topic: selectedTopic, subtopic: nextSubtopic }))
-    }).catch((requestError: unknown) => {
-      if (controller.signal.aborted) return
-      console.error(`Unable to load subtopics for ${selectedTopic}.`, requestError)
-      setSubtopicOptions(['general'])
-      setDraft((current) => ({ ...current, topic: selectedTopic, subtopic: 'general' }))
-      setSubtopicError('Subtopic options could not be loaded. Using general; retry by switching topics.')
-    })
+    void loadSubtopics(controller.signal)
     return () => controller.abort()
-  }, [selectedTopic, session?.userId])
+  }, [selectedTopic, loadSubtopics])
 
-  const changeSelectedTopic = (topic: string) => {
+  const changeSelectedTopic = useCallback((topic: string) => {
     setSearchParams((current) => {
       const next = new URLSearchParams(current)
       if (topic) next.set('topic', topic)
       else next.delete('topic')
       return next
     }, { replace: true })
-  }
+  }, [setSearchParams])
 
   const resetDraft = () => {
     setDraft({ ...EMPTY_SKILL_QUESTION, topic: selectedTopic, subtopic: subtopicOptions[0] ?? 'general' })
@@ -1802,8 +1993,8 @@ export function AdminSkillAssessmentsPage() {
       subtopic: question.subtopic,
       prompt: question.prompt,
       options: question.options.join('\n'),
-      correct_index: String(question.correct_index),
-      correct_answers: question.correct_answers?.join(', ') ?? '',
+      correct_index: String((question.correct_index ?? 0) + 1),
+      correct_answers: question.correct_answers?.map((value) => value + 1).join(', ') ?? '',
       explanation: question.explanation,
       difficulty: question.difficulty,
       question_type: question.question_type,
@@ -1814,8 +2005,6 @@ export function AdminSkillAssessmentsPage() {
 
   const saveQuestion = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    setError('')
-    setSuccess('')
     if (!validateQuestionDraft()) return
 
     setSaving(true)
@@ -1825,9 +2014,9 @@ export function AdminSkillAssessmentsPage() {
       subtopic: draft.subtopic.trim(),
       prompt: draft.prompt.trim(),
       options,
-      correct_index: Number(draft.correct_index),
+      correct_index: draft.question_type === 'MULTI' ? null : Math.max(0, Number(draft.correct_index) - 1),
       correct_answers: draft.question_type === 'MULTI'
-        ? draft.correct_answers.split(',').map((value) => Number(value.trim())).filter(Number.isInteger)
+        ? parseOptionNumbers(draft.correct_answers).sort((left, right) => left - right).map((number) => number - 1)
         : [],
       explanation: draft.explanation.trim(),
       difficulty: draft.difficulty,
@@ -1837,14 +2026,14 @@ export function AdminSkillAssessmentsPage() {
     try {
       if (editingId == null) await api.post('/skills/admin/questions', payload)
       else await api.patch(`/skills/admin/questions/${editingId}`, payload)
-      setSuccess(editingId == null ? 'Question created and audit logged.' : 'Question updated and audit logged.')
+      reportSuccess(editingId == null ? 'Question created and audit logged.' : 'Question updated and audit logged.')
       setEditingId(null)
       setValidationErrors({})
       setDraft((current) => ({
         ...current,
         prompt: '',
         options: '',
-        correct_index: '0',
+        correct_index: '1',
         correct_answers: '',
         explanation: '',
       }))
@@ -1852,7 +2041,7 @@ export function AdminSkillAssessmentsPage() {
     } catch (requestError) {
       console.error('Unable to save admin skill assessment question.', requestError)
       const detail = (requestError as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : 'Question could not be saved.')
+      reportError("Couldn't save question", typeof detail === 'string' ? detail : 'Question could not be saved.')
     } finally {
       setSaving(false)
     }
@@ -1865,21 +2054,18 @@ export function AdminSkillAssessmentsPage() {
       confirmLabel: 'Delete question',
       destructive: true,
     })) return
-    setError('')
     try {
       await api.delete(`/skills/admin/questions/${question.id}`)
-      setSuccess('Question deleted and audit logged.')
+      reportSuccess('Question deleted and audit logged.')
       await load()
     } catch (requestError) {
       console.error(`Unable to delete skill question ${question.id}.`, requestError)
-      setError('Question could not be deleted.')
+      reportError("Couldn't delete question", 'Question could not be deleted.')
     }
   }
 
   const importQuestions = async (file: File | undefined) => {
     if (!file) return
-    setError('')
-    setSuccess('')
     const payload = new FormData()
     payload.append('file', file)
     if (importTopic) payload.append('topic_id', importTopic)
@@ -1893,20 +2079,24 @@ export function AdminSkillAssessmentsPage() {
       const imported = Number(response.data?.imported ?? 0)
       const errors = Array.isArray(response.data?.errors) ? response.data.errors : []
       if (errors.length > 0) {
-        setError(`${imported} questions were imported. ${errors.length} row(s) were skipped. Review the import results below.`)
+        reportError(
+          'Import review required',
+          `${imported} questions were imported. ${errors.length} row(s) were skipped.`,
+          undefined,
+          undefined,
+          errors.slice(0, 10),
+        )
       } else {
-        setSuccess(`${imported} questions imported and audit logged.`)
+        reportSuccess(`${imported} questions imported and audit logged.`)
       }
-      setImportStatus({ imported, errors })
       if (importTopic && importTopic !== selectedTopic) changeSelectedTopic(importTopic)
       else await load()
     } catch (requestError) {
       console.error('Unable to import skill assessment questions.', requestError)
       const detail = (requestError as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      const fallback = 'Question import failed. Check the file format, headers, options, and answer index.'
+      const fallback = 'Question import failed. Check the file format, headers, options, and correct_option number.'
       const message = typeof detail === 'string' ? detail : fallback
-      setError(message)
-      setImportStatus({ imported: 0, errors: [] })
+      reportError('Import failed', message)
     }
   }
 
@@ -1918,27 +2108,25 @@ export function AdminSkillAssessmentsPage() {
 
   const saveResource = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    setError('')
-    setSuccess('')
     if (!validateResourceDraft()) return
     setSaving(true)
     try {
       if (editingResourceId == null) {
         await api.post('/skills/admin/resources', resourceDraft)
-        setSuccess('Learning resource added and audit logged.')
+        reportSuccess('Learning resource added and audit logged.')
       } else {
         await api.patch(`/skills/admin/resources/${editingResourceId}`, {
           title: resourceDraft.title,
           url: resourceDraft.url,
         })
-        setSuccess('Learning resource updated and audit logged.')
+        reportSuccess('Learning resource updated and audit logged.')
       }
       resetResourceDraft()
       await load()
     } catch (requestError) {
       console.error('Unable to save skill assessment learning resource.', requestError)
       const detail = (requestError as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : 'Learning resource could not be saved.')
+      reportError("Couldn't save study resource", typeof detail === 'string' ? detail : 'Learning resource could not be saved.')
     } finally {
       setSaving(false)
     }
@@ -1951,15 +2139,14 @@ export function AdminSkillAssessmentsPage() {
       confirmLabel: 'Delete resource',
       destructive: true,
     })) return
-    setError('')
     try {
       await api.delete(`/skills/admin/resources/${resource.id}`)
-      setSuccess('Learning resource deleted and audit logged.')
+      reportSuccess('Learning resource deleted and audit logged.')
       if (editingResourceId === resource.id) resetResourceDraft()
       await load()
     } catch (requestError) {
       console.error(`Unable to delete learning resource ${resource.id}.`, requestError)
-      setError('Learning resource could not be deleted.')
+      reportError("Couldn't delete study resource", 'Learning resource could not be deleted.')
     }
   }
 
@@ -1968,15 +2155,61 @@ export function AdminSkillAssessmentsPage() {
   const visibleResources = resourceSubtopicFilter === 'ALL'
     ? resources
     : resources.filter((resource) => resource.subtopic === resourceSubtopicFilter)
+  const optionPreview = draft.options.split(/\r?\n/).map((option) => option.trim()).filter(Boolean)
+  const selectedOptionNumbers = draft.question_type === 'MULTI'
+    ? parseOptionNumbers(draft.correct_answers)
+    : [Number(draft.correct_index)]
+  const correctAnswerPreview = selectedOptionNumbers
+    .filter((number) => Number.isInteger(number) && number >= 1 && number <= optionPreview.length)
+    .map((number) => `'${optionPreview[number - 1]}'`)
 
-  const downloadTemplate = async (format: 'csv' | 'xlsx' = 'csv') => {
+  const reviewQuestionKey = async (question: AdminSkillQuestion, fixKey: boolean) => {
+    let payload: Record<string, number | number[]> = {}
+    if (fixKey) {
+      if (question.question_type === 'MULTI') {
+        const numbers = parseOptionNumbers(keyReviewNumbers[question.id] ?? '')
+          .sort((left, right) => left - right)
+        if (numbers.length < 2 || numbers.some((number) => number > question.options.length) || new Set(numbers).size !== numbers.length) {
+          reportError('Invalid answer key', `Choose unique correct option numbers from 1 to ${question.options.length}.`)
+          return
+        }
+        payload = { correct_option_numbers: numbers }
+      } else {
+        const number = Number(keyReviewNumbers[question.id])
+        if (!Number.isInteger(number) || number < 1 || number > question.options.length) {
+          reportError('Invalid answer key', `Choose a number from 1 to ${question.options.length}.`)
+          return
+        }
+        payload = { correct_option_number: number }
+      }
+    }
+
     try {
-      const query = new URLSearchParams({ format })
-      if (importTopic) query.set('topic_id', importTopic)
-      await downloadAuthenticatedFile(`/skills/admin/questions/import/template?${query}`, format === 'xlsx' ? 'skill-question-template.xlsx' : 'skill-question-template.csv')
+      await api.post(`/skills/admin/questions/${question.id}/key-review`, payload)
+      reportSuccess(fixKey ? 'Answer key corrected and reviewed.' : 'Answer key confirmed.')
+      await load()
+    } catch (requestError) {
+      console.error(`Unable to review answer key for question ${question.id}.`, requestError)
+      const detail = (requestError as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      reportError("Couldn't review answer key", typeof detail === 'string' ? detail : 'Answer key could not be reviewed.')
+    }
+  }
+
+  const downloadTemplate = async () => {
+    if (!importTopic) {
+      reportError('Choose a topic', 'Select a topic before downloading its question template.')
+      return
+    }
+    try {
+      const query = new URLSearchParams({ topic_id: importTopic })
+      const filename = await downloadAuthenticatedFile(
+        `/skills/admin/questions/import/template?${query}`,
+        `skill-${importTopic}-template.csv`,
+      )
+      reportSuccess(`Template downloaded: ${filename}`)
     } catch (requestError) {
       console.error('Unable to download the import template.', requestError)
-      setError('The import template could not be downloaded.')
+      reportError("Couldn't download template", 'The import template could not be downloaded.')
     }
   }
 
@@ -1985,12 +2218,12 @@ export function AdminSkillAssessmentsPage() {
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Skill assessments</h1>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage server-graded question banks, imports, activation, and topic results.</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage question banks, imports, and topic results.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <DropdownSelect
             className="min-w-40"
-            aria-label="Import and template topic"
+            aria-label="Template topic"
             value={importTopic}
             onChange={setImportTopic}
             options={[
@@ -1998,7 +2231,7 @@ export function AdminSkillAssessmentsPage() {
               ...topicOptions.map((topic) => ({ label: topic, value: topic })),
             ]}
           />
-          <Button type="button" variant="outline" size="sm" onClick={() => void downloadTemplate('csv')}>Download template</Button>
+          <Button type="button" variant="outline" size="sm" disabled={!importTopic} onClick={() => void downloadTemplate()}>Download template</Button>
           <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
             <Upload className="h-4 w-4" /> Import questions
             <input
@@ -2015,10 +2248,50 @@ export function AdminSkillAssessmentsPage() {
         </div>
       </header>
 
+      {notices.length > 0 && (
+        <div
+          ref={bannerRef}
+          tabIndex={-1}
+          aria-label="Skill assessment notifications"
+          className="sticky top-16 z-30 space-y-2 bg-slate-50/95 py-2 backdrop-blur dark:bg-slate-950/95"
+        >
+          {notices.map((notice) => (
+            <div
+              key={notice.id}
+              role={notice.kind === 'error' ? 'alert' : undefined}
+              aria-live={notice.kind === 'success' ? 'polite' : undefined}
+              className={`rounded-xl border px-4 py-3 text-sm ${notice.kind === 'error' ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/90 dark:text-rose-200' : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/90 dark:text-emerald-200'}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold">{notice.title}</p>
+                  <p className="mt-1">{notice.message}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {notice.retry && <Button type="button" size="sm" variant="outline" onClick={notice.retry}>Retry</Button>}
+                  <button type="button" onClick={() => dismissNotice(notice.id)} className="rounded-md border border-current px-2 py-1 text-xs font-medium">Dismiss</button>
+                </div>
+              </div>
+              {notice.details && notice.details.length > 0 && (
+                <ul className="mt-3 list-disc space-y-1 pl-5 text-xs">
+                  {notice.details.slice(0, 10).map((item, index) => (
+                    <li key={`${item.row ?? 'row'}-${item.field ?? 'field'}-${index}`}>
+                      {item.row != null ? `Row ${item.row}: ` : ''}{item.message || item.field || 'Unknown validation issue'}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       <AdminSkillTopicsPanel
         selectedTopic={selectedTopic}
         onSelectedTopicChange={changeSelectedTopic}
-        onTopicsLoaded={(topics) => setTopicOptions(topics)}
+        onNotice={addNotice}
+        onResolveNotice={resolveSectionNotice}
+        onTopicsLoaded={setLoadedTopicOptions}
         onTopicCreated={(topic) => {
           changeSelectedTopic(topic)
           window.setTimeout(() => {
@@ -2028,23 +2301,72 @@ export function AdminSkillAssessmentsPage() {
         }}
       />
 
-      {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">{error}</p>}
-      {success && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">{success}</p>}
-      {importStatus.errors.length > 0 && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <span className="font-semibold">Import review</span>
-            <span>{importStatus.imported} imported</span>
+      {sectionLoading.keyReview ? null : sectionErrors.keyReview ? (
+        <section aria-label="Answer key verification" className="rounded-xl border border-dashed border-amber-300 p-4 text-sm text-amber-800 dark:border-amber-800 dark:text-amber-200">
+          Answer keys could not be loaded. Use Retry above to try again.
+        </section>
+      ) : keyReviewQuestions.length > 0 ? (
+        <section aria-label="Answer key verification" className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-slate-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-slate-100">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-base font-bold">{keyReviewQuestions.length} questions need key verification</h2>
+              <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">Review legacy admin-entered answers. No key is changed unless you choose “Fix key.”</p>
+            </div>
           </div>
-          <ul className="list-disc space-y-1 pl-5 text-xs">
-            {importStatus.errors.slice(0, 8).map((rowError, index) => (
-              <li key={`${rowError.row ?? 'row'}-${rowError.field ?? 'field'}-${index}`}>
-                {rowError.row != null ? `Row ${rowError.row}: ` : ''}{rowError.message || rowError.field || 'Unknown validation issue'}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+          <div className="overflow-x-auto rounded-lg border border-amber-200 dark:border-amber-900">
+            <table className="w-full min-w-[760px] text-left text-sm">
+              <thead className="bg-white/70 text-xs uppercase text-slate-600 dark:bg-slate-900/70 dark:text-slate-300">
+                <tr><th className="p-3">Question</th><th className="p-3">Numbered options</th><th className="p-3">Review answer key</th></tr>
+              </thead>
+              <tbody className="divide-y divide-amber-200 dark:divide-amber-900">
+                {keyReviewQuestions.map((question) => {
+                  const keyNumbers = question.correct_option_numbers ?? [question.correct_option_number ?? question.correct_index + 1]
+                  return (
+                    <tr key={question.id} className="align-top">
+                      <td className="max-w-xs p-3">
+                        <p className="font-semibold">{question.prompt}</p>
+                        <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">{question.topic} · {question.subtopic} · {question.source}</p>
+                      </td>
+                      <td className="p-3">
+                        <p className="mb-1 text-xs font-semibold text-amber-900 dark:text-amber-200">Stored key number: {keyNumbers.join(', ') || 'invalid or missing'}</p>
+                        <ol className="space-y-1">
+                          {question.options.map((option, index) => {
+                            const number = index + 1
+                            const isCurrentKey = keyNumbers.includes(number)
+                            return (
+                              <li key={`${question.id}-${number}`} className={`rounded-md px-2 py-1 ${isCurrentKey ? 'bg-amber-200 font-semibold text-amber-950 ring-1 ring-amber-500 dark:bg-amber-900/70 dark:text-amber-100 dark:ring-amber-600' : 'text-slate-700 dark:text-slate-300'}`}>
+                                {number}. {option}{isCurrentKey ? ' — Current key' : ''}
+                              </li>
+                            )
+                          })}
+                        </ol>
+                      </td>
+                      <td className="min-w-[220px] p-3">
+                        <label className="block text-xs font-semibold" htmlFor={`question-key-${question.id}`}>
+                          {question.question_type === 'MULTI' ? 'Correct option numbers, comma separated' : 'Correct option number'}
+                          <input
+                            id={`question-key-${question.id}`}
+                            type="text"
+                            inputMode="numeric"
+                            aria-label={question.question_type === 'MULTI' ? 'Correct option numbers, comma separated' : 'Correct option number'}
+                            value={keyReviewNumbers[question.id] ?? ''}
+                            onChange={(event) => setKeyReviewNumbers((current) => ({ ...current, [question.id]: event.target.value }))}
+                            className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                          />
+                        </label>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button type="button" size="sm" variant="outline" onClick={() => void reviewQuestionKey(question, false)}>Key is correct</Button>
+                          <Button type="button" size="sm" variant="primary" onClick={() => void reviewQuestionKey(question, true)}>Fix key</Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       <Card id="skill-question-form" className="p-4 dark:bg-slate-900">
         <h2 className="mb-3 flex items-center gap-2 text-base font-bold text-slate-900 dark:text-white">
@@ -2057,7 +2379,7 @@ export function AdminSkillAssessmentsPage() {
             <input
               id="skill-question-topic"
               required
-              readOnly
+              readOnly={Boolean(selectedTopic)}
               value={draft.topic}
               aria-invalid={Boolean(validationErrors.topic)}
               className={fieldClassName('topic')}
@@ -2081,7 +2403,6 @@ export function AdminSkillAssessmentsPage() {
             />
             <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Choose an existing subtopic for this topic.</p>
             {validationErrors.subtopic && <span className="text-[11px] font-medium text-rose-600">{validationErrors.subtopic}</span>}
-            {subtopicError && <p role="status" className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">{subtopicError}</p>}
           </div>
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
             Difficulty
@@ -2123,10 +2444,13 @@ export function AdminSkillAssessmentsPage() {
           </label>
           <div className="space-y-3">
             <label htmlFor={draft.question_type === 'MULTI' ? 'skill-question-correct-answers' : 'skill-question-correct-index'} className="block space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
-              {draft.question_type === 'MULTI' ? 'Correct option indexes (comma separated)' : 'Correct option index (starting at 1)'}
+              {draft.question_type === 'MULTI' ? 'Correct option numbers, comma separated' : 'Correct option number'}
               {draft.question_type === 'MULTI' ? (
                 <input
                   required
+                  type="text"
+                  inputMode="numeric"
+                  aria-label="Correct option numbers, comma separated"
                   value={draft.correct_answers}
                   id="skill-question-correct-answers"
                   aria-invalid={Boolean(validationErrors.correct_answers)}
@@ -2134,7 +2458,7 @@ export function AdminSkillAssessmentsPage() {
                     setDraft((current) => ({ ...current, correct_answers: event.target.value }))
                     clearFieldError('correct_answers')
                   }}
-                  placeholder="0, 2"
+                  placeholder="1, 2"
                   className={fieldClassName('correct_answers')}
                 />
               ) : (
@@ -2142,6 +2466,8 @@ export function AdminSkillAssessmentsPage() {
                   required
                   type="number"
                   min={1}
+                  max={optionPreview.length || undefined}
+                  aria-label="Correct option number"
                   value={draft.correct_index}
                   id="skill-question-correct-index"
                   aria-invalid={Boolean(validationErrors.correct_index)}
@@ -2152,8 +2478,22 @@ export function AdminSkillAssessmentsPage() {
                   className={fieldClassName('correct_index')}
                 />
               )}
+              <p aria-live="polite" className="mt-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+                Correct {draft.question_type === 'MULTI' ? 'answers' : 'answer'}: {correctAnswerPreview.length ? correctAnswerPreview.join(', ') : 'Choose a valid option number'}
+              </p>
               {validationErrors.correct_index && <span className="mt-1 block text-[11px] font-medium text-rose-600">{validationErrors.correct_index}</span>}
               {validationErrors.correct_answers && <span className="mt-1 block text-[11px] font-medium text-rose-600">{validationErrors.correct_answers}</span>}
+              <ol aria-label="Numbered answer options preview" className="mt-2 space-y-1">
+                {optionPreview.map((option, index) => {
+                  const number = index + 1
+                  const isSelected = selectedOptionNumbers.includes(number)
+                  return (
+                    <li key={`option-preview-${number}`} className={`rounded-md px-2 py-1 font-normal ${isSelected ? 'bg-indigo-100 font-semibold text-indigo-950 ring-1 ring-indigo-400 dark:bg-indigo-950/60 dark:text-indigo-100 dark:ring-indigo-700' : 'text-slate-600 dark:text-slate-400'}`}>
+                      {number}. {option}
+                    </li>
+                  )
+                })}
+              </ol>
             </label>
             <label htmlFor="skill-question-explanation" className="block space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
               Explanation
@@ -2193,12 +2533,18 @@ export function AdminSkillAssessmentsPage() {
         </form>
       </Card>
 
-      <section className="space-y-3">
+      <section aria-label="Question bank" className="space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Question bank ({visibleQuestions.length})</h2>
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+            Question bank{selectedTopic && !sectionLoading.questions && !sectionErrors.questions ? ` (${visibleQuestions.length})` : ''}
+          </h2>
           <span className="text-sm text-slate-500 dark:text-slate-400">Topic: {selectedTopic || '—'}</span>
         </div>
-        {loading ? <TableSkeleton rows={5} /> : visibleQuestions.length === 0 ? (
+        {sectionLoading.questions && selectedTopic ? <TableSkeleton rows={5} /> : sectionErrors.questions ? (
+          <p className="rounded-lg border border-dashed border-rose-200 p-4 text-sm text-rose-700 dark:border-rose-900 dark:text-rose-300">Question bank is unavailable until it can be loaded.</p>
+        ) : !selectedTopic ? (
+          <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700">Select a topic to view its question bank.</p>
+        ) : visibleQuestions.length === 0 ? (
           <EmptyState icon={Award} title="No questions found" description={`Add a question to ${selectedTopic || 'this'} topic.`} />
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
@@ -2208,7 +2554,7 @@ export function AdminSkillAssessmentsPage() {
                 {visibleQuestions.map((question) => (
                   <tr key={question.id}>
                     <td className="max-w-lg p-3"><span className="font-semibold text-indigo-700 dark:text-indigo-300">{question.topic}</span><p className="mt-1 text-slate-800 dark:text-slate-200">{question.prompt}</p></td>
-                    <td className="p-3 text-slate-600 dark:text-slate-300">{question.options.length} options · correct -{question.question_type === 'MULTI' ? question.correct_answers?.join(', ') : question.correct_index}</td>
+                    <td className="p-3 text-slate-600 dark:text-slate-300">{question.options.length} options · Correct:{' '}{(question.question_type === 'MULTI' ? question.correct_answers ?? [question.correct_index] : [question.correct_index]).map((index) => index + 1).join(', ')}</td>
                     <td className="p-3 text-slate-600 dark:text-slate-300">{question.question_type} · {question.difficulty}</td>
                     <td className="p-3"><Badge variant={question.active ? 'emerald' : 'slate'}>{question.active ? 'Active' : 'Inactive'}</Badge></td>
                     <td className="p-3"><div className="flex justify-end gap-2">
@@ -2228,7 +2574,7 @@ export function AdminSkillAssessmentsPage() {
           <h2 className="text-base font-bold text-slate-900 dark:text-white">Study resources</h2>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Curated links shown for weak assessment subtopics.</p>
         </div>
-        <form noValidate onSubmit={(event) => void saveResource(event)} className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <form noValidate onSubmit={(event) => void saveResource(event)} className="grid items-start gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <DropdownSelect
               label="Topic ID"
@@ -2236,7 +2582,7 @@ export function AdminSkillAssessmentsPage() {
               disabled={editingResourceId != null}
               options={[
                 { label: 'Select a topic', value: '' },
-                ...Array.from(new Set([...topicOptions, ...stats.map((item) => item.topic), ...questions.map((item) => item.topic), ...(editingResourceId == null ? [] : [resourceDraft.topic])])).sort().map((topic) => ({ label: topic, value: topic })),
+                ...Array.from(new Set([...topicOptions, ...questions.map((item) => item.topic), ...(editingResourceId == null ? [] : [resourceDraft.topic])])).sort().map((topic) => ({ label: topic, value: topic })),
               ]}
               onChange={(topic) => {
                 setResourceDraft((current) => ({ ...current, topic }))
@@ -2245,7 +2591,7 @@ export function AdminSkillAssessmentsPage() {
             />
             {resourceValidationErrors.topic && <span className="mt-1 block text-[11px] font-medium text-rose-600">{resourceValidationErrors.topic}</span>}
           </div>
-          <label htmlFor="skill-resource-subtopic" className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+          <label htmlFor="skill-resource-subtopic" className="block space-y-1.5 text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
             Subtopic ID
             <input
               id="skill-resource-subtopic"
@@ -2261,10 +2607,10 @@ export function AdminSkillAssessmentsPage() {
               aria-describedby="skill-resource-subtopic-hint"
               className={resourceFieldClassName('subtopic')}
             />
-            <span id="skill-resource-subtopic-hint" className="block text-[11px] font-normal text-slate-500 dark:text-slate-400">Use "general" when the resource covers the whole topic.</span>
+            <span id="skill-resource-subtopic-hint" className="block text-[11px] font-normal normal-case tracking-normal text-slate-500 dark:text-slate-400">Use "general" when the resource covers the whole topic.</span>
             {resourceValidationErrors.subtopic && <span className="text-[11px] font-medium text-rose-600">{resourceValidationErrors.subtopic}</span>}
           </label>
-          <label htmlFor="skill-resource-title" className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+          <label htmlFor="skill-resource-title" className="block space-y-1.5 text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
             Title
             <input
               id="skill-resource-title"
@@ -2280,8 +2626,8 @@ export function AdminSkillAssessmentsPage() {
             />
             {resourceValidationErrors.title && <span className="text-[11px] font-medium text-rose-600">{resourceValidationErrors.title}</span>}
           </label>
-          <label htmlFor="skill-resource-url" className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
-            HTTPS / HTTP URL
+          <label htmlFor="skill-resource-url" className="block space-y-1.5 text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+            URL
             <input
               id="skill-resource-url"
               required
@@ -2303,7 +2649,10 @@ export function AdminSkillAssessmentsPage() {
           </div>
         </form>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <p className="text-xs text-slate-500 dark:text-slate-400">{visibleResources.length} resource{visibleResources.length === 1 ? '' : 's'} shown</p>
+          {!sectionLoading.resources && !sectionErrors.resources && selectedTopic
+            && (visibleResources.length > 0 || resources.length === 0) && (
+              <p className="text-xs text-slate-500 dark:text-slate-400">{visibleResources.length} resource{visibleResources.length === 1 ? '' : 's'} shown</p>
+            )}
           <DropdownSelect
             className="w-full sm:max-w-xs"
             label="Filter resources by subtopic"
@@ -2315,24 +2664,38 @@ export function AdminSkillAssessmentsPage() {
             ]}
           />
         </div>
-        <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-          {visibleResources.map((resource) => (
-            <li key={resource.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
-                <p className="font-semibold text-slate-900 dark:text-white">{resource.title}</p>
-                <p className="break-all text-xs text-slate-500 dark:text-slate-400">{resource.topic} / {resource.subtopic} · {resource.url}</p>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                <Button size="sm" variant="outline" onClick={() => {
-                  setEditingResourceId(resource.id)
-                  setResourceDraft({ topic: resource.topic, subtopic: resource.subtopic, title: resource.title, url: resource.url })
-                }}>Edit</Button>
-                <Button size="sm" variant="ghost" onClick={() => void deleteResource(resource)} aria-label={`Delete learning resource ${resource.id}`}><Trash2 className="h-4 w-4 text-rose-600" /></Button>
-              </div>
-            </li>
-          ))}
-        </ul>
-        {visibleResources.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-sm text-slate-500 dark:border-slate-700">No resources match this subtopic filter.</p>}
+        {sectionLoading.resources && selectedTopic ? (
+          <div aria-label="Loading study resources" className="h-20 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-800" />
+        ) : sectionErrors.resources ? (
+          <p className="rounded-lg border border-dashed border-rose-200 p-4 text-sm text-rose-700 dark:border-rose-900 dark:text-rose-300">Study resources are unavailable until they can be loaded.</p>
+        ) : !selectedTopic ? (
+          <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700">Select a topic to view its study resources.</p>
+        ) : (
+          <>
+            <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+              {visibleResources.map((resource) => (
+                <li key={resource.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-900 dark:text-white">{resource.title}</p>
+                    <p className="break-all text-xs text-slate-500 dark:text-slate-400">{resource.topic} / {resource.subtopic} · {resource.url}</p>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Button size="sm" variant="outline" onClick={() => {
+                      setEditingResourceId(resource.id)
+                      setResourceDraft({ topic: resource.topic, subtopic: resource.subtopic, title: resource.title, url: resource.url })
+                    }}>Edit</Button>
+                    <Button size="sm" variant="ghost" onClick={() => void deleteResource(resource)} aria-label={`Delete learning resource ${resource.id}`}><Trash2 className="h-4 w-4 text-rose-600" /></Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {visibleResources.length === 0 && (
+              <p className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-sm text-slate-500 dark:border-slate-700">
+                {resources.length === 0 ? 'No study resources for this topic.' : 'No resources match this subtopic filter.'}
+              </p>
+            )}
+          </>
+        )}
       </Card>
     </div>
   )

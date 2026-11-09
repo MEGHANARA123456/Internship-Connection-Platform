@@ -24,7 +24,7 @@ export function Badge({ className, variant, status, children, ...props }: BadgeP
     const s = status.toUpperCase()
     if (['PUBLISHED', 'SELECTED', 'ACCEPTED', 'VERIFIED', 'COMPLETED', 'ACTIVE'].includes(s)) {
       resolvedVariant = 'emerald'
-    } else if (['PENDING', 'PENDING_APPROVAL', 'UNDER_REVIEW', 'RESCHEDULED'].includes(s)) {
+    } else if (['PENDING', 'PENDING_APPROVAL', 'UNDER_REVIEW', 'RESCHEDULED', 'EXPIRED'].includes(s)) {
       resolvedVariant = 'amber'
     } else if (['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'SCHEDULED', 'COMPANY'].includes(s)) {
       resolvedVariant = 'indigo'

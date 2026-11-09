@@ -90,6 +90,7 @@ export function InterviewsPage() {
   const statusTabs = [
     { key: 'ALL', label: 'All', statuses: null },
     { key: 'UPCOMING', label: 'Upcoming', statuses: ['SCHEDULED', 'RESCHEDULED'] },
+    { key: 'EXPIRED', label: 'Expired', statuses: null },
     { key: 'COMPLETED', label: 'Completed', statuses: ['COMPLETED'] },
     { key: 'CANCELLED', label: 'Cancelled', statuses: ['CANCELLED'] },
   ]
@@ -199,22 +200,33 @@ export function InterviewsPage() {
 
   useEffect(() => {
     if (session?.role !== 'STUDENT') return
-    void api.get('/notifications').then(async (response) => {
-      const inviteIds = (response.data || [])
-        .filter((notice: any) => !notice.read_at && notice.notification_type === 'INTERVIEW_INVITE')
-        .map((notice: any) => notice.id)
-      await Promise.all(inviteIds.map((notificationId: number) => api.patch(`/notifications/${notificationId}/read`)))
+    void api.patch('/interviews/invites/read').then(() => {
+      window.dispatchEvent(new Event('app:navigation-counts-refresh'))
     }).catch((notificationError) => {
       console.error('Failed to mark interview invitations as read:', notificationError)
     })
   }, [session?.role])
 
-  const filteredInterviews = activeStatusTab === 'ALL'
+  const isExpiredInterview = (item: any) => item.interview_state === 'completed'
+    && item.status !== 'COMPLETED'
+    && (item.status !== 'CANCELLED' || item.cancel_reason === 'TIME_PASSED')
+  const isUpcomingInterview = (item: any) => ['SCHEDULED', 'RESCHEDULED'].includes(item.status)
+    && new Date(item.scheduled_at).getTime() > Date.now()
+  const filteredInterviews = (activeStatusTab === 'ALL'
     ? interviews
     : interviews.filter((item) => {
+      if (activeStatusTab === 'EXPIRED') return isExpiredInterview(item)
       const tab = statusTabs.find((entry) => entry.key === activeStatusTab)
       if (!tab?.statuses?.includes(item.status)) return false
-      return activeStatusTab !== 'UPCOMING' || new Date(item.scheduled_at).getTime() > Date.now()
+      return activeStatusTab !== 'UPCOMING' || isUpcomingInterview(item)
+    })).sort((left, right) => {
+      const rank = (item: any) => item.status === 'CANCELLED' && !isExpiredInterview(item)
+        ? 3
+        : isExpiredInterview(item) ? 2 : item.interview_state === 'completed' ? 1 : 0
+      const rankDifference = rank(left) - rank(right)
+      if (rankDifference !== 0) return rankDifference
+      const difference = new Date(left.scheduled_at).getTime() - new Date(right.scheduled_at).getTime()
+      return rank(left) > 0 ? -difference : difference
     })
   const totalPages = Math.max(1, Math.ceil(filteredInterviews.length / 10))
   const pagedInterviews = filteredInterviews.slice((page - 1) * 10, page * 10)
@@ -231,7 +243,7 @@ export function InterviewsPage() {
   const calendarTitle = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(calendarDate)
   useEffect(() => {
     const selectedTab = (searchParams.get('tab') || 'all').toUpperCase()
-    setActiveStatusTab(['UPCOMING', 'COMPLETED', 'CANCELLED'].includes(selectedTab) ? selectedTab : 'ALL')
+    setActiveStatusTab(['UPCOMING', 'EXPIRED', 'COMPLETED', 'CANCELLED'].includes(selectedTab) ? selectedTab : 'ALL')
     setPage(1)
   }, [searchParams])
   useEffect(() => {
@@ -290,9 +302,11 @@ export function InterviewsPage() {
       <div className="mb-5 -mx-1 overflow-x-auto pb-1">
         <div role="tablist" aria-label="Interview status" className="flex w-max min-w-full items-center gap-1 border-b border-slate-200 pb-2 dark:border-slate-800">
           {statusTabs.map((tab) => {
-            const count = tab.statuses
+            const count = tab.key === 'EXPIRED'
+              ? interviews.filter(isExpiredInterview).length
+              : tab.statuses
               ? interviews.filter((item) => tab.statuses?.includes(item.status)
-                && (tab.key !== 'UPCOMING' || new Date(item.scheduled_at).getTime() > Date.now())).length
+                && (tab.key !== 'UPCOMING' || isUpcomingInterview(item))).length
               : interviews.length
             const selected = activeStatusTab === tab.key
             return (
@@ -534,12 +548,29 @@ export function InterviewsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {pagedInterviews.map((item) => {
+          {pagedInterviews.map((item, index) => {
             const dateObj = new Date(item.scheduled_at)
             const isCompany = session?.role === 'COMPANY'
+            const group = isUpcomingInterview(item)
+              ? 'Upcoming'
+              : item.status === 'CANCELLED' && !isExpiredInterview(item)
+                ? 'Cancelled'
+                : 'Past / Expired'
+            const previousItem = pagedInterviews[index - 1]
+            const previousGroup = previousItem
+              ? isUpcomingInterview(previousItem)
+                ? 'Upcoming'
+                : previousItem.status === 'CANCELLED' && !isExpiredInterview(previousItem)
+                  ? 'Cancelled'
+                  : 'Past / Expired'
+              : null
 
             return (
-              <Card id={`interview-${item.id}`} key={item.id} className={`space-y-3 border p-5 transition-colors dark:bg-slate-900 ${highlightedId === String(item.id) ? 'border-indigo-500 ring-2 ring-indigo-300 dark:ring-indigo-700' : 'border-slate-200 dark:border-slate-800'}`}>
+              <div key={item.id} className="space-y-3">
+              {group !== previousGroup && activeStatusTab === 'ALL' && (
+                <h2 className="pt-2 text-sm font-bold text-slate-700 dark:text-slate-200">{group}</h2>
+              )}
+              <Card id={`interview-${item.id}`} className={`space-y-3 border p-5 transition-colors dark:bg-slate-900 ${highlightedId === String(item.id) ? 'border-indigo-500 ring-2 ring-indigo-300 dark:ring-indigo-700' : 'border-slate-200 dark:border-slate-800'}`}>
                 <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-center gap-2.5 flex-wrap">
@@ -547,8 +578,13 @@ export function InterviewsPage() {
                         {item.interview_type} Interview
                         {item.internship_title ? ` • ${item.internship_title}` : ''}
                       </h3>
-                      <Badge status={item.status}>{item.status}</Badge>
+                      <Badge status={isExpiredInterview(item) ? 'EXPIRED' : item.status}>
+                        {isExpiredInterview(item) ? 'Expired' : item.status}
+                      </Badge>
                     </div>
+                    {isExpiredInterview(item) && isCompany && (
+                      <p className="text-xs font-medium text-amber-700 dark:text-amber-300">Interview completed. Update the application status.</p>
+                    )}
 
                     {item.company_name && !isCompany && (
                       <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
@@ -570,7 +606,7 @@ export function InterviewsPage() {
                       </p>
                     )}
 
-                    {isExternalUrl(item.meeting_link) && (
+                    {!isExpiredInterview(item) && isExternalUrl(item.meeting_link) && (
                       <p className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
                         <ExternalLink className="w-3.5 h-3.5 text-indigo-500" />
                         Meeting link: <a href={item.meeting_link} target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 underline">Open link</a>
@@ -638,7 +674,7 @@ export function InterviewsPage() {
                       </CardActionButton>
                     </CardActionsRow>
 
-                    {isCompany && ['SCHEDULED', 'RESCHEDULED'].includes(item.status) && (
+                    {isCompany && ['SCHEDULED', 'RESCHEDULED'].includes(item.status) && !isExpiredInterview(item) && (
                       <CardActionsRow>
                         <CardActionButton
                           aria-label={`Mark ${item.internship_title || item.interview_type} interview done`}
@@ -709,7 +745,7 @@ export function InterviewsPage() {
                       </CardActionsRow>
                     )}
 
-                    {isExternalUrl(item.meeting_link) && (
+                    {!isExpiredInterview(item) && isExternalUrl(item.meeting_link) && (
                       <CardActionButton
                         aria-label="Open external meeting link"
                         rightIcon={<ExternalLink className="h-4 w-4" />}
@@ -722,13 +758,13 @@ export function InterviewsPage() {
                     {item.interview_type === 'VIDEO' && (
                       <CardActionButton
                         intent="primary"
-                        aria-label={['SCHEDULED', 'RESCHEDULED'].includes(item.status)
+                        aria-label={['SCHEDULED', 'RESCHEDULED'].includes(item.status) && !isExpiredInterview(item)
                           ? 'Launch In-App Video'
-                          : `Launch In-App Video unavailable for ${item.status.toLowerCase()} interview`}
-                        title={['SCHEDULED', 'RESCHEDULED'].includes(item.status)
+                          : `Launch In-App Video unavailable for ${isExpiredInterview(item) ? 'expired' : item.status.toLowerCase()} interview`}
+                        title={['SCHEDULED', 'RESCHEDULED'].includes(item.status) && !isExpiredInterview(item)
                           ? 'Launch the in-app video interview'
-                          : `Video launch is unavailable for ${item.status.toLowerCase()} interviews`}
-                        disabled={!['SCHEDULED', 'RESCHEDULED'].includes(item.status)}
+                          : `Video launch is unavailable for ${isExpiredInterview(item) ? 'expired' : item.status.toLowerCase()} interviews`}
+                        disabled={!['SCHEDULED', 'RESCHEDULED'].includes(item.status) || isExpiredInterview(item)}
                         leftIcon={<Video className="h-4 w-4" />}
                         onClick={() => setVideoModalInterview(item)}
                       >
@@ -745,6 +781,7 @@ export function InterviewsPage() {
                   </CardActions>
                 </div>
               </Card>
+              </div>
             )
           })}
         </div>
@@ -1657,6 +1694,10 @@ export function NotificationsPage() {
   const [loadingEmails, setLoadingEmails] = useState(false)
   const [emailError, setEmailError] = useState<string | null>(null)
   const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null)
+  const [selectedEmail, setSelectedEmail] = useState<any | null>(null)
+  const [loadingEmailId, setLoadingEmailId] = useState<string | null>(null)
+  const [emailDetailError, setEmailDetailError] = useState<string | null>(null)
+  const [emailModalOpen, setEmailModalOpen] = useState(false)
 
   const fetchNotifications = async () => {
     setLoading(true)
@@ -1719,6 +1760,36 @@ export function NotificationsPage() {
     } catch {
       // ignore
     }
+  }
+
+  const fetchEmailDetail = async (id: number) => {
+    const emailId = String(id)
+    setSelectedEmail(null)
+    setEmailDetailError(null)
+    setLoadingEmailId(emailId)
+    try {
+      const response = await api.get(`/emails/${id}`)
+      setSelectedEmail(response.data)
+    } catch {
+      setEmailDetailError('Could not open this email. Please retry.')
+    } finally {
+      setLoadingEmailId(null)
+    }
+  }
+
+  const handleViewEmail = async (id: number) => {
+    const emailId = String(id)
+    if (expandedEmailId === emailId) {
+      setExpandedEmailId(null)
+      return
+    }
+    setExpandedEmailId(emailId)
+    await fetchEmailDetail(id)
+  }
+
+  const handleViewNotificationEmail = async (id: number) => {
+    setEmailModalOpen(true)
+    await fetchEmailDetail(id)
   }
 
   const unreadCount = notifications.filter((n) => !n.read_at && !isSensitiveNotification(n)).length
@@ -1845,18 +1916,32 @@ export function NotificationsPage() {
                       )}
                     </div>
                     <p className="text-xs text-slate-600 dark:text-slate-300">{item.body || item.message}</p>
-                    {session?.role === 'STUDENT' && item.application_id && (
+                    {(item.email_id || item.gmail_url || (session?.role === 'STUDENT' && item.application_id)) && (
                       <div className="mt-2 flex flex-wrap items-center gap-3">
-                        <Link
-                          to={routes.application(item.application_id)}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            if (!item.read_at) void handleMarkRead(item.id)
-                          }}
-                          className="inline-flex text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
-                        >
-                          Track application
-                        </Link>
+                        {session?.role === 'STUDENT' && item.application_id && (
+                          <Link
+                            to={routes.application(item.application_id)}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              if (!item.read_at) void handleMarkRead(item.id)
+                            }}
+                            className="inline-flex text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                          >
+                            Track application
+                          </Link>
+                        )}
+                        {item.email_id && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void handleViewNotificationEmail(item.email_id)
+                            }}
+                          >
+                            View Email
+                          </Button>
+                        )}
                         {item.gmail_url && (
                           <GmailActionLink
                             href={item.gmail_url}
@@ -1866,7 +1951,7 @@ export function NotificationsPage() {
                             }}
                             className="inline-flex text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
                           >
-                            View Email
+                            Open in Gmail
                           </GmailActionLink>
                         )}
                       </div>
@@ -1939,39 +2024,53 @@ export function NotificationsPage() {
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
-                        {mail.gmail_url ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void handleViewEmail(mail.id)}
+                          leftIcon={<Eye className="w-3.5 h-3.5 text-slate-500" />}
+                        >
+                          {isExpanded ? 'Hide Email' : 'View Email'}
+                        </Button>
+                        {mail.gmail_url && (
                           <GmailActionLink
                             href={mail.gmail_url}
                             className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-indigo-200 bg-white px-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-indigo-800 dark:bg-slate-900 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
                           >
-                            View Email <ExternalLink className="h-3.5 w-3.5" />
+                            Open in Gmail <ExternalLink className="h-3.5 w-3.5" />
                           </GmailActionLink>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setExpandedEmailId(isExpanded ? null : mail.id)}
-                            leftIcon={<Eye className="w-3.5 h-3.5 text-slate-500" />}
-                          >
-                            {isExpanded ? 'Hide Content' : 'View Email'}
-                          </Button>
                         )}
                       </div>
                     </div>
 
-                    {/* Expandable Preview */}
                     {isExpanded && (
                       <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
-                        {mail.html ? (
-                          <div
-                            className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 max-h-96 overflow-y-auto"
-                            dangerouslySetInnerHTML={{ __html: maskCodes(mail.html) }}
-                          />
-                        ) : (
-                          <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200 whitespace-pre-wrap font-sans leading-relaxed">
-                            {maskCodes(mail.body)}
-                          </div>
-                        )}
+                        {loadingEmailId === String(mail.id) ? (
+                          <p className="text-sm text-slate-500">Loading email…</p>
+                        ) : emailDetailError ? (
+                          <p role="alert" className="text-sm text-rose-600">{emailDetailError}</p>
+                        ) : selectedEmail ? (
+                          <>
+                            <dl className="grid gap-1 text-xs text-slate-600 dark:text-slate-300">
+                              <div><dt className="inline font-semibold">From: </dt><dd className="inline">{selectedEmail.from}</dd></div>
+                              <div><dt className="inline font-semibold">To: </dt><dd className="inline">{selectedEmail.to}</dd></div>
+                              <div><dt className="inline font-semibold">Date: </dt><dd className="inline">{new Date(selectedEmail.created_at).toLocaleString()}</dd></div>
+                              <div><dt className="inline font-semibold">Subject: </dt><dd className="inline">{maskCodes(selectedEmail.subject)}</dd></div>
+                            </dl>
+                            {selectedEmail.html ? (
+                              <iframe
+                                title={`Email content: ${selectedEmail.subject}`}
+                                sandbox=""
+                                srcDoc={selectedEmail.html}
+                                className="h-80 w-full rounded-xl border border-slate-200 bg-white dark:border-slate-700"
+                              />
+                            ) : (
+                              <div className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 font-sans text-xs leading-relaxed text-slate-800 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
+                                {maskCodes(selectedEmail.body)}
+                              </div>
+                            )}
+                          </>
+                        ) : null}
                       </div>
                     )}
                   </Card>
@@ -1981,6 +2080,39 @@ export function NotificationsPage() {
           )}
         </div>
       )}
+      <Modal
+        isOpen={emailModalOpen}
+        onClose={() => setEmailModalOpen(false)}
+        title={selectedEmail?.subject ? maskCodes(selectedEmail.subject) : 'Email'}
+        description="Private email addressed to your account."
+      >
+        {loadingEmailId ? (
+          <p className="text-sm text-slate-500">Loading email…</p>
+        ) : emailDetailError ? (
+          <p role="alert" className="text-sm text-rose-600">{emailDetailError}</p>
+        ) : selectedEmail ? (
+          <div className="space-y-4">
+            <dl className="grid gap-1 text-xs text-slate-600 dark:text-slate-300">
+              <div><dt className="inline font-semibold">From: </dt><dd className="inline">{selectedEmail.from}</dd></div>
+              <div><dt className="inline font-semibold">To: </dt><dd className="inline">{selectedEmail.to}</dd></div>
+              <div><dt className="inline font-semibold">Date: </dt><dd className="inline">{new Date(selectedEmail.created_at).toLocaleString()}</dd></div>
+              <div><dt className="inline font-semibold">Subject: </dt><dd className="inline">{maskCodes(selectedEmail.subject)}</dd></div>
+            </dl>
+            {selectedEmail.html ? (
+              <iframe
+                title={`Email content: ${selectedEmail.subject}`}
+                sandbox=""
+                srcDoc={selectedEmail.html}
+                className="h-80 w-full rounded-xl border border-slate-200 bg-white dark:border-slate-700"
+              />
+            ) : (
+              <div className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 font-sans text-xs leading-relaxed text-slate-800 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
+                {maskCodes(selectedEmail.body)}
+              </div>
+            )}
+          </div>
+        ) : null}
+      </Modal>
     </div>
   )
 }

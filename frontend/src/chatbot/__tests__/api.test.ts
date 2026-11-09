@@ -68,6 +68,8 @@ describe('chatbot API errors', () => {
       data: {
         enabled: true,
         mode: 'llm',
+        retrieval: 'hybrid',
+        provider_ok: true,
         provider_configured: true,
         rag_enabled: true,
         indexed_chunk_count: 38,
@@ -77,6 +79,8 @@ describe('chatbot API errors', () => {
     await expect(getChatbotStatus()).resolves.toEqual({
       enabled: true,
       mode: 'llm',
+      retrieval: 'hybrid',
+      provider_ok: true,
       provider_configured: true,
       rag_enabled: true,
       indexed_chunk_count: 38,
@@ -94,14 +98,15 @@ describe('chatbot API errors', () => {
       suggested_followups: ['How do I withdraw an application?'],
       category: 'in_scope',
       refused: false,
+      needs_clarification: null,
     }
     vi.spyOn(api, 'post').mockResolvedValue({ data: response } as never)
 
     await expect(askChatbot('Where is my application?', [], 'applications')).resolves.toEqual(response)
     expect(api.post).toHaveBeenCalledWith(
       '/chatbot/ask',
-      { message: 'Where is my application?', history: [], page: 'applications' },
-      { timeout: 20_000 },
+      { message: 'Where is my application?', history: [], page: 'applications', previous_suggestions: [] },
+      { timeout: 10_000 },
     )
   })
 
@@ -114,6 +119,7 @@ describe('chatbot API errors', () => {
       suggested_followups: [],
       category: 'in_scope',
       refused: false,
+      needs_clarification: null,
     }
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: response } as never)
     const longAnswer = `[guide](/applications) [1] 【source】 ${'a'.repeat(1600)}`
@@ -129,13 +135,13 @@ describe('chatbot API errors', () => {
     const sentHistory = (post.mock.calls[0][1] as { history: Array<{ role: string; content: string }> }).history
     expect(sentHistory).toHaveLength(2)
     expect(sentHistory[0]).toEqual({ role: 'assistant', content: 'old turn 2' })
-    expect(sentHistory[1].content).toHaveLength(1500)
+    expect(sentHistory[1].content).toHaveLength(500)
     expect(sentHistory[1].content).not.toContain('/applications')
     expect(sentHistory[1].content).not.toContain('[1]')
     expect(sentHistory[1].content).not.toContain('【source】')
   })
 
-  it('retries a history validation error once with shorter history', async () => {
+  it('retries one network failure with bounded request content', async () => {
     const response = {
       answer: 'Done.',
       links: [],
@@ -144,31 +150,25 @@ describe('chatbot API errors', () => {
       suggested_followups: [],
       category: 'in_scope',
       refused: false,
+      needs_clarification: null,
     }
-    const error = new axios.AxiosError('unprocessable entity')
-    Object.assign(error, {
-      response: {
-        status: 422,
-        data: {
-          detail: [{
-            loc: ['body', 'history', 0, 'content'],
-            msg: 'String should have at most 500 characters',
-            type: 'string_too_long',
-          }],
-        },
-      },
-    })
+    const error = new axios.AxiosError('network failure', 'ERR_NETWORK')
     const post = vi.spyOn(api, 'post')
       .mockRejectedValueOnce(error)
       .mockResolvedValueOnce({ data: response } as never)
 
     await expect(askChatbot('Follow up', [
       { role: 'assistant', content: 'a'.repeat(1400) },
-    ], 'home')).resolves.toEqual(response)
+    ], 'home', ['Earlier suggestion'])).resolves.toEqual(response)
 
     expect(post).toHaveBeenCalledTimes(2)
-    const retriedHistory = (post.mock.calls[1][1] as { history: Array<{ content: string }> }).history
-    expect(retriedHistory[0].content).toHaveLength(500)
+    const retried = post.mock.calls[1][1] as {
+      history: Array<{ content: string }>
+      previous_suggestions: string[]
+      message: string
+    }
+    expect(retried.history[0].content).toHaveLength(500)
+    expect(retried.previous_suggestions).toEqual(['Earlier suggestion'])
   })
 
   it('sends feedback metadata without the message content', async () => {

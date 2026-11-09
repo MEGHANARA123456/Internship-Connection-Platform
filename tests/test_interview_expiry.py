@@ -8,6 +8,50 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.models import Application, CompanyProfile, Interview, Internship, Notification, User, UserRole
 from app.models.base import Base
 from app.services import interview_expiry
+from app.services.interview_display import derive_application_display_status, get_interview_state
+
+
+def _interview(scheduled_at: datetime, *, status: str = "SCHEDULED", notes: str | None = None, cancel_reason: str | None = None):
+    return SimpleNamespace(
+        id=1,
+        scheduled_at=scheduled_at,
+        status=status,
+        notes=notes,
+        cancel_reason=cancel_reason,
+    )
+
+
+def test_application_display_status_uses_interview_end_time_and_never_replaces_later_status():
+    now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+    past = _interview(now - timedelta(minutes=61))
+    future = _interview(now + timedelta(minutes=1))
+    exact_end = _interview(now - timedelta(minutes=60))
+
+    assert derive_application_display_status("INTERVIEW_SCHEDULED", [past], now) == "EXPIRED"
+    assert derive_application_display_status("INTERVIEW_SCHEDULED", [future], now) == "INTERVIEW_SCHEDULED"
+    assert derive_application_display_status("OFFER", [past], now) == "OFFER"
+    assert derive_application_display_status("INTERVIEW_SCHEDULED", [exact_end], now) == "EXPIRED"
+    assert derive_application_display_status("INTERVIEW_SCHEDULED", [], now) == "INTERVIEW_SCHEDULED"
+
+
+def test_application_display_status_respects_reschedules_and_cancellations():
+    now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+    past = _interview(now - timedelta(days=1), status="SCHEDULED")
+    rescheduled = _interview(now + timedelta(days=1), status="RESCHEDULED")
+    manual_cancel = _interview(now - timedelta(days=1), status="CANCELLED", cancel_reason="Candidate unavailable")
+    automatic_expiry = _interview(now - timedelta(days=1), status="CANCELLED", cancel_reason="TIME_PASSED")
+
+    assert derive_application_display_status("INTERVIEW_SCHEDULED", [past, rescheduled], now) == "INTERVIEW_SCHEDULED"
+    assert derive_application_display_status("INTERVIEW_SCHEDULED", [manual_cancel], now) == "INTERVIEW_SCHEDULED"
+    assert derive_application_display_status("INTERVIEW_SCHEDULED", [automatic_expiry], now) == "EXPIRED"
+
+
+def test_interview_state_defaults_to_sixty_minutes_and_ends_at_exact_boundary():
+    now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+    assert get_interview_state(_interview(now + timedelta(minutes=1)), now) == "upcoming"
+    assert get_interview_state(_interview(now - timedelta(minutes=1)), now) == "in_progress"
+    assert get_interview_state(_interview(now - timedelta(minutes=60)), now) == "completed"
+    assert get_interview_state(_interview(now - timedelta(minutes=30), notes="Duration: 30 min"), now) == "completed"
 
 
 @pytest.mark.anyio
@@ -61,6 +105,14 @@ async def test_expiry_boundary_is_idempotent_notifies_once_and_preserves_applica
                 status="SCHEDULED",
             )
             db.add(interview)
+            invitation = Notification(
+                user_id=student.id,
+                application_id=application.id,
+                notification_type="INTERVIEW_INVITE",
+                title="Interview invitation",
+                body="Interview",
+            )
+            db.add(invitation)
             await db.commit()
 
             assert await interview_expiry.expire_overdue_interviews(db, deadline - timedelta(seconds=1)) == 0
@@ -68,11 +120,13 @@ async def test_expiry_boundary_is_idempotent_notifies_once_and_preserves_applica
             assert await interview_expiry.expire_overdue_interviews(db, deadline + timedelta(minutes=5)) == 0
             await db.refresh(interview)
             await db.refresh(application)
+            await db.refresh(invitation)
             assert interview.status == "CANCELLED"
             assert interview.cancel_reason == "TIME_PASSED"
             assert interview.cancelled_at is not None
             assert interview.cancelled_at.replace(tzinfo=timezone.utc) == deadline
             assert application.status == "INTERVIEW_SCHEDULED"
+            assert invitation.read_at.replace(tzinfo=timezone.utc) == deadline
 
             count = await db.scalar(
                 select(func.count(Notification.id)).where(
@@ -80,7 +134,7 @@ async def test_expiry_boundary_is_idempotent_notifies_once_and_preserves_applica
                 )
             )
             assert count == 2
-            assert await db.scalar(select(func.count(Notification.id)).where(Notification.user_id == student.id)) == 1
+            assert await db.scalar(select(func.count(Notification.id)).where(Notification.user_id == student.id)) == 2
     finally:
         await engine.dispose()
 
