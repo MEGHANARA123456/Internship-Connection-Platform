@@ -25,10 +25,12 @@ afterEach(() => {
 
 describe('platform shell', () => {
   it('renders the recruitment landing shell with InternSphere branding', () => {
-    render(<BrowserRouter><App /></BrowserRouter>)
+    const { container } = render(<BrowserRouter><App /></BrowserRouter>)
     expect(screen.getAllByText('Intern').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Sphere').length).toBeGreaterThan(0)
     expect(screen.getByText('Browse Internships')).toBeTruthy()
+    expect(container.firstElementChild).toHaveClass('bg-transparent')
+    expect(container.firstElementChild).not.toHaveClass('bg-slate-50', 'dark:bg-slate-950')
   })
 
   it('renders the login form', () => {
@@ -307,8 +309,7 @@ describe('platform shell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /My Direct Emails/ }))
     expect(await screen.findByText('Your verification code is ••••••')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'View Email' }))
-    expect(await screen.findByText('Use code •••••• to sign in.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /View email:/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/654321/)).not.toBeInTheDocument()
     expect(get).toHaveBeenCalledWith('/notifications')
     expect(get).toHaveBeenCalledWith('/me/emails')

@@ -1,15 +1,18 @@
 """Input/output safety checks; this module has no application dependencies."""
 
+import logging
 import re
 
 from .redaction import contains_secret
 
+logger = logging.getLogger("internsphere.chatbot.guardrails")
 
-OUT_OF_SCOPE_REPLY = "I can help with InternSphere questions."
-ADMIN_ONLY_REPLY = "Audit events are available only to InternSphere administrators."
+
+OUT_OF_SCOPE_REPLY = "I can only help with InternSphere."
+ADMIN_ONLY_REPLY = "That area is only available to administrators."
 INJECTION_REPLY = "I can’t follow instructions to ignore my safety rules or reveal private configuration. I can help with InternSphere."
 SECRET_REPLY = "Please don’t share passwords, verification codes, tokens, or personal information here. I can’t process that message."
-ABUSE_REPLY = "I can’t help with that request. I can only help with using InternSphere."
+ABUSE_REPLY = "I can’t help with harming anyone. If someone is in immediate danger, contact local emergency services."
 
 INJECTION_PATTERNS = (
     re.compile(r"\b(ignore|disregard|forget|bypass|override)\b.{0,60}\b(instructions|rules|safety|prompt|system|policy)\b", re.I),
@@ -29,14 +32,15 @@ PRIVATE_CROSS_ACCOUNT_PATTERN = re.compile(
     r"\b(data|application|profile|notification|interview)s?\b"
     r"|\b(?:show|list|find|give me)\b.{0,30}\b(?:all|every)\b.{0,20}\b(?:students?|users?|applicants?)\b"
     r"|\b(?:show|list|find|tell me about)\b.{0,30}\b[a-z][a-z'-]{1,30}'s\b.{0,20}"
-    r"\b(?:applications?|profiles?|interviews?|notifications?)\b",
+    r"\b(?:applications?|profiles?|interviews?|notifications?)\b"
+    r"|\b(?:private|confidential)\s+(?:company|student|applicant|account)\s+(?:information|data|details)\b",
     re.I,
 )
 
 OUT_OF_SCOPE_PATTERNS = (
     re.compile(r"\b(write|draft|compose)\b.{0,40}\b(cover letter|essay|resume|cv)\b", re.I),
     re.compile(r"\b(write|compose|create|make)\b.{0,30}\b(poem|poetry|story|fiction)\b", re.I),
-    re.compile(r"\b(medical|diagnos\w*|headache|medicine|politic\w*|election|vote|legal advice|lawyer|weather|recipe|joke|cryptocurrency|crypto prices)\b", re.I),
+    re.compile(r"\b(medical|diagnos\w*|headache|medicine|politic\w*|election|vote|legal advice|lawyer|weather|recipe|joke|cryptocurrency|crypto prices|news|sports|music)\b", re.I),
     re.compile(r"\b(history of|capital of|ancient history)\b", re.I),
     re.compile(r"\b(code|debug|programming help|python script|javascript function)\b", re.I),
     re.compile(r"\b(other website|another company|different company|google|facebook|linkedin)\b", re.I),
@@ -47,7 +51,20 @@ ACCOUNT_PATTERNS = (
     re.compile(r"\bwhat is my\b", re.I),
 )
 
-ABUSE_PATTERNS = (re.compile(r"\b(kill|hurt|threaten)\b.{0,30}\b(recruiter|applicant|user|company)\b", re.I),)
+ABUSE_PATTERNS = (
+    re.compile(
+        r"\b(kill|hurt|threaten)\b.{0,30}\b(recruiter|applicant|user|company)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bhow\s+(?:to|can i|do i)\s+kill\b|\b(?:kill|hurt)\s+myself\b|\bsuicid(?:e|al)\b",
+        re.IGNORECASE,
+    ),
+)
+SELF_HARM_PATTERN = re.compile(
+    r"\b(?:kill|hurt)\s+myself\b|\bsuicid(?:e|al)\b",
+    re.IGNORECASE,
+)
 
 
 def detect_injection(text: str) -> bool:
@@ -99,15 +116,31 @@ def detect_abuse(text: str) -> bool:
     return any(pattern.search(text) for pattern in ABUSE_PATTERNS)
 
 
+def suggests_self_harm(text: str) -> bool:
+    """Detect direct self-harm wording so the refusal can include supportive guidance."""
+    return bool(SELF_HARM_PATTERN.search(text))
+
+
 def output_is_safe(answer: str, allowed_routes: set[str]) -> bool:
     """Reject oversized, secret-bearing, markup-bearing, external-link, or unapproved-route output."""
-    if (
-        len(answer.split()) > 150
-        or contains_secret(answer)
-        or re.search(r"</?[A-Za-z][^>]*>", answer)
-        or re.search(r"\]\(\s*(?:javascript|data):", answer, re.I)
-    ):
-        return False
+    failure = _output_safety_failure(answer, allowed_routes)
+    if failure:
+        logger.warning(
+            "chatbot_output_rejected",
+            extra={"chatbot_meta": {"check": failure}},
+        )
+    return failure is None
+
+
+def _output_safety_failure(answer: str, allowed_routes: set[str]) -> str | None:
+    if len(answer.split()) > 150:
+        return "word_limit"
+    if contains_secret(answer):
+        return "secret_detection"
+    if re.search(r"</?[A-Za-z][^>]*>", answer):
+        return "html_markup"
+    if re.search(r"\]\(\s*(?:javascript|data):", answer, re.I):
+        return "unsafe_link_scheme"
     # Accept plain-text http(s) examples when they are part of a documented workflow;
     # only reject javascript: and data: schemes to avoid unsafe execution payloads.
     for route in re.findall(
@@ -120,5 +153,5 @@ def output_is_safe(answer: str, allowed_routes: set[str]) -> bool:
             (separator and not re.fullmatch(r"[A-Za-z0-9_=&%-]*", query))
             or route_path not in allowed_routes
         ):
-            return False
-    return True
+            return "route_not_allowed"
+    return None

@@ -197,7 +197,7 @@
     "question": "Where do I review an upcoming interview?",
     "expected": "interviews",
     "role": "student",
-    "expected_source": "interviews",
+    "expected_source": "interview-invites-and-expiry",
     "expected_path": "docs",
     "expected_links": [
       "/interviews"
@@ -209,7 +209,7 @@
     "question": "How can a company review interview invitations?",
     "expected": "interviews",
     "role": "company",
-    "expected_source": "interviews",
+    "expected_source": "interview-invites-and-expiry",
     "expected_path": "docs",
     "expected_links": [
       "/interviews"
@@ -317,10 +317,10 @@
     "question": "Where do companies review applicants in the pipeline?",
     "expected": "company-applicant-review",
     "role": "company",
-    "expected_source": "company-applicant-review",
+    "expected_source": "company-hiring-pipeline",
     "expected_path": "docs",
     "expected_links": [
-      "/company/applicants"
+      "/company/pipeline"
     ]
   },
   {
@@ -530,7 +530,7 @@
     "kind": "in_scope",
     "question": "How long does my verified skill badge remain valid?",
     "expected": "skill-assessments",
-    "expected_source": "skill-assessments",
+    "expected_source": "assessment-badges",
     "key_facts": [
       "12 months"
     ],
@@ -844,7 +844,7 @@
     "kind": "in_scope",
     "role": "student",
     "question": "Where can I see my interview invitations and meeting details?",
-    "expected_source": "interviews",
+    "expected_source": "interview-invites-and-expiry",
     "expected_path": "docs",
     "expected": "interviews",
     "expected_links": [
@@ -1828,9 +1828,9 @@
     "kind": "in_scope",
     "role": "student",
     "question": "how many applications i have",
-    "expected_source": "student_applications",
+    "expected_source": "student_application_counts",
     "expected_path": "live_data",
-    "expected_tool": "student_applications",
+    "expected_tool": "student_application_counts",
     "expected_links": [
       "/applications"
     ]
@@ -1840,9 +1840,9 @@
     "kind": "in_scope",
     "role": "student",
     "question": "shortlisted count of applications",
-    "expected_source": "student_applications",
+    "expected_source": "student_application_counts",
     "expected_path": "live_data",
-    "expected_tool": "student_applications",
+    "expected_tool": "student_application_counts",
     "expected_links": [
       "/applications"
     ]
@@ -1852,9 +1852,9 @@
     "kind": "in_scope",
     "role": "student",
     "question": "how many applications are applied",
-    "expected_source": "student_applications",
+    "expected_source": "student_application_counts",
     "expected_path": "live_data",
-    "expected_tool": "student_applications",
+    "expected_tool": "student_application_counts",
     "expected_links": [
       "/applications"
     ]
@@ -1864,8 +1864,10 @@
     "kind": "in_scope",
     "role": "student",
     "question": "When can I retake a skill assessment?",
-    "expected_source": "assessment-badges",
+    "expected_source": "skill-assessments",
     "expected_path": "docs",
+    "expected_tool": "student_skill_retake",
+    "expected_intent_category": "both",
     "expected_links": [
       "/skills/history"
     ],
@@ -1879,11 +1881,11 @@
     "kind": "in_scope",
     "role": "student",
     "question": "what are my skills and where i have to improve",
-    "expected_source": "student_skills_improvement",
+    "expected_source": "student_skill_gap",
     "expected_path": "live_data",
-    "expected_tool": "student_skills_improvement",
+    "expected_tool": "student_skill_gap",
     "expected_links": [
-      "/profile/student"
+      "/skills/history"
     ]
   },
   {
@@ -1903,7 +1905,7 @@
     "kind": "in_scope",
     "role": "student",
     "question": "How do I download an assessment report?",
-    "expected_source": "assessment-badges",
+    "expected_source": "skill-assessments",
     "expected_path": "docs",
     "expected_links": [
       "/skills/history"
@@ -3041,6 +3043,49 @@
       "registered companies",
       "verified and pending counts",
       "published postings whose deadline has not passed"
+    ]
+  },
+  {
+    "id": "chip-guest-search-internships",
+    "kind": "in_scope",
+    "question": "How do I search internships?",
+    "role": "guest",
+    "expected_source": "search-filters",
+    "expected_path": "docs",
+    "expected_links": [
+      "/opportunities"
+    ]
+  },
+  {
+    "id": "chip-student-interviews",
+    "kind": "in_scope",
+    "question": "Any interviews coming up?",
+    "role": "student",
+    "expected_source": "student_interviews",
+    "expected_path": "live_data",
+    "expected_tool": "student_interviews",
+    "expected_links": [
+      "/interviews"
+    ],
+    "expected_key_facts": [
+      "upcoming interviews",
+      "authorized aggregate only"
+    ]
+  },
+  {
+    "id": "chip-admin-open-reports",
+    "kind": "in_scope",
+    "question": "Are there any open reports?",
+    "role": "admin",
+    "expected_source": "admin_open_reports",
+    "expected_path": "live_data",
+    "expected_tool": "admin_open_reports",
+    "expected_links": [
+      "/admin/reports"
+    ],
+    "expected_key_facts": [
+      "open reports",
+      "authorized aggregate only"
     ]
   }
 ]

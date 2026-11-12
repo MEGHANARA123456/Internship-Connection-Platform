@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../api/client'
-import { JobFormPage } from '../CompanyPages'
+import { CompanyPortalShell, JobFormPage } from '../CompanyPages'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -14,18 +14,98 @@ function renderJobForm() {
 }
 
 function fillRequiredFields(industry = 'Information Technology') {
-  fireEvent.change(screen.getByLabelText('Job Title'), { target: { value: 'Python Developer' } })
-  fireEvent.change(screen.getByLabelText('Location'), { target: { value: 'Bangalore, Karnataka, India' } })
-  fireEvent.change(screen.getByLabelText('Industry'), { target: { value: industry } })
-  fireEvent.change(screen.getByLabelText('Application Deadline'), {
+  fireEvent.change(screen.getByLabelText(/^Job Title/), { target: { value: 'Python Developer' } })
+  fireEvent.change(screen.getByLabelText(/^Location/), { target: { value: 'Bangalore, Karnataka, India' } })
+  fireEvent.change(screen.getByLabelText(/^Industry/), { target: { value: industry } })
+  fireEvent.change(screen.getByLabelText(/^Application Deadline/), {
     target: { value: '2027-01-31' },
   })
-  fireEvent.change(screen.getByLabelText('Full Description & Requirements'), {
+  fireEvent.change(screen.getByLabelText(/^Full Description & Requirements/), {
     target: { value: 'Build and maintain Python applications.' },
   })
 }
 
 describe('internship form submission', () => {
+  it('marks schema-required fields and leaves optional skills unmarked', () => {
+    renderJobForm()
+
+    const requiredNote = screen.getByText('Required fields')
+    expect(requiredNote.parentElement?.querySelector('[aria-hidden="true"]')).toHaveTextContent('*')
+    for (const label of [
+      'Job Title',
+      'Location',
+      'Industry',
+      'Work Mode',
+      'Duration (Months)',
+      'Monthly stipend (₹)',
+      'Application Deadline',
+      'Full Description & Requirements',
+    ]) {
+      expect(screen.getByText(label, { selector: 'label, p' })).toBeInTheDocument()
+      expect(screen.getByText(label, { selector: 'label, p' }).parentElement?.querySelector('[aria-hidden="true"]')).toHaveTextContent('*')
+    }
+
+    for (const label of ['Job Title', 'Location', 'Industry', 'Duration (Months)', 'Monthly stipend (₹)', 'Application Deadline', 'Full Description & Requirements']) {
+      expect(screen.getByLabelText(label, { exact: false })).toHaveAttribute('aria-required', 'true')
+    }
+    const stipendInput = screen.getByLabelText(/Monthly stipend/)
+    expect(stipendInput).toHaveAttribute('max', '1000000')
+    expect(screen.getByText('₹', { exact: true })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Work Mode, required' })).toBeInTheDocument()
+    const optionalSkills = screen.getByLabelText('Required Skills / Keywords')
+    expect(optionalSkills.parentElement?.querySelector('[aria-hidden="true"]')).toBeNull()
+  })
+
+  it('accepts realistic INR stipends and rejects amounts above the monthly limit', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { id: 8 } } as never)
+    const { unmount } = renderJobForm()
+    fillRequiredFields()
+    fireEvent.change(screen.getByLabelText(/Monthly stipend/), { target: { value: '25000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Internship (Draft)' }))
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
+    expect(post.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ stipend: 25000 }))
+
+    unmount()
+    post.mockClear()
+    const { container } = renderJobForm()
+    fillRequiredFields()
+    fireEvent.change(screen.getByLabelText(/Monthly stipend/), { target: { value: '1000001' } })
+    fireEvent.submit(container.querySelector('form')!)
+    expect(await screen.findByText('Stipend must be 1,000,000 or less')).toBeInTheDocument()
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('renders company content without a sidebar navigation column', () => {
+    const { container } = render(
+      <MemoryRouter initialEntries={['/company']}>
+        <Routes>
+          <Route element={<CompanyPortalShell />}>
+            <Route path="/company" element={<p>Company content</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Company content')).toBeInTheDocument()
+    expect(screen.queryByText('Company portal')).not.toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Company portal navigation' })).not.toBeInTheDocument()
+    expect(container.firstElementChild).toHaveClass('max-w-7xl')
+  })
+
+  it('keeps the existing empty-field validation messages', async () => {
+    const post = vi.spyOn(api, 'post')
+    renderJobForm()
+    fireEvent.click(screen.getByRole('button', { name: 'Create Internship (Draft)' }))
+
+    expect(await screen.findByText('Title must be at least 3 characters')).toBeInTheDocument()
+    expect(screen.getByText('Location is required (e.g. Remote or San Francisco, CA)')).toBeInTheDocument()
+    expect(screen.getByText('Industry is required')).toBeInTheDocument()
+    expect(screen.getByText('Application deadline is required')).toBeInTheDocument()
+    expect(screen.getByText('Provide a detailed description of duties and qualifications')).toBeInTheDocument()
+    expect(post).not.toHaveBeenCalled()
+  })
+
   it('rejects an industry over 255 characters before calling the API', async () => {
     const post = vi.spyOn(api, 'post')
     renderJobForm()
@@ -57,7 +137,7 @@ describe('internship form submission', () => {
 
     expect(await screen.findByText('Please fix the highlighted fields.')).toBeInTheDocument()
     expect(await screen.findByText('Industry is not accepted')).toBeInTheDocument()
-    expect(screen.getByLabelText('Industry')).toHaveValue('Information Technology / Software Development')
+    expect(screen.getByLabelText(/^Industry/)).toHaveValue('Information Technology / Software Development')
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' })
     await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
     if (previousScrollIntoView) {

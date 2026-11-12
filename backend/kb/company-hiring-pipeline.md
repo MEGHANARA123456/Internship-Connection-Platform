@@ -9,7 +9,10 @@ links:
     route: "/company/shortlisted"
 ---
 ## Open Hiring Pipeline
-Open Hiring Pipeline at `/company/pipeline` to see applicants grouped by their current stage. You can also review candidates on Applicants at `/company/applicants`, or see the shortlist at `/company/shortlisted`. On a candidate card, open the Actions menu and choose an action offered for that candidate's current stage. You can also drag a card to a permitted stage. The available next stages are enforced; a candidate cannot skip a stage or move out of a terminal stage.
+To move a candidate through hiring, open Hiring Pipeline at `/company/pipeline` and use an allowed stage action.
+1. Open Hiring Pipeline to see applicants grouped by stage, or open Applicants or Shortlisted.
+2. Open a candidate card and choose an action available for the current stage, or drag it to a permitted stage.
+3. Follow the allowed transitions; candidates cannot skip a stage or leave a terminal stage.
 
 ## Meaning of each stage
 The stages mean:
@@ -23,7 +26,12 @@ The stages mean:
 - Withdrawn: the student withdrew the application; this is a final stage.
 
 ## Which moves are allowed
-Allowed moves (the allowed next stage) are Applied to Under Review; Under Review to Shortlisted or Rejected; Shortlisted to Interview Scheduled or Rejected; Interview Scheduled to Selected or Rejected; and Selected to Accepted. Students may withdraw their own applications from Applied or Under Review. Accepted, Rejected, and Withdrawn have no further moves. The Actions menu shows choices for the current stage, including Move to review, Shortlist, Schedule interview, Select candidate, and Reject when each action is allowed. Relevant status changes notify the student.
+The Hiring Pipeline allows only the next stage listed for a candidate.
+1. Applied can move to Under Review.
+2. Under Review can move to Shortlisted or Rejected.
+3. Shortlisted can move to Interview Scheduled or Rejected.
+4. Interview Scheduled can move to Selected or Rejected; Selected can move to Accepted.
+5. Students can withdraw from Applied or Under Review. Accepted, Rejected, and Withdrawn are final; relevant changes notify the student.
 
 ## Search terms and example questions
 Keywords: shortlist a candidate, move someone to the next stage, candidate status, applicant stage, hiring pipeline, Actions menu, move to review, select candidate, reject applicant, company applicant workflow.

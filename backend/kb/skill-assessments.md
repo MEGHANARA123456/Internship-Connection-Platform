@@ -2,6 +2,8 @@
 id: skill-assessments
 title: Skill assessments, results, and verified badges
 audience: [student]
+keywords: [skill assessment questions, assessment duration, passing score, retake rules, 24 hours, 3 attempts, assessment history, assessment results, download assessment report]
+example_questions: [How many questions and minutes are in each skill assessment?, What score do I need to pass a skill assessment?, When can I retake the same skill assessment topic?, Where can I see my weaker assessment subtopics and explanations?, How do I download an assessment report?]
 links:
   - label: "Assessment History"
     route: "/skills/history"
@@ -9,16 +11,31 @@ links:
     route: "/profile/student"
 ---
 ## Start a skill assessment
-Sign in as a student and open your Profile. In the Skill Assessment area, choose an available topic and select Start Assessment. Each attempt has 10 questions: 4 easy, 4 medium, and 2 hard. You have 15 minutes, and the server rejects submissions after the timer expires. The quiz shows one question at a time; use Next Question and Previous to move between questions.
+To take an assessment, open Skill Assessment from your student Profile and start an available topic.
+1. Sign in as a student and open Profile.
+2. In Skill Assessment, choose an available topic and select Start Assessment.
+3. Answer 10 questions (4 easy, 4 medium, and 2 hard) within 15 minutes.
+4. Use Next Question and Previous to move through the quiz, then submit before time expires.
 
 ## Pass mark and retakes
-A score of 80% or higher on the difficulty-weighted score passes. Easy questions are worth 1 point, medium questions 2, and hard questions 3; the weighted percentage is earned points divided by the available weighted points. You can retake the same topic 24 hours after your previous attempt starts. There is also a maximum of 3 assessment attempts in any 7-day period.
+You can retake a topic 24 hours after its previous attempt starts, with no more than 3 assessment attempts in any 7-day period.
+1. Check Assessment History for the start time of your latest attempt in that topic.
+2. Wait until 24 hours have passed before starting that topic again.
+3. If you have already made 3 attempts in 7 days, wait until the oldest attempt leaves that window.
+4. A score of 80% or higher on the difficulty-weighted score passes; easy, medium, and hard questions are worth 1, 2, and 3 points.
 
 ## Multi-answer scoring
-For a question that says Select all that apply, choose every correct option. The server awards partial credit by subtracting each incorrect selection from the count of correct selections, then dividing by the number of correct options. The result cannot go below zero. Selecting all correct options without an incorrect option earns full credit.
+For a Select all that apply question, choose every correct option and avoid incorrect choices.
+1. Select all options you believe are correct.
+2. Submit the response; partial credit subtracts incorrect choices from the number of correct options and cannot go below zero.
+3. Selecting every correct option without an incorrect option earns full credit.
 
 ## Badges and expiry
 Passing earns a verified badge for that topic. A badge expires 12 months after it is earned; the badge area on your Profile shows whether it is valid and when it expires. The assessment result and PDF report also show the badge expiry date when a badge was earned.
 
 ## View results and download a report
-After submitting, review your score and answer explanations in the assessment result. Open Profile and choose Assessment history to compare completed attempts and open a full report. The report shows strengths and weaker subtopics, the correct answer and explanation for each question, and learning links for weaker areas. Choose Download PDF on the report page to save a copy. Percentile is shown after enough comparison data is available; otherwise the report says Not enough data yet.
+To see results, open Assessment History on your student Profile and select a completed attempt.
+1. After submitting, review your score and answer explanations on the result page.
+2. Open Profile and choose Assessment History to compare completed attempts.
+3. Select an attempt to see strengths, weaker subtopics, answers, explanations, and learning links.
+4. Choose Download PDF on the report page to save the report. Percentile appears only when enough comparison data is available.

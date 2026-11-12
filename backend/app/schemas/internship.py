@@ -16,7 +16,7 @@ class InternshipInput(BaseModel):
     location: str = Field(min_length=2, max_length=255)
     industry: str = Field(min_length=2, max_length=255)
     duration_months: int = Field(ge=1, le=36)
-    stipend: int | None = Field(default=None, ge=0)
+    stipend: int | None = Field(default=None, ge=0, le=1_000_000)
     work_mode: Literal["REMOTE", "HYBRID", "ONSITE"]
     skills: list[str] = Field(default_factory=list, max_length=30)
     deadline: date

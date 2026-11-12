@@ -1,0 +1,445 @@
+{
+  "answers": [
+    {
+      "id": "guest-overview",
+      "audience": "guest",
+      "questions": ["How does InternSphere connect students and companies?", "What does InternSphere provide to companies?"],
+      "answer": "InternSphere connects students with companies posting internships. Students can browse and apply, while companies manage postings and review applicants.",
+      "source": "overview",
+      "label": "Explore internships",
+      "route": "/opportunities"
+    },
+    {
+      "id": "student-search-internships",
+      "audience": "student",
+      "questions": ["How do I search internships?", "How can I filter internships by skills and location?", "Where do I find internships matching my interests?"],
+      "answer": "Open Opportunities, search by title or company, then narrow results with filters for location, work mode, industry, and skills. Open a listing to review its requirements and deadline.",
+      "source": "search-filters",
+      "label": "Browse internships",
+      "route": "/opportunities"
+    },
+    {
+      "id": "student-apply",
+      "audience": "student",
+      "questions": ["How do I apply for an internship?", "How can I submit an application?", "Where do I apply to a role?", "How do students apply to an internship posting?"],
+      "answer": "Open an internship from Opportunities and choose Apply. Review the eligibility and application details first; submitted applications appear in Applications.",
+      "source": "applying",
+      "label": "Applications",
+      "route": "/opportunities"
+    },
+    {
+      "id": "student-requirements",
+      "audience": "student",
+      "questions": ["What do I need before applying?", "What are internship eligibility requirements?", "How do I check if I qualify for an internship?"],
+      "answer": "Check the listing’s eligibility, required skills, location, and deadline before applying. Only apply when the stated requirements fit your situation.",
+      "source": "applying",
+      "label": "Browse internships",
+      "route": "/opportunities"
+    },
+    {
+      "id": "student-application-status",
+      "audience": "student",
+      "questions": ["How do I track my applications?", "Where can I see my application status?", "How do I understand application statuses?"],
+      "answer": "Open Applications to review each submission and its status timeline. A company controls its application decisions; status labels describe the current stage.",
+      "source": "application-statuses-timeline",
+      "label": "Applications",
+      "route": "/applications"
+    },
+    {
+      "id": "student-withdraw",
+      "audience": "student",
+      "questions": ["How do I withdraw an application?", "Can I cancel an application I submitted?", "How do I remove my application from a role?"],
+      "answer": "Open Applications, select the relevant submission, and use its available withdraw action. A withdrawn application may not be restorable, so confirm the role before proceeding.",
+      "source": "applying",
+      "label": "Applications",
+      "route": "/opportunities"
+    },
+    {
+      "id": "student-save",
+      "audience": "student",
+      "questions": ["How do I save an internship?", "Where are my saved internships?", "How do I bookmark a role for later?", "Is saving a role the same as applying?"],
+      "answer": "Choose the save control on an internship card, then open Saved to review it later. Saving does not submit an application or reserve a place.",
+      "source": "saved-internships",
+      "label": "Saved internships",
+      "route": "/saved"
+    },
+    {
+      "id": "student-profile-skills",
+      "audience": "student",
+      "questions": ["How do I update my profile skills?", "Where can I edit my student profile?", "How do I improve my profile?"],
+      "answer": "Open your student profile, update your skills and academic details, then save before leaving. Keep profile information accurate and relevant to internship applications.",
+      "source": "profile-resume",
+      "label": "My profile",
+      "route": "/profile/student"
+    },
+    {
+      "id": "student-resume",
+      "audience": "student",
+      "questions": ["How do I upload my resume?", "How can I replace my resume?", "Where do I update my CV?"],
+      "answer": "Open the resume section of your student profile and upload or replace the file that meets the displayed format and size requirements. The current resume is used for applications and authorized recruiter review.",
+      "source": "profile-resume",
+      "label": "My profile",
+      "route": "/profile/student"
+    },
+    {
+      "id": "student-assessments",
+      "audience": "student",
+      "questions": ["How do I take a skill assessment?", "Where can I find skill assessments?", "How do assessment badges work?"],
+      "answer": "Open Skill Assessments from your student area, choose an available topic, and complete its assessment. Passing can award a verified skill badge shown with your assessment history.",
+      "source": "skill-assessments",
+      "label": "Skill history",
+      "route": "/skills/history"
+    },
+    {
+      "id": "student-retake",
+      "audience": "student",
+      "questions": ["When can I retake a skill assessment?", "How long do I wait before taking an assessment again?", "What is the assessment retry rule?"],
+      "answer": "You can retake a topic 24 hours after your previous attempt started, with at most 3 assessment attempts in any 7-day period. Check Skill History for your topic’s attempt record.",
+      "source": "skill-assessments",
+      "label": "Skill history",
+      "route": "/skills/history"
+    },
+    {
+      "id": "student-assessment-results",
+      "audience": "student",
+      "questions": ["Where can I see my assessment results?", "How do I download skill assessment results?", "Can I view my past assessment attempts?"],
+      "answer": "Open Skill History to review your assessment attempts, results, and badges. Use the result or report action shown for an attempt when available.",
+      "source": "skill-assessments",
+      "label": "Skill history",
+      "route": "/skills/history"
+    },
+    {
+      "id": "student-badge",
+      "audience": "student",
+      "questions": ["How long do skill badges last?", "Where can I see verified skill badges?", "How do verified assessment badges appear?"],
+      "answer": "Your verified assessment badges and their status are shown in Skill History and your profile. Review the badge details there for its validity and any expiry information.",
+      "source": "assessment-badges",
+      "label": "Skill history",
+      "route": "/skills/history"
+    },
+    {
+      "id": "student-messaging",
+      "audience": "student",
+      "questions": ["How do I message a recruiter?", "Can I contact a company about my application?", "Where can I see my conversations?"],
+      "answer": "Open Messages and use an available conversation to contact the company. Keep follow-ups polite and avoid sending repeated requests in a short period.",
+      "source": "reporting-unfair-treatment",
+      "label": "Messages",
+      "route": "/messages"
+    },
+    {
+      "id": "student-no-response",
+      "audience": "student",
+      "questions": ["What if a company never responds?", "How long should I wait before following up?", "How do I follow up about an application?"],
+      "answer": "Response times vary, and a company may not respond to every application. Check the application timeline, then send one concise, polite follow-up through Messages if contact is available.",
+      "source": "reporting-unfair-treatment",
+      "label": "Applications",
+      "route": "/applications"
+    },
+    {
+      "id": "student-report-concern",
+      "audience": "student",
+      "questions": ["How do I report unfair treatment?", "Where can I report an internship problem?", "Can I dispute a concerning company request?"],
+      "answer": "Use the Report or Dispute flow on the related posting or application and include relevant facts. Do not share passwords, one-time codes, or banking details.",
+      "source": "reporting-unfair-treatment",
+      "label": "Applications",
+      "route": "/applications"
+    },
+    {
+      "id": "student-notifications",
+      "audience": "student",
+      "questions": ["Where can I see my notifications?", "How do I manage application alerts?", "How do notifications work?"],
+      "answer": "Open Notifications to review your alerts and their related activity. You can also check Applications for the current submission timeline.",
+      "source": "notifications-mailbox",
+      "label": "Notifications",
+      "route": "/notifications"
+    },
+    {
+      "id": "student-interviews",
+      "audience": "student",
+      "questions": ["Where can I see scheduled interviews?", "How do I prepare for an interview on the platform?", "How do interview notifications work?"],
+      "answer": "Open Interviews to review scheduled interview details. Check Notifications for related updates, and contact the company through the available conversation if you need to follow up.",
+      "source": "interviews",
+      "label": "Interviews",
+      "route": "/interviews"
+    },
+    {
+      "id": "student-privacy",
+      "audience": "student",
+      "questions": ["Who can see my profile and resume?", "How is my application information shared?", "How do I protect my account information?", "Does InternSphere save chatbot conversation history?"],
+      "answer": "Only share information needed for applications. Your resume is available to authorized recruiters reviewing your application; never send passwords or verification codes in messages. Chatbot conversation is kept in browser memory and cleared when you sign out or switch accounts; it is not permanent chat history.",
+      "source": "privacy-cookies-data-rights",
+      "label": "Privacy and security",
+      "route": "/privacy-center"
+    },
+    {
+      "id": "company-create-posting",
+      "audience": "company",
+      "questions": ["How do I create an internship posting?", "How do I post a new internship?", "Where can I add a role?"],
+      "answer": "Open Company jobs (My Internships) and choose the create internship action. Complete the posting details, including eligibility and deadline, then submit the posting and review its moderation status.",
+      "source": "company-posting-closing",
+      "label": "Post internship",
+      "route": "/company/jobs"
+    },
+    {
+      "id": "company-edit-posting",
+      "audience": "company",
+      "questions": ["How do I edit an internship posting?", "Where can I update a role description?", "How do I change posting details?"],
+      "answer": "Open My Internships and use the edit action for the relevant posting. Save the changes and check its status, since updates may require review before becoming visible.",
+      "source": "company-posting-closing",
+      "label": "My internships",
+      "route": "/company/jobs"
+    },
+    {
+      "id": "company-close-posting",
+      "audience": "company",
+      "questions": ["How do I close an internship posting?", "How can I stop accepting applications?", "How do I close a role?"],
+      "answer": "Open My Internships and use the close action on the intended posting. Confirm the role first; closed or expired internships are no longer active opportunities.",
+      "source": "company-posting-closing",
+      "label": "My internships",
+      "route": "/company/jobs"
+    },
+    {
+      "id": "company-posting-status",
+      "audience": "company",
+      "questions": ["How do I check my internship posting status?", "Where can I see pending or active roles?", "Show me how to manage posting statuses."],
+      "answer": "Open My Internships to see each posting’s status, such as active, pending, closed, or expired. Use the posting actions to review or update it.",
+      "source": "company-posting-closing",
+      "label": "My internships",
+      "route": "/company/jobs"
+    },
+    {
+      "id": "company-applicants",
+      "audience": "company",
+      "questions": ["How do I review applicants?", "Where can I see who applied?", "How do I find applicants for one posting?", "Where do I see the people who applied?", "How can I filter applicants by internship, skill, education, or status?"],
+      "answer": "Open Applicants and choose a posting. Use Filter by internship, candidate name, skills, education, or verified skill to narrow the list, then review the applicant’s status and profile.",
+      "source": "company-applicant-review",
+      "label": "Applicants",
+      "route": "/company/applicants"
+    },
+    {
+      "id": "company-shortlist",
+      "audience": "company",
+      "questions": ["How do I shortlist a candidate?", "How do I move an applicant to shortlisted?", "Where can I shortlist an applicant?", "How do I manage shortlisted applicants?", "How do I shortlist a candidate and move them through the Hiring Pipeline?"],
+      "answer": "In Applicants or Hiring Pipeline, select a candidate whose application is Under Review and choose Shortlist from its Actions menu. The platform updates the stage and notifies the student.",
+      "source": "company-hiring-pipeline",
+      "label": "Hiring pipeline",
+      "route": "/company/pipeline"
+    },
+    {
+      "id": "company-hiring-pipeline",
+      "audience": "company",
+      "questions": ["How do I use the hiring pipeline?", "Where can I review candidates by stage?", "How can I compare application stages?", "Where do companies review applicants in the pipeline?"],
+      "answer": "Open Hiring Pipeline to review applicants grouped by their current stage. Use Applicants for candidate details and available actions.",
+      "source": "company-hiring-pipeline",
+      "label": "Hiring pipeline",
+      "route": "/company/pipeline"
+    },
+    {
+      "id": "company-schedule-interview",
+      "audience": "company",
+      "questions": ["How do I schedule an interview?", "How can I book an interview with a candidate?", "Where do I arrange a candidate interview?", "How do I set up an interview with an applicant?", "how do I schedule an interview"],
+      "answer": "Open Applicants or Hiring Pipeline and choose Schedule interview from an eligible candidate’s Actions menu. The candidate must be shortlisted or already at Interview Scheduled; set the meeting details and submit.",
+      "source": "company-interview-scheduling",
+      "label": "Interviews",
+      "route": "/company/applicants"
+    },
+    {
+      "id": "company-interview-management",
+      "audience": "company",
+      "questions": ["Where can I manage scheduled interviews?", "How do I change interview details?", "How do I see my upcoming interviews?", "How do I reschedule an interview with a candidate?"],
+      "answer": "Open Interviews to review scheduled meetings and their details. Use the available interview actions to manage a meeting and notify the candidate of changes.",
+      "source": "company-interview-scheduling",
+      "label": "Interviews",
+      "route": "/company/pipeline"
+    },
+    {
+      "id": "company-verification",
+      "audience": "company",
+      "questions": ["How do I verify my company?", "Where can I check company verification status?", "What if verification needs more information?"],
+      "answer": "Review your verification status in the company portal. If additional evidence is requested, submit it through the verification flow and wait for an administrator decision.",
+      "source": "company-verification",
+      "label": "Company settings",
+      "route": "/company/settings"
+    },
+    {
+      "id": "company-profile",
+      "audience": "company",
+      "questions": ["How do I update my company profile?", "Where can I edit organization details?", "How do I change company contact information?"],
+      "answer": "Open Company Profile or Company Settings, update the organization details, and save. Keep the company name and contact information accurate.",
+      "source": "company-verification",
+      "label": "Company profile",
+      "route": "/profile/company"
+    },
+    {
+      "id": "company-messages",
+      "audience": "company",
+      "questions": ["Where can I message applicants?", "How do I contact a candidate?", "How do company conversations work?"],
+      "answer": "Open Messages and use an available conversation associated with your recruiting activity. Do not share passwords, verification codes, or sensitive financial information.",
+      "source": "messaging",
+      "label": "Messages",
+      "route": "/messages"
+    },
+    {
+      "id": "company-notifications",
+      "audience": "company",
+      "questions": ["Where do I see company notifications?", "How do I review recruiting alerts?", "How do company notifications work?"],
+      "answer": "Open Notifications to review company alerts and related activity. Check My Internships or Applicants for the current posting and candidate details.",
+      "source": "notifications-mailbox",
+      "label": "Notifications",
+      "route": "/notifications"
+    },
+    {
+      "id": "company-privacy",
+      "audience": "company",
+      "questions": ["Who can see applicant information?", "How do I protect candidate information?", "Can I access applicants from another company?"],
+      "answer": "Review applicant information only for postings owned by your company and use it for recruiting. The platform does not provide other companies’ applicant lists.",
+      "source": "company-applicant-review",
+      "label": "Applicants",
+      "route": "/company/applicants"
+    },
+    {
+      "id": "company-no-postings",
+      "audience": "company",
+      "questions": ["How do I get more applicants?", "Why is my posting not visible?", "How can students see my internship?"],
+      "answer": "Check that the posting is published, open, and has not passed its deadline. Review any moderation status in My Internships; only published opportunities are available to students.",
+      "source": "company-posting-closing",
+      "label": "My internships",
+      "route": "/company/jobs"
+    },
+    {
+      "id": "admin-pending-postings",
+      "audience": "admin",
+      "questions": ["How do I review pending postings?", "Where is the pending internship approval queue?", "How can I approve or reject a posting?"],
+      "answer": "Open Jobs Queue and filter for pending items. Inspect the posting details, then choose Approve for a compliant listing or Reject with a clear reason.",
+      "source": "admin-moderation",
+      "label": "Jobs Queue",
+      "route": "/admin/moderation"
+    },
+    {
+      "id": "admin-moderation",
+      "audience": "admin",
+      "questions": ["How do I moderate an internship posting?", "What should I check before approving a listing?", "How do I reject a non-compliant posting?", "How can an administrator review moderation reports?", "How do I review moderation reports as an administrator?"],
+      "answer": "In Jobs Queue, inspect the description, eligibility, location, skills, and deadline. Approve compliant postings or reject them with a concise reason; the decision is recorded for audit.",
+      "source": "admin-moderation",
+      "label": "Jobs Queue",
+      "route": "/admin/moderation"
+    },
+    {
+      "id": "admin-company-verification",
+      "audience": "admin",
+      "questions": ["How do I review company verification requests?", "Where is the company verification queue?", "How do I approve a company verification?"],
+      "answer": "Open the verification queue in Company Verifications and review the organization profile and submitted evidence. Verify when the information is sufficient, or reject with a concise reason explaining the next step.",
+      "source": "admin-company-verification",
+      "label": "Company Verifications",
+      "route": "/admin/verifications"
+    },
+    {
+      "id": "admin-audit-logs",
+      "audience": "admin",
+      "questions": ["How do I review audit logs?", "Where can I see administrator actions?", "How do I find a recorded moderation decision?"],
+      "answer": "Open Audit Logs from the administrator dashboard and filter or review events by actor, action, target, and time. Avoid copying private user details into chat or public reports.",
+      "source": "admin-analytics-reports",
+      "label": "Audit logs",
+      "route": "/admin/audit-logs"
+    },
+    {
+      "id": "admin-disputes",
+      "audience": "admin",
+      "questions": ["How do I handle a dispute or report?", "Where can I review user reports?", "How do I resolve an open report?"],
+      "answer": "Open Reports, review the submission, move it to Investigating while assessing it, then mark it Resolved and record the resolution. There is no separate dispute workflow.",
+      "source": "admin-moderation",
+      "label": "Reports",
+      "route": "/admin/reports"
+    },
+    {
+      "id": "admin-import-questions",
+      "audience": "admin",
+      "questions": ["How do I import assessment questions?", "How can I upload questions from a CSV?", "Where do I get the assessment question template?"],
+      "answer": "In Skill Assessments, choose the question import action, download the CSV template, and upload the completed file. Review row-specific validation errors, correct rejected rows, and import again.",
+      "source": "admin-skill-assessments",
+      "label": "Skill Assessments",
+      "route": "/admin/skill-assessments"
+    },
+    {
+      "id": "admin-archive-topic",
+      "audience": "admin",
+      "questions": ["How do I archive or restore a skill topic?", "How do I restore an archived topic?", "Where are archived assessment topics?"],
+      "answer": "To archive a skill topic, open Skill Assessments, select it, and choose Archive; this hides it from new attempts but keeps its questions and history. To restore it, open Archived topics and choose Restore.",
+      "source": "admin-skill-assessments",
+      "label": "Skill Assessments",
+      "route": "/admin/skill-assessments"
+    },
+    {
+      "id": "admin-assessment-readiness",
+      "audience": "admin",
+      "questions": ["How do I check assessment topic readiness?", "How many questions make a topic ready?", "How do I manage assessment question pools?"],
+      "answer": "A topic is Ready with at least 4 active Easy, 4 Medium, and 2 Hard questions. In Skill Assessments, update its question pool and keep the topic non-archived for student attempts.",
+      "source": "admin-skill-assessments",
+      "label": "Skill Assessments",
+      "route": "/admin/skill-assessments"
+    },
+    {
+      "id": "admin-assessment-history",
+      "audience": "admin",
+      "questions": ["How do I review assessment topic history?", "Where can I see topic changes?", "How do I permanently delete an assessment topic?"],
+      "answer": "Open a topic’s History in Skill Assessments to review its changes. Permanent deletion is limited to archived topics and is blocked when attempts or badges exist.",
+      "source": "admin-skill-assessments",
+      "label": "Skill Assessments",
+      "route": "/admin/skill-assessments"
+    },
+    {
+      "id": "admin-analytics",
+      "audience": "admin",
+      "questions": ["Where can I see platform analytics?", "How do I review assessment analytics?", "How do I view administrative reports?", "Where can I review administrator reports?", "What information is available in admin analytics?"],
+      "answer": "Use the relevant administrator dashboard or analytics page to review platform summaries. Skill Assessments also provides topic-level question-pool counts, attempts, pass rates, and readiness.",
+      "source": "admin-skill-assessments",
+      "label": "Admin dashboard",
+      "route": "/admin"
+    },
+    {
+      "id": "admin-user-management",
+      "audience": "admin",
+      "questions": ["How do I manage platform users?", "Where can I review user accounts?", "How do I suspend an account?"],
+      "answer": "Open Users from the administrator area and use the available account-management actions. Confirm the target account and reason before making an administrative change.",
+      "source": "admin-users",
+      "label": "Users",
+      "route": "/admin/users"
+    },
+    {
+      "id": "admin-security",
+      "audience": "admin",
+      "questions": ["How do I review suspicious activity?", "Where are failed login events?", "How can I review platform security events?"],
+      "answer": "Use the administrator security or audit views to review recorded events and their timestamps. Investigate using authorized records and do not expose credentials or private user details.",
+      "source": "admin-analytics-reports",
+      "label": "Audit logs",
+      "route": "/admin/audit-logs"
+    },
+    {
+      "id": "admin-chatbot-questions",
+      "audience": "admin",
+      "questions": ["How do I find unanswered chatbot questions?", "Where can I review low-confidence chatbot questions?", "How do I improve help coverage?"],
+      "answer": "Review low-confidence chatbot questions from the administrator tools. Use recurring, privacy-reduced questions to identify help topics that need clarification.",
+      "source": "admin-analytics-reports",
+      "label": "Admin dashboard",
+      "route": "/admin"
+    },
+    {
+      "id": "admin-registrations",
+      "audience": "admin",
+      "questions": ["How do I review recent registrations?", "Where can I see new accounts?", "How do I check recent platform activity?"],
+      "answer": "Use the administrator dashboard and its authorized activity or registration views to review recent account and platform summaries. Open Audit Logs for a record of administrative actions.",
+      "source": "admin-analytics-reports",
+      "label": "Admin dashboard",
+      "route": "/admin"
+    },
+    {
+      "id": "admin-privacy",
+      "audience": "admin",
+      "questions": ["How do I protect user privacy as an administrator?", "Can I share private user data in a report?", "How should I handle personal information?"],
+      "answer": "Use only records authorized for your administrative role and share the minimum information needed for operational review. Do not copy private user details into chat or public reports.",
+      "source": "admin-moderation",
+      "label": "Audit logs",
+      "route": "/admin/audit-logs"
+    }
+  ]
+}

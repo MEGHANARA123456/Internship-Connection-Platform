@@ -3,6 +3,7 @@ import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { api } from '../../api/client'
+import { formatINR } from '../../lib/currency'
 import {
   Download,
   PenTool,
@@ -166,7 +167,7 @@ export function OfferLetterModal({
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Monthly Compensation:</span>
-                <span className="font-bold text-slate-900 dark:text-white">{stipend == null ? 'Not specified' : `$${stipend} USD / month`}</span>
+                <span className="font-bold text-slate-900 dark:text-white">{stipend == null ? 'Not specified' : `${formatINR(stipend)} / month`}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Expected Start Date:</span>

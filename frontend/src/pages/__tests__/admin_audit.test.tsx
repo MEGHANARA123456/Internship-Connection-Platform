@@ -4,6 +4,7 @@ import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { AdminAuditLogsPage } from '../AdminPages'
 import { AdminCompaniesPage } from '../admin/AdminCompaniesPage'
+import { AdminStudentsPage } from '../admin/AdminStudentsPage'
 import { AdminCompanyPostingsPage } from '../AdminPages'
 import { AdminUsersPage } from '../AdminPages'
 import { api } from '../../api/client'
@@ -188,6 +189,39 @@ describe('AdminAuditLogsPage', () => {
 
 // ── 2. AdminCompaniesPage ────────────────────────────────────────────────────
 
+describe('AdminStudentsPage filters', () => {
+  it('labels search, aligns filter controls, and clears active filters', async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: { items: [], total: 0, page: 1, page_size: 20 },
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/admin/students?verified=true&sort=full_name&page_size=50']}>
+        <AdminStudentsPage />
+      </MemoryRouter>
+    )
+
+    expect(await screen.findByText('0 students')).toBeInTheDocument()
+    const search = screen.getByRole('combobox', { name: 'Search students' })
+    expect(screen.getByText('Search')).toBeInTheDocument()
+    expect(search).toHaveClass('h-10')
+    for (const label of ['Filter by verification', 'Filter by suspension']) {
+      expect(screen.getByRole('combobox', { name: label })).toHaveClass('h-10')
+    }
+    expect(screen.getByLabelText('Filter by graduation year')).toHaveClass('h-10')
+    expect(screen.getByRole('combobox', { name: 'Sort students' })).toHaveClass('h-10')
+    expect(screen.getByRole('combobox', { name: 'Rows per page' })).toHaveClass('h-10')
+    expect(screen.getByLabelText('Student filters')).toHaveClass('lg:grid-cols-6')
+    expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: 'Filter by verification' })).toHaveValue('')
+    })
+  })
+})
+
 describe('AdminCompaniesPage', () => {
   it('renders company list with verification badges', async () => {
     vi.mocked(api.get).mockResolvedValueOnce({
@@ -235,7 +269,16 @@ describe('AdminCompaniesPage', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Acme Corp').length).toBeGreaterThan(0)
     })
+    expect(screen.getByText('Search')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Search companies' })).toHaveClass('h-10')
+    expect(screen.getByRole('combobox', { name: 'Filter by verification status' })).toHaveClass('h-10')
+    expect(screen.getByRole('combobox', { name: 'Filter companies by creation date' })).toHaveClass('h-10')
+    expect(screen.getByRole('combobox', { name: 'Sort companies' })).toHaveClass('h-10')
+    expect(screen.getByRole('combobox', { name: 'Rows per page' })).toHaveClass('h-10')
+    expect(screen.getByLabelText('Company filters')).toHaveClass('lg:grid-cols-4')
     expect(screen.getAllByText('Beta Ltd').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Not provided')).toHaveLength(2)
+    expect(screen.getAllByText('Finance')).toHaveLength(2)
     // VERIFIED badge
     expect(screen.getByText('VERIFIED')).toBeDefined()
     // PENDING badge

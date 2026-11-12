@@ -69,6 +69,20 @@ export function AdminStudentsPage() {
     })
   }
   const students = useMemo(() => data?.items ?? [], [data])
+  const hasActiveFilters = Boolean(
+    searchText.trim()
+    || params.get('verified')
+    || params.get('suspended')
+    || params.get('graduation_year'),
+  )
+  const clearFilters = () => {
+    setSearchText('')
+    setParams((current) => {
+      const next = new URLSearchParams(current)
+      for (const key of ['q', 'verified', 'suspended', 'graduation_year', 'page']) next.delete(key)
+      return next
+    })
+  }
 
   return (
     <main className="mx-auto w-full max-w-7xl space-y-5 px-4 py-8 sm:px-6 lg:px-8">
@@ -81,60 +95,63 @@ export function AdminStudentsPage() {
         <Link to={routes.adminUsers()} className="text-sm font-semibold text-indigo-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300">Account management</Link>
       </header>
 
-      <section aria-label="Student filters" className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-5">
-        <SearchBox
-          ariaLabel="Search students"
-          value={searchText}
-          onChange={setSearchText}
-          scope="students"
-          placeholder="Search name, email, university, major or skill"
-          maxLength={100}
-          className="h-11 sm:col-span-2 lg:col-span-2"
-        />
-        <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">Verification
-          <select aria-label="Filter by verification" value={params.get('verified') ?? ''} onChange={(event) => updateParam('verified', event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+      <section aria-label="Student filters" className={`glass-strong grid items-end gap-3 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:grid-cols-2 ${hasActiveFilters ? 'lg:grid-cols-6' : 'lg:grid-cols-5'}`}>
+        <div className="min-w-0 sm:col-span-2 lg:col-span-2">
+          <span className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">Search</span>
+          <SearchBox
+            ariaLabel="Search students"
+            value={searchText}
+            onChange={setSearchText}
+            scope="students"
+            placeholder="Search name, email, university, major or skill"
+            maxLength={100}
+          />
+        </div>
+        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">Verification
+          <select aria-label="Filter by verification" value={params.get('verified') ?? ''} onChange={(event) => updateParam('verified', event.target.value)} className="glass-input mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-950">
             <option value="">All</option><option value="true">Verified</option><option value="false">Not verified</option>
           </select>
         </label>
-        <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">Account status
-          <select aria-label="Filter by suspension" value={params.get('suspended') ?? ''} onChange={(event) => updateParam('suspended', event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-950">
+        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">Account status
+          <select aria-label="Filter by suspension" value={params.get('suspended') ?? ''} onChange={(event) => updateParam('suspended', event.target.value)} className="glass-input mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-950">
             <option value="">All</option><option value="false">Active</option><option value="true">Suspended</option>
           </select>
         </label>
-        <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">Graduation year
-          <input aria-label="Filter by graduation year" type="number" min="1990" max="2100" value={params.get('graduation_year') ?? ''} onChange={(event) => updateParam('graduation_year', event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
+        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">Graduation year
+          <input aria-label="Filter by graduation year" type="number" min="1990" max="2100" value={params.get('graduation_year') ?? ''} onChange={(event) => updateParam('graduation_year', event.target.value)} className="glass-input mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-950" />
         </label>
+        {hasActiveFilters && <Button type="button" variant="outline" className="h-10 rounded-lg" onClick={clearFilters}>Clear filters</Button>}
       </section>
 
-      <section className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-600 dark:text-slate-400">{loading ? 'Loading students…' : `${data?.total ?? 0} students`}</p>
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-slate-600 dark:text-slate-400">Sort
-            <select aria-label="Sort students" value={params.get('sort') ?? 'created_at'} onChange={(event) => updateParam('sort', event.target.value)} className="ml-2 h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+      <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <p className="flex h-10 items-center text-sm text-slate-600 dark:text-slate-400">{loading ? 'Loading students…' : `${data?.total ?? 0} students`}</p>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">Sort
+            <select aria-label="Sort students" value={params.get('sort') ?? 'created_at'} onChange={(event) => updateParam('sort', event.target.value)} className="glass-input h-10 rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900">
               <option value="created_at">Created</option><option value="full_name">Name</option><option value="university">University</option><option value="graduation_year">Graduation year</option><option value="applications_count">Applications</option><option value="badges_count">Valid badges</option>
             </select>
           </label>
           <label className="sr-only" htmlFor="student-page-size">Rows per page</label>
-          <select id="student-page-size" aria-label="Rows per page" value={pageSize} onChange={(event) => updateParam('page_size', event.target.value)} className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+          <select id="student-page-size" aria-label="Rows per page" value={pageSize} onChange={(event) => updateParam('page_size', event.target.value)} className="glass-input h-10 rounded-lg border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900">
             {pageSizes.map((size) => <option key={size} value={size}>{size} / page</option>)}
           </select>
         </div>
       </section>
 
       {error ? (
-        <div role="alert" className="rounded-2xl border border-rose-200 bg-white p-8 text-center dark:border-rose-900 dark:bg-slate-900">
+        <div role="alert" className="glass-static rounded-2xl border border-rose-200 bg-white p-8 text-center dark:border-rose-900 dark:bg-slate-900">
           <p className="font-semibold text-rose-700 dark:text-rose-300">Students could not be loaded.</p>
           <Button className="mt-4" variant="outline" onClick={() => setRetryKey((value) => value + 1)}>Retry</Button>
         </div>
       ) : loading ? (
-        <><div aria-label="Loading students" className="grid gap-3 md:hidden">{[1, 2, 3].map((item) => <div key={item} className="h-32 animate-pulse rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900" />)}</div><div className="hidden overflow-hidden rounded-2xl border border-slate-200 bg-white md:block dark:border-slate-800 dark:bg-slate-900">{[1, 2, 3, 4].map((item) => <div key={item} className="h-14 animate-pulse border-b border-slate-100 dark:border-slate-800" />)}</div></>
+        <><div aria-label="Loading students" className="grid gap-3 md:hidden">{[1, 2, 3].map((item) => <div key={item} className="glass-static h-32 animate-pulse rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900" />)}</div><div className="glass-strong hidden overflow-hidden rounded-2xl border border-slate-200 bg-white md:block dark:border-slate-800 dark:bg-slate-900">{[1, 2, 3, 4].map((item) => <div key={item} className="h-14 animate-pulse border-b border-slate-100 dark:border-slate-800" />)}</div></>
       ) : students.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center dark:border-slate-800 dark:bg-slate-900">
+        <div className="glass-static rounded-2xl border border-slate-200 bg-white p-10 text-center dark:border-slate-800 dark:bg-slate-900">
           <EmptyState title="No students found" description="Change or clear the search and filters to see student accounts." />
         </div>
       ) : (
         <>
-          <div className="hidden overflow-x-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 md:block">
+          <div className="glass-strong hidden overflow-x-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 md:block">
             <table className="w-full min-w-[900px] text-left text-sm">
               <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400"><tr><th scope="col" className="p-3">Student</th><th scope="col" className="p-3">University / Major</th><th scope="col" className="p-3">Graduation</th><th scope="col" className="p-3">Applications</th><th scope="col" className="p-3">Valid badges</th><th scope="col" className="p-3">Status</th></tr></thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">{students.map((student) => (
@@ -148,14 +165,14 @@ export function AdminStudentsPage() {
             </table>
           </div>
           <div className="grid gap-3 md:hidden">{students.map((student) => (
-            <Link key={student.user_id} to={routes.adminStudentDetail(student.user_id)} className="rounded-2xl border border-slate-200 bg-white p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-800 dark:bg-slate-900">
+            <Link key={student.user_id} to={routes.adminStudentDetail(student.user_id)} className="glass-static rounded-2xl border border-slate-200 bg-white p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-800 dark:bg-slate-900">
               <div className="flex items-start justify-between gap-2"><div className="min-w-0"><h2 className="truncate font-semibold">{student.full_name || student.email}</h2><p className="truncate text-xs text-slate-500">{student.email}</p></div><Users className="h-5 w-5 shrink-0 text-indigo-500" /></div>
               <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">{student.university || 'Profile missing'} · {student.graduation_year ?? '—'}</p>
               <p className="mt-1 text-xs text-slate-500">{student.applications_count} applications · {student.badges_count} valid badges</p>
               <span className="mt-3 inline-block text-xs font-semibold text-indigo-700 dark:text-indigo-300">{student.suspended_at ? 'Suspended' : student.is_verified ? 'Verified' : 'Not verified'}</span>
             </Link>
           ))}</div>
-          <nav aria-label="Student directory pages" className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+          <nav aria-label="Student directory pages" className="glass-static flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
             <Button variant="outline" disabled={currentPage <= 1} onClick={() => updateParam('page', String(currentPage - 1))}>Previous</Button>
             <span className="text-sm text-slate-600 dark:text-slate-300">Page {currentPage} of {pages}</span>
             <Button variant="outline" disabled={currentPage >= pages} onClick={() => updateParam('page', String(currentPage + 1))}>Next</Button>

@@ -77,7 +77,7 @@ export function Modal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div     className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity animate-in fade-in"
@@ -88,7 +88,7 @@ export function Modal({
       <div
         ref={dialogRef}
         className={cn(
-          'relative w-full rounded-2xl bg-white dark:bg-slate-900 p-6 text-left shadow-2xl transition-all border border-slate-200 dark:border-slate-800 z-10 animate-in zoom-in-95 max-h-[90vh] overflow-y-auto',
+          'glass-strong relative w-full rounded-2xl bg-white dark:bg-slate-900 p-6 text-left shadow-2xl transition-all border border-slate-200 dark:border-slate-800 z-10 animate-in zoom-in-95 max-h-[90vh] overflow-y-auto',
           widths[maxWidth]
         )}
         role="dialog"

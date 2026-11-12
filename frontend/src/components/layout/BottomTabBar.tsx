@@ -79,7 +79,7 @@ export function BottomTabBar() {
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 md:hidden flex justify-around items-center bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border-t border-slate-200/80 dark:border-slate-800/80 h-14 pb-[env(safe-area-inset-bottom)] px-1 shadow-[0_-4px_25px_rgba(0,0,0,0.06)] select-none">
-      {role === 'ADMIN' && adminMoreOpen && <div role="menu" aria-label="More admin pages" className="absolute bottom-16 right-2 w-52 rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">{adminMoreLinks.map((item) => <Link key={item.to} role="menuitem" to={item.to} onClick={() => setAdminMoreOpen(false)} className="block rounded-lg px-3 py-3 text-sm font-medium hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-slate-800">{item.label}</Link>)}</div>}
+      {role === 'ADMIN' && adminMoreOpen && <div role="menu" aria-label="More admin pages" className="glass-strong absolute bottom-16 right-2 w-52 rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">{adminMoreLinks.map((item) => <Link key={item.to} role="menuitem" to={item.to} onClick={() => setAdminMoreOpen(false)} className="block rounded-lg px-3 py-3 text-sm font-medium hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-slate-800">{item.label}</Link>)}</div>}
       {tabs.map((tab) => {
         const active = checkIsActive(tab.to)
         const Icon = tab.icon

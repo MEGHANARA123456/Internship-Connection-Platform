@@ -1,10 +1,10 @@
 """Dependency-free BM25 passage retrieval from the curated Markdown corpus."""
 
+import math
+import re
 from collections import Counter
 from dataclasses import dataclass
-import math
 from pathlib import Path
-import re
 
 from .providers.base import Passage
 
@@ -15,21 +15,35 @@ QUERY_STOPWORDS = {
     "is", "it", "me", "my", "of", "on", "the", "this", "to", "what", "when",
     "where", "which", "who", "with",
 }
-TOKEN_SYNONYMS = {
+TOKEN_SYNONYMS: dict[str, tuple[str, ...]] = {
     "withdraw": ("cancel", "application"),
     "cancel": ("withdraw", "application"),
+    "apply": ("application",),
+    "application": ("apply", "submission"),
+    "submit": ("apply", "application"),
+    "submission": ("application", "apply"),
     "notification": ("alert", "bell"),
     "alert": ("notification", "bell"),
     "bell": ("notification", "alert"),
     "shortlist": ("short", "list"),
     "badge": ("skill",),
+    "result": ("score", "assessment"),
+    "score": ("result", "assessment"),
+    "interview": ("schedule", "candidate"),
+    "candidate": ("applicant",),
+    "applicant": ("candidate",),
+    "posting": ("internship", "role"),
+    "internship": ("posting", "role"),
+    "archive": ("restore", "topic"),
+    "restore": ("archive", "topic"),
     "attend": ("take", "complete"),
     "taken": ("take", "complete"),
     "completed": ("complete", "take"),
 }
-TOKEN_NORMAL_FORMS = {
+TOKEN_NORMAL_FORMS: dict[str, str] = {
     "archived": "archive",
     "archiving": "archive",
+    "companies": "company",
     "imported": "import",
     "importing": "import",
     "withdrawing": "withdraw",
@@ -41,8 +55,33 @@ TOKEN_NORMAL_FORMS = {
     "notifications": "notification",
     "badges": "badge",
     "assessments": "assessment",
+    "applied": "apply",
+    "applying": "apply",
+    "applications": "application",
+    "submissions": "submission",
+    "results": "result",
+    "scores": "score",
+    "candidates": "candidate",
+    "applicants": "applicant",
+    "postings": "posting",
+    "internships": "internship",
+    "topics": "topic",
 }
-FIELD_WEIGHTS = {"title": 3.0, "keywords": 2.2, "examples": 1.6, "body": 1.0}
+FIELD_WEIGHTS = {
+    "title": 3.0,
+    "heading": 6.0,
+    "keywords": 2.2,
+    "examples": 1.6,
+    "body": 1.0,
+}
+PAGE_MATCH_BONUS = 1.0
+GENERIC_METADATA_TERMS = {
+    "assessment", "company", "internship", "internships", "my", "platform",
+    "profile", "skill", "student", "topic",
+}
+SECTION_AUDIENCES = {
+    ("application-statuses-timeline", "company-workflow-updates"): frozenset({"company"}),
+}
 
 
 @dataclass(frozen=True)
@@ -61,8 +100,10 @@ def _tokens(text: str) -> list[str]:
     """Normalize punctuation, case, light inflections, and supported product synonyms."""
     tokens = []
     for token in TOKEN_PATTERN.findall(text.casefold()):
-        normalized = TOKEN_NORMAL_FORMS.get(token, token)
-        if normalized.endswith("ing") and len(normalized) > 5:
+        normalized = TOKEN_NORMAL_FORMS.get(token) or token
+        if normalized.endswith("ies") and len(normalized) > 5:
+            normalized = normalized[:-3] + "y"
+        elif normalized.endswith("ing") and len(normalized) > 5:
             normalized = normalized[:-3]
         elif normalized.endswith("ed") and len(normalized) > 4:
             normalized = normalized[:-2]
@@ -71,6 +112,15 @@ def _tokens(text: str) -> list[str]:
         tokens.append(normalized)
         tokens.extend(TOKEN_SYNONYMS.get(normalized, ()))
     return tokens
+
+
+def _section_slug(section: str) -> str:
+    heading = section.splitlines()[0].removeprefix("## ").strip()
+    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", heading.casefold())).strip("-")
+
+
+def _metadata_tokens(text: str) -> set[str]:
+    return set(_tokens(text)) - QUERY_STOPWORDS - GENERIC_METADATA_TERMS
 
 
 def _front_matter_values(frontmatter: str) -> tuple[dict[str, str], tuple[tuple[str, str], ...]]:
@@ -118,11 +168,21 @@ def load_documents(directory: Path = KB_DIR) -> list[KnowledgeDocument]:
         audiences = _metadata_list(fields.get("audience"))
         audiences = tuple("public" if value == "all" else value for value in audiences)
         routes = tuple(route for _, route in links)
-        sections = tuple(
+        body_sections = tuple(
             section.strip()
-            for section in re.split(r"(?=^## )", body, flags=re.M)
+            for section in re.split(r"(?=^## )", body, flags=re.MULTILINE)
             if section.strip()
-            and not section.strip().casefold().startswith("## search terms and example questions")
+        )
+        metadata_section = next(
+            (
+                section for section in body_sections
+                if section.casefold().startswith("## search terms and example questions")
+            ),
+            "",
+        )
+        sections = tuple(
+            section for section in body_sections
+            if not section.casefold().startswith("## search terms and example questions")
         )
         if (
             not fields.get("id")
@@ -132,8 +192,16 @@ def load_documents(directory: Path = KB_DIR) -> list[KnowledgeDocument]:
             or any(audience not in {"guest", "student", "company", "admin"} for audience in audiences)
         ):
             raise ValueError(f"Knowledge file has incomplete metadata: {path.name}")
-        keywords = _metadata_list(fields.get("keywords"))
-        examples = _metadata_list(fields.get("example_questions") or fields.get("examples"))
+        extracted_keywords = re.search(r"(?im)^Keywords:\s*(.+)$", metadata_section)
+        extracted_examples = re.search(r"(?im)^Example questions:\s*(.+)$", metadata_section)
+        keywords = tuple(dict.fromkeys((
+            *_metadata_list(fields.get("keywords")),
+            *_metadata_list(extracted_keywords.group(1) if extracted_keywords else None),
+        )))
+        examples = tuple(dict.fromkeys((
+            *_metadata_list(fields.get("example_questions") or fields.get("examples")),
+            *_metadata_list(extracted_examples.group(1) if extracted_examples else None),
+        )))
         documents.append(KnowledgeDocument(
             fields["id"],
             fields["title"],
@@ -153,53 +221,35 @@ class BM25Retriever:
         self.documents = documents if documents is not None else load_documents()
         self.k1 = k1
         self.b = b
-        self._fields = [
-            {
-                "title": _tokens(document.title),
-                "keywords": _tokens(" ".join(document.keywords)),
-                "examples": _tokens(" ".join(document.examples)),
-                "body": _tokens(" ".join(document.sections)),
-            }
+        self._chunks = [
+            (document, section)
             for document in self.documents
+            for section in document.sections
+            if section.startswith("## ")
         ]
-
-    def _best_section(self, sections: tuple[str, ...], query_tokens: list[str]) -> str:
-        """Choose the section with the strongest BM25 match, prioritizing specific query terms."""
-        if not sections:
-            return ""
-        tokenized_sections = [_tokens(section) for section in sections]
-        document_frequency = Counter(
-            token
-            for section_tokens in tokenized_sections
-            for token in set(section_tokens)
-        )
-        average_length = max(
-            1.0,
-            sum(map(len, tokenized_sections)) / len(tokenized_sections),
-        )
-        query_frequency = Counter(query_tokens)
-        scored_sections = []
-        for section, section_tokens in zip(sections, tokenized_sections, strict=True):
-            term_frequency = Counter(section_tokens)
-            heading = section.splitlines()[0] if section.startswith("## ") else ""
-            heading_terms = set(_tokens(heading))
-            score = 0.0
-            for token, query_count in query_frequency.items():
-                frequency = term_frequency[token]
-                if not frequency:
-                    continue
-                inverse_frequency = (
-                    len(sections) - document_frequency[token] + 0.5
-                ) / (document_frequency[token] + 0.5)
-                idf = math.log1p(inverse_frequency)
-                denominator = frequency + self.k1 * (
-                    1 - self.b + self.b * len(section_tokens) / average_length
-                )
-                score += query_count * idf * frequency * (self.k1 + 1) / denominator
-                if token in heading_terms:
-                    score += 2 * query_count * idf
-            scored_sections.append((score, section))
-        return max(scored_sections, key=lambda item: item[0])[1]
+        self._fields = []
+        for document, section in self._chunks:
+            heading, _, body = section.partition("\n")
+            section_terms = _metadata_tokens(section)
+            heading_terms = _metadata_tokens(heading.removeprefix("## "))
+            related_metadata = [
+                phrase
+                for phrase in (*document.keywords, *document.examples)
+                if (
+                    overlap := _metadata_tokens(phrase) & section_terms
+                ) and (len(overlap) >= 2 or overlap & heading_terms)
+            ]
+            self._fields.append({
+                "title": _tokens(document.title),
+                "heading": _tokens(heading.removeprefix("## ")),
+                "keywords": _tokens(" ".join(
+                    phrase for phrase in related_metadata if phrase in document.keywords
+                )),
+                "examples": _tokens(" ".join(
+                    phrase for phrase in related_metadata if phrase in document.examples
+                )),
+                "body": _tokens(body),
+            })
 
     def retrieve(
         self,
@@ -216,15 +266,24 @@ class BM25Retriever:
         if not query_tokens:
             return []
         eligible = [
-            index for index, document in enumerate(self.documents)
-            if audience in document.audience or "public" in document.audience
+            index for index, (document, section) in enumerate(self._chunks)
+            if (
+                audience in SECTION_AUDIENCES.get(
+                    (document.id, _section_slug(section)),
+                    frozenset(document.audience),
+                )
+                or "public" in SECTION_AUDIENCES.get(
+                    (document.id, _section_slug(section)),
+                    frozenset(document.audience),
+                )
+            )
         ]
         if not eligible:
             return []
         document_frequency = Counter(
             token
             for index in eligible
-            for token in set(token for field in self._fields[index].values() for token in field)
+            for token in {token for field in self._fields[index].values() for token in field}
         )
         field_average_lengths = {
             field_name: sum(len(self._fields[index][field_name]) for index in eligible)
@@ -253,30 +312,34 @@ class BM25Retriever:
             scored.append((score, index))
 
         def page_match(index: int) -> bool:
-            document = self.documents[index]
+            document, _ = self._chunks[index]
             routes = set(document.related_routes)
             routes.update(route for _, route in document.links)
             return page_route is not None and page_route in routes
 
-        scored.sort(key=lambda item: (item[0], page_match(item[1])), reverse=True)
+        def rank_score(item: tuple[float, int]) -> float:
+            return item[0] + (PAGE_MATCH_BONUS if page_match(item[1]) else 0.0)
+
+        scored.sort(key=lambda item: (rank_score(item), item[0]), reverse=True)
+        distinct_scored = []
+        seen_documents = set()
+        for item in scored:
+            document_id = self._chunks[item[1]][0].id
+            if document_id not in seen_documents:
+                seen_documents.add(document_id)
+                distinct_scored.append(item)
+        scored = distinct_scored
         if not scored or scored[0][0] < minimum_score:
             return []
-        if len(scored) > 1 and scored[0][0] - scored[1][0] < minimum_margin:
-            page_resolves_tie = (
-                scored[0][0] == scored[1][0]
-                and page_match(scored[0][1])
-                and not page_match(scored[1][1])
-            )
-            if not page_resolves_tie:
-                return []
+        if len(scored) > 1 and rank_score(scored[0]) - rank_score(scored[1]) < minimum_margin:
+            return []
         results = []
         for score, index in scored[:top_k]:
             if score < minimum_score:
                 break
-            document = self.documents[index]
-            section = self._best_section(document.sections, query_tokens)
+            document, section = self._chunks[index]
             results.append(Passage(
-                id=document.id,
+                id=f"{document.id}#{_section_slug(section)}",
                 title=document.title,
                 audience=document.audience,
                 text=section,

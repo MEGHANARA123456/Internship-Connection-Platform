@@ -33,6 +33,11 @@ type StudentCounts = {
   saved: number
 }
 
+type CompanyCounts = {
+  new_applicants: number
+  upcoming_interviews: number
+}
+
 const quickLinks: Record<Exclude<NavigationRole, 'GUEST'>, Array<{ label: string; url: string }>> = {
   STUDENT: [
     { label: 'Applications', url: routes.applications() },
@@ -115,13 +120,13 @@ function GlobalSearch({ role }: { role: NavigationRole }) {
     />
   )
   return (
-    <div className="relative flex flex-1 justify-center px-3 md:px-6">
+    <div className="relative flex w-9 flex-none justify-center md:w-auto md:flex-1 md:px-6">
       <div className="hidden w-full max-w-xl md:block">{searchBox()}</div>
       <button type="button" onClick={() => setMobileOpen(true)} aria-label="Open search" className="absolute right-0 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 md:hidden">
         <Search className="h-5 w-5" />
       </button>
       {mobileOpen && (
-        <div className="fixed inset-0 z-[80] bg-white p-4 dark:bg-slate-950 md:hidden">
+        <div className="glass-overlay fixed inset-0 z-[80] bg-white p-4 dark:bg-slate-950 md:hidden">
           <div className="mb-4 flex items-center gap-3">
             <div className="flex-1">{searchBox()}</div>
             <button type="button" aria-label="Close search" onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
@@ -149,6 +154,10 @@ export function Navbar() {
     application_updates: 0,
     saved: 0,
   })
+  const [companyNavCounts, setCompanyNavCounts] = useState<CompanyCounts>({
+    new_applicants: 0,
+    upcoming_interviews: 0,
+  })
   const navMenuRef = useRef<HTMLDivElement>(null)
   const internshipsMenuRef = useRef<HTMLDivElement>(null)
 
@@ -161,9 +170,11 @@ export function Navbar() {
     if (source === 'invites_new') return studentNavCounts.invites_new
     if (source === 'application_updates') return studentNavCounts.application_updates
     if (source === 'saved') return studentNavCounts.saved
+    if (source === 'new_applicants') return companyNavCounts.new_applicants
+    if (source === 'upcoming_interviews') return companyNavCounts.upcoming_interviews
     if (source === 'notifications') return unreadCount
     return 0
-  }, [studentNavCounts, unreadCount])
+  }, [companyNavCounts, studentNavCounts, unreadCount])
 
   useWebSocketChat(session?.userId)
 
@@ -182,6 +193,7 @@ export function Navbar() {
         application_updates: 0,
         saved: 0,
       })
+      setCompanyNavCounts({ new_applicants: 0, upcoming_interviews: 0 })
       return
     }
     let mounted = true
@@ -196,6 +208,10 @@ export function Navbar() {
             invites_new: Number(res.data?.invites_new || 0),
             application_updates: Number(res.data?.application_updates || 0),
             saved: Number(res.data?.saved || 0),
+          })
+          setCompanyNavCounts({
+            new_applicants: Number(res.data?.new_applicants || 0),
+            upcoming_interviews: Number(res.data?.upcoming_interviews || 0),
           })
         }
       } catch (error) {
@@ -274,12 +290,25 @@ export function Navbar() {
     setNavMenuOpen(false)
   }
 
-  const rowClass = (path?: string) =>
-    `flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
-      path && location.pathname === path
+  const isRouteActive = (path?: string) => {
+    const routePath = path?.split('?')[0]
+    const editInternshipId = location.pathname.split('/').at(-2) ?? ''
+    const editInternshipPath = routes.editCompanyInternship(editInternshipId)
+    return routePath != null && (
+      location.pathname === routePath
+      || (routePath !== '/' && routePath !== routes.company && location.pathname.startsWith(`${routePath}/`))
+      || (routePath === routes.companyJobs() && location.pathname === editInternshipPath)
+    )
+  }
+
+  const rowClass = (path?: string) => {
+    const selected = isRouteActive(path)
+    return `flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
+      selected
         ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
         : 'text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
     }`
+  }
 
   const countChip = (item: NavigationItem) => {
     const count = countFor(item.countSource)
@@ -353,6 +382,7 @@ export function Navbar() {
         key={item.id}
         to={item.route || '/'}
         role="menuitem"
+        aria-current={isRouteActive(item.route) ? 'page' : undefined}
         onClick={() => {
           setNavMenuOpen(false)
           setInternshipsMenuOpen(false)
@@ -374,11 +404,11 @@ export function Navbar() {
 
   return (
     <>
-      <header className="sticky top-0 z-40 w-full border-b border-slate-200 bg-white/95 shadow-2xs backdrop-blur-xs transition-colors dark:border-slate-800 dark:bg-slate-900/95">
+      <header className="glass-header sticky top-0 z-40 w-full border-b border-slate-200 bg-white/95 shadow-2xs backdrop-blur-xs transition-colors dark:border-slate-800 dark:bg-slate-900/95">
         <div className="mx-auto flex min-h-[4rem] max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
             <Logo size="md" />
-            {session && <Badge status={session.role} className="px-2 py-0.5 text-[11px] font-semibold">{session.role}</Badge>}
+            {session && <Badge status={session.role} className="hidden px-2 py-0.5 text-[11px] font-semibold sm:inline-flex">{session.role}</Badge>}
           </div>
           <GlobalSearch role={role} />
           <div className="flex items-center gap-1.5">
@@ -412,7 +442,7 @@ export function Navbar() {
                   <ChevronDown className={`h-4 w-4 transition-transform ${internshipsMenuOpen ? 'rotate-180' : ''}`} />
                 </button>
                 {internshipsMenuOpen && (
-                  <div role="menu" aria-label="Internships" className="absolute right-0 top-full z-50 mt-2 max-h-[75vh] w-80 space-y-1 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+                  <div role="menu" aria-label="Internships" className="glass-strong absolute right-0 top-full z-50 mt-2 max-h-[75vh] w-80 space-y-1 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-800 dark:bg-slate-900">
                     {config.topBar.map((item) => renderItem(item))}
                   </div>
                 )}
@@ -443,7 +473,7 @@ export function Navbar() {
                 <Menu className="h-6 w-6" />
               </button>
               {navMenuOpen && (
-                <div role="menu" aria-label="Navigation" className="absolute right-0 top-full z-50 mt-2 max-h-[80vh] w-[min(24rem,calc(100vw-1.5rem))] space-y-1 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+                <div role="menu" aria-label="Navigation" className="glass-strong absolute right-0 top-full z-50 mt-2 max-h-[80vh] w-[min(24rem,calc(100vw-1.5rem))] space-y-1 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
                   <div className="mb-2 flex items-center justify-between border-b border-slate-100 px-1 pb-2 dark:border-slate-800">
                     <span className="text-xs font-bold text-slate-900 dark:text-white">Navigation</span>
                     {session ? <Badge status={session.role} className="px-1.5 py-0.5 text-[10px]">{session.role}</Badge> : <span className="text-[10px] text-slate-500">Guest</span>}

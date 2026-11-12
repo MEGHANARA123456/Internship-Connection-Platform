@@ -53,9 +53,74 @@ beforeEach(() => {
   vi.mocked(api.patch).mockResolvedValue({ data: {} } as never)
 })
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  vi.clearAllMocks()
+  vi.useRealTimers()
+})
 
 describe('company pipeline and shortlisted redesign', () => {
+  it('uses local calendar days for relative application dates', async () => {
+    const previousTimezone = process.env.TZ
+    try {
+      process.env.TZ = 'UTC'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-11T12:00:00Z'))
+      vi.mocked(api.get).mockImplementation(async (url) => {
+        if (url === '/internships/mine') return { data: [] } as never
+        if (url === '/applications/company/search') return searchResponse([
+          application({ id: 1, created_at: '2026-11-11T11:00:00Z' }),
+          application({ id: 2, created_at: '2026-11-10T19:00:00Z' }),
+          application({ id: 3, created_at: '2026-10-22T12:00:00Z' }),
+          application({ id: 4, created_at: '2026-11-10T23:45:00' }),
+        ]) as never
+        return { data: [] } as never
+      })
+      renderPage(false, '/company/applicants', 'applicants')
+
+      await waitFor(() => expect(screen.getAllByText('20 days ago').length).toBeGreaterThan(0))
+      expect(screen.getAllByText('today').length).toBeGreaterThan(0)
+      expect(screen.getAllByText('yesterday').length).toBeGreaterThan(0)
+    } finally {
+      if (previousTimezone === undefined) delete process.env.TZ
+      else process.env.TZ = previousTimezone
+    }
+  })
+
+  it('compares dates across midnight in the Asia/Kolkata timezone', async () => {
+    const previousTimezone = process.env.TZ
+    try {
+      process.env.TZ = 'Asia/Kolkata'
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-11T18:40:00Z'))
+      vi.mocked(api.get).mockImplementation(async (url) => {
+        if (url === '/internships/mine') return { data: [] } as never
+        if (url === '/applications/company/search') return searchResponse([
+          application({ id: 5, created_at: '2026-11-11T18:10:00Z' }),
+        ]) as never
+        return { data: [] } as never
+      })
+      renderPage(false, '/company/applicants', 'applicants')
+
+      await waitFor(() => expect(screen.getByText('yesterday')).toBeInTheDocument())
+    } finally {
+      if (previousTimezone === undefined) delete process.env.TZ
+      else process.env.TZ = previousTimezone
+    }
+  })
+
+  it('formats the applied-column date day-first in Indian English', async () => {
+    vi.mocked(api.get).mockImplementation(async (url) => {
+      if (url === '/internships/mine') return { data: [] } as never
+      if (url === '/applications/company/search') return searchResponse([
+        application({ created_at: '2026-10-12T12:00:00Z' }),
+      ]) as never
+      return { data: [] } as never
+    })
+    renderPage(false, '/company/applicants', 'applicants')
+
+    expect(await screen.findByText('12 Oct 2026')).toBeInTheDocument()
+  })
+
   it('keeps applicant filters and actions aligned in one responsive control group', async () => {
     const { unmount } = renderPage(false, '/company/applicants', 'applicants')
 

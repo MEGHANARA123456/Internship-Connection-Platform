@@ -497,7 +497,7 @@ async def student_insights(
         key=lambda row: (-int(row["count"]), str(row["name"]).casefold()),
     )[:8]
 
-    stipend_buckets = {"Unpaid": 0, "$1–$1,000": 0, "$1,001–$3,000": 0, "$3,001+": 0}
+    stipend_buckets = {"Unpaid": 0, "1-10000": 0, "10001-25000": 0, "25001+": 0}
     duration_buckets: dict[str, int] = {}
     stipend_sample_size = 0
     for _, _, _, stipend, duration, _ in role_rows:
@@ -506,7 +506,7 @@ async def student_insights(
                 stipend_buckets["Unpaid"] += 1
         else:
             stipend_sample_size += 1
-            bucket = "$1–$1,000" if stipend <= 1000 else "$1,001–$3,000" if stipend <= 3000 else "$3,001+"
+            bucket = "1-10000" if stipend <= 10_000 else "10001-25000" if stipend <= 25_000 else "25001+"
             stipend_buckets[bucket] += 1
         duration_buckets[str(duration)] = duration_buckets.get(str(duration), 0) + 1
     compensation_distribution = [

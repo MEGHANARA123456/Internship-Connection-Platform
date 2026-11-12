@@ -20,6 +20,7 @@ import { auditActionLabel } from '../../lib/auditActionLabels'
 import { ChartLegend, type ChartLegendItem } from '../charts/ChartLegend'
 import { assignColors } from '../charts/chartColors'
 import { routes } from '../../lib/routes'
+import { formatINRBucket } from '../../lib/currency'
 
 export interface ChartDatum {
   name: string
@@ -219,7 +220,7 @@ function ChartTable({ label, rows, kind }: { label: string; rows: ChartDatum[]; 
       ? 'Date'
       : 'Category'
   return (
-    <div className="max-h-[290px] overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
+    <div className="glass-strong max-h-[290px] overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
       <table className="w-full text-left text-xs">
         <caption className="sr-only">{label} data</caption>
         <thead className="sticky top-0 bg-slate-50 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
@@ -288,7 +289,10 @@ export function RechartsAnalyticsCharts({
   const navigate = useNavigate()
   const [hiddenItems, setHiddenItems] = useState<string[]>([])
   const [highlighted, setHighlighted] = useState<string | null>(null)
-  const displayRows = rankedRows(kind, rows)
+  const chartRows = kind === 'stipend_distribution'
+    ? rows.map((row) => ({ ...row, name: formatINRBucket(row.name) }))
+    : rows
+  const displayRows = rankedRows(kind, chartRows)
   if (viewAsTable) return <ChartTable label={label} rows={displayRows} kind={kind} />
 
   const summary = [displayRows.map((row) => `${row.fullName ?? row.name}: ${row.count}`).join('; '), summaryNote].filter(Boolean).join('. ')

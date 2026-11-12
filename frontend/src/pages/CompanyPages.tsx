@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link, Outlet, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -22,6 +22,7 @@ import { useAuthStore } from '../store/auth'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 import { KpiCard } from '../components/dashboard/KpiCard'
 import { routes } from '../lib/routes'
+import { formatINR, INR_CURRENCY_SYMBOL } from '../lib/currency'
 import { confirmAction, showToast } from '../lib/feedback'
 import { AvatarUploadCard } from '../components/ui/AvatarUploadCard'
 import {
@@ -41,11 +42,6 @@ import {
   GripVertical,
   FileText,
   UploadCloud,
-  LayoutDashboard,
-  Settings,
-  Menu,
-  X,
-  BarChart3,
   ArrowUpDown,
   ChevronDown,
 } from 'lucide-react'
@@ -58,90 +54,10 @@ import { searchTextMatches } from '../lib/search'
 
 // --- 1. Company Jobs Management ---
 
-const companyPortalLinks = [
-  { label: 'Overview', to: routes.company, icon: LayoutDashboard },
-  { label: 'Company Profile', to: routes.companyProfile, icon: UserCheck },
-  { label: 'My Internships', to: routes.companyJobs(), icon: Briefcase },
-  { label: 'Post Internship', to: routes.newCompanyInternship, icon: Plus },
-  { label: 'Applicants', to: routes.companyApplicants(), icon: Users, count: 'new_applicants' },
-  { label: 'Hiring Pipeline', to: routes.companyPipeline, icon: Kanban },
-  { label: 'Interviews', to: routes.interviews({ tab: 'upcoming' }), icon: Calendar, count: 'upcoming_interviews' },
-  { label: 'Shortlisted', to: routes.companyShortlisted, icon: UserCheck },
-  { label: 'Notifications', to: routes.notifications, icon: AlertCircle, count: 'unread_notifications' },
-  { label: 'Analytics', to: routes.companyAnalytics, icon: BarChart3 },
-  { label: 'Settings', to: routes.companySettings, icon: Settings },
-]
-
 export function CompanyPortalShell() {
-  const location = useLocation()
-  const [collapsed, setCollapsed] = useState(false)
-  const [drawerOpen, setDrawerOpen] = useState(false)
-  const [counts, setCounts] = useState<Record<string, number>>({})
-
-  useEffect(() => {
-    let active = true
-    api.get('/navigation/counts')
-      .then(({ data }) => { if (active) setCounts(data ?? {}) })
-      .catch((error: unknown) => console.error('Unable to load company navigation counts.', error))
-    return () => { active = false }
-  }, [])
-
-  const navItems = (compact = false) => companyPortalLinks.map(({ label, to, icon: Icon, count }) => {
-    const selected = location.pathname === to || (to !== '/company' && location.pathname.startsWith(`${to}/`))
-    return (
-      <Link
-        key={to}
-        to={to}
-        onClick={() => setDrawerOpen(false)}
-        title={compact ? label : undefined}
-        aria-current={selected ? 'page' : undefined}
-        className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${selected
-          ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300'
-          : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-          }`}
-      >
-        <Icon className="h-4 w-4 shrink-0" />
-        {!compact && <span className="min-w-0 flex-1 truncate">{label}</span>}
-        {count && counts[count] > 0 && (
-          <span className="ml-auto rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold tabular-nums text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200">
-            {counts[count]}
-          </span>
-        )}
-      </Link>
-    )
-  })
-
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-1 items-start gap-4 px-3 py-4 sm:px-5 lg:gap-6 lg:px-6">
-      <aside className={`sticky top-20 hidden max-h-[calc(100dvh-6rem)] shrink-0 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm dark:border-slate-800 dark:bg-slate-900 lg:block ${collapsed ? 'w-[4.5rem]' : 'w-60'}`}>
-        <div className={`mb-2 flex items-center ${collapsed ? 'justify-center' : 'justify-between px-2'}`}>
-          {!collapsed && <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Company portal</span>}
-          <button type="button" aria-label={collapsed ? 'Expand company navigation' : 'Collapse company navigation'} onClick={() => setCollapsed((value) => !value)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-slate-800">
-            <Menu className="h-4 w-4" />
-          </button>
-        </div>
-        <nav aria-label="Company portal navigation" className="space-y-1">{navItems(collapsed)}</nav>
-      </aside>
-      <div className="min-w-0 flex-1">
-        <div className="mb-3 flex items-center justify-between lg:hidden">
-          <span className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Company portal</span>
-          <button type="button" aria-label="Open company navigation" onClick={() => setDrawerOpen(true)} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold dark:border-slate-700 dark:bg-slate-900">
-            <Menu className="h-4 w-4" /> Menu
-          </button>
-        </div>
-        <Outlet />
-      </div>
-      {drawerOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/50 lg:hidden" onMouseDown={(event) => { if (event.target === event.currentTarget) setDrawerOpen(false) }}>
-          <aside aria-label="Company portal navigation" className="h-full w-[min(20rem,88vw)] overflow-y-auto bg-white p-4 shadow-xl dark:bg-slate-900">
-            <div className="mb-4 flex items-center justify-between">
-              <span className="font-bold text-slate-900 dark:text-white">Company portal</span>
-              <button type="button" aria-label="Close company navigation" onClick={() => setDrawerOpen(false)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-4 w-4" /></button>
-            </div>
-            <nav className="space-y-1">{navItems()}</nav>
-          </aside>
-        </div>
-      )}
+    <div className="mx-auto flex w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
+      <Outlet />
     </div>
   )
 }
@@ -527,7 +443,7 @@ export function LegacyCompanyApplicantsPage({
     </div>
   )
   const applicantCard = (item: CompanyApplicant) => (
-    <div key={item.id} className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+    <div key={item.id} className="glass-static min-w-0 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate font-semibold text-slate-900 dark:text-white">{item.student_name || 'Candidate'}</p>
@@ -564,7 +480,7 @@ export function LegacyCompanyApplicantsPage({
         )}
       </header>
       {!pipeline && (
-        <Card className="grid gap-3 bg-white p-4 dark:bg-slate-900 sm:grid-cols-2 xl:grid-cols-5">
+        <Card className="glass-strong grid gap-3 bg-white p-4 dark:bg-slate-900 sm:grid-cols-2 xl:grid-cols-5">
           <SearchBox
             ariaLabel="Search candidate name"
             value={search}
@@ -574,9 +490,9 @@ export function LegacyCompanyApplicantsPage({
             placeholder="Search candidate"
             className="sm:col-span-2 xl:col-span-1"
           />
-          <label><span className="sr-only">Filter by internship ID</span><input aria-label="Filter by internship ID" inputMode="numeric" value={searchParams.get('internship') ?? ''} onChange={(event) => updateFilter('internship', event.target.value)} placeholder="Internship ID" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
-          <label><span className="sr-only">Filter by skills</span><input value={skills} onChange={(event) => setSkills(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') applyFilters() }} placeholder="Skills" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
-          <label><span className="sr-only">Filter by education</span><input value={education} onChange={(event) => setEducation(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') applyFilters() }} placeholder="Education" className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
+          <label><span className="sr-only">Filter by internship ID</span><input aria-label="Filter by internship ID" inputMode="numeric" value={searchParams.get('internship') ?? ''} onChange={(event) => updateFilter('internship', event.target.value)} placeholder="Internship ID" className="glass-input h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
+          <label><span className="sr-only">Filter by skills</span><input value={skills} onChange={(event) => setSkills(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') applyFilters() }} placeholder="Skills" className="glass-input h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
+          <label><span className="sr-only">Filter by education</span><input value={education} onChange={(event) => setEducation(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') applyFilters() }} placeholder="Education" className="glass-input h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" /></label>
           <div className="flex gap-2">
             <button type="button" onClick={() => updateFilter('sort', searchParams.get('sort') === 'oldest' ? 'newest' : 'oldest')} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"><ArrowUpDown className="h-3.5 w-3.5" /> Sort</button>
             <Button variant="outline" onClick={applyFilters}>Apply</Button>
@@ -588,10 +504,10 @@ export function LegacyCompanyApplicantsPage({
       ) : pipeline ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {filteredGroups.map((group) => (
-            <section key={group.key} aria-label={`${group.label} applicants`} className="min-w-0 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60">
+            <section key={group.key} aria-label={`${group.label} applicants`} className="glass-static min-w-0 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60">
               <h2 className="mb-3 flex items-center justify-between text-sm font-bold text-slate-800 dark:text-slate-200">{group.label}<Badge variant="slate">{group.items.length}</Badge></h2>
               <div className="space-y-2">{group.items.map((item) => (
-                <div key={item.id} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+                <div key={item.id} className="glass-static rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
                   <p className="truncate text-sm font-semibold">{item.student_name || 'Candidate'}</p>
                   <p className="mt-1 truncate text-xs text-slate-500">{item.internship_title}</p>
                   <div className="mt-2 flex flex-wrap gap-1">{applicantStages.filter((stage) => stage.key !== item.status && ['UNDER_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED', 'SELECTED', 'REJECTED'].includes(stage.key)).map((stage) => <button key={stage.key} type="button" disabled={processingId === item.id} onClick={() => void changeStatus(item, stage.key)} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] hover:bg-indigo-50 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800">Move to {stage.label}</button>)}</div>
@@ -602,8 +518,8 @@ export function LegacyCompanyApplicantsPage({
         </div>
       ) : (
         <>
-          <div className="hidden overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 md:block">
-            <table className="w-full min-w-[850px] bg-white text-left text-sm dark:bg-slate-900">
+          <div className="glass-strong hidden overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 md:block">
+            <table className="w-full min-w-[850px] bg-transparent text-left text-sm dark:bg-slate-900">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-300"><tr><th className="px-4 py-3">Candidate</th><th className="px-4 py-3">Internship</th><th className="px-4 py-3">Skills / match</th><th className="px-4 py-3">Applied</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Actions</th></tr></thead>
               <tbody>{items.map((item) => <tr key={item.id} className="border-t border-slate-100 align-top dark:border-slate-800"><td className="px-4 py-3"><strong>{item.student_name || 'Candidate'}</strong><span className="mt-1 block text-xs text-slate-500">{item.student_university || 'Education not provided'}</span></td><td className="max-w-48 truncate px-4 py-3">{item.internship_title || 'Internship'}</td><td className="max-w-56 px-4 py-3 text-xs">{item.student_skills.join(', ') || '—'}{item.match_score != null && <span className="mt-1 block font-semibold">{item.match_score}% match</span>}</td><td className="whitespace-nowrap px-4 py-3 text-xs">{new Date(item.created_at).toLocaleDateString()}</td><td className="px-4 py-3"><Badge status={item.status}>{item.status.replaceAll('_', ' ')}</Badge></td><td className="min-w-72 px-4 py-3">{actions(item)}</td></tr>)}</tbody>
             </table>
@@ -833,16 +749,6 @@ export function CompanyJobsPage() {
         </div>
       </div>
 
-      {/* Desktop Hiring Pipeline & Conversion Visuals */}
-      <div className="mb-8">
-        <DesktopAnalysisVisuals
-          variant="company"
-          fullAnalyticsMenu
-          title="Company Hiring Pipeline & Conversion Analytics"
-          subtitle="Real-time candidate screening velocity, recruitment funnel progression, and market distribution"
-        />
-      </div>
-
       <div className="mb-4 space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <SearchBox ariaLabel="Search internships by title" value={jobSearch} onChange={setJobSearch} scope="postings" placeholder="Search internships by title" className="sm:max-w-sm" />
@@ -885,7 +791,7 @@ export function CompanyJobsPage() {
                     <Badge variant="slate">{job.work_mode}</Badge>
                   </div>
                   <p className="text-xs text-slate-500">
-                    {job.industry} • {job.location} • {job.stipend == null ? 'Unpaid' : `$${job.stipend}/mo`} • {job.duration_months} mo • {job.applicant_count ?? 0} applicants
+                    {job.industry} • {job.location} • {job.stipend == null ? 'Unpaid' : `${formatINR(job.stipend)}/mo`} • {job.duration_months} mo • {job.applicant_count ?? 0} applicants
                   </p>
                 </div>
 
@@ -1054,7 +960,7 @@ const jobFormSchema = z.object({
   location: z.string().min(2, 'Location is required (e.g. Remote or San Francisco, CA)').max(255, 'Location must be 255 characters or fewer'),
   industry: z.string().min(2, 'Industry is required').max(255, 'Industry must be 255 characters or fewer'),
   duration_months: z.coerce.number().min(1, 'Duration must be at least 1 month').max(36, 'Duration cannot exceed 36 months'),
-  stipend: z.coerce.number().min(0, 'Stipend must be 0 or greater'),
+  stipend: z.coerce.number().min(0, 'Stipend must be 0 or greater').max(1_000_000, 'Stipend must be 1,000,000 or less'),
   work_mode: z.enum(['REMOTE', 'HYBRID', 'ONSITE']),
   deadline: z.string().min(1, 'Application deadline is required'),
   skills: z.string().optional().or(z.literal('')).refine(
@@ -1065,6 +971,15 @@ const jobFormSchema = z.object({
 
 function isJobFormField(value: unknown): value is keyof z.infer<typeof jobFormSchema> {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(jobFormSchema.shape, value)
+}
+
+function RequiredJobFieldLabel({ htmlFor, children }: { htmlFor: string; children: string }) {
+  return (
+    <label htmlFor={htmlFor} className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+      {children}
+      <span className="ml-1 text-rose-600 dark:text-rose-400" aria-hidden="true">*</span>
+    </label>
+  )
 }
 
 export function JobFormPage() {
@@ -1198,6 +1113,11 @@ export function JobFormPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            {!isEditing && (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                <span className="text-rose-600 dark:text-rose-400" aria-hidden="true">*</span> Required fields
+              </p>
+            )}
             {serverError && (
               <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700">
                 <AlertCircle className="w-4 h-4 shrink-0" />
@@ -1206,11 +1126,13 @@ export function JobFormPage() {
             )}
 
             <div>
+              <RequiredJobFieldLabel htmlFor="title">Job Title</RequiredJobFieldLabel>
               <Input
-                label="Job Title"
+                id="title"
                 placeholder="e.g. Software Engineering Intern (Summer 2026)"
                 maxLength={255}
                 error={errors.title?.message}
+                aria-required="true"
                 {...register('title')}
               />
               <p className="mt-1 text-right text-xs text-slate-500">{(watch('title') || '').length}/255</p>
@@ -1218,21 +1140,25 @@ export function JobFormPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
+                <RequiredJobFieldLabel htmlFor="location">Location</RequiredJobFieldLabel>
                 <Input
-                  label="Location"
+                  id="location"
                   placeholder="e.g. Remote, or New York, NY"
                   maxLength={255}
                   error={errors.location?.message}
+                  aria-required="true"
                   {...register('location')}
                 />
                 <p className="mt-1 text-right text-xs text-slate-500">{(watch('location') || '').length}/255</p>
               </div>
               <div>
+                <RequiredJobFieldLabel htmlFor="industry">Industry</RequiredJobFieldLabel>
                 <Input
-                  label="Industry"
+                  id="industry"
                   placeholder="e.g. Technology, Finance, Media"
                   maxLength={255}
                   error={errors.industry?.message}
+                  aria-required="true"
                   {...register('industry')}
                 />
                 <p className="mt-1 text-right text-xs text-slate-500">{(watch('industry') || '').length}/255</p>
@@ -1240,39 +1166,60 @@ export function JobFormPage() {
             </div>
 
             <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-3">
-              <DropdownSelect
-                label="Work Mode"
-                value={watch('work_mode')}
-                onChange={(value) => setValue('work_mode', value as z.infer<typeof jobFormSchema>['work_mode'], { shouldValidate: true })}
-                options={[
-                  { label: 'Remote', value: 'REMOTE' },
-                  { label: 'Hybrid', value: 'HYBRID' },
-                  { label: 'On-site', value: 'ONSITE' },
-                ]}
-              />
+              <div>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                  Work Mode
+                  <span className="ml-1 text-rose-600 dark:text-rose-400" aria-hidden="true">*</span>
+                </p>
+                <DropdownSelect
+                  aria-label="Work Mode, required"
+                  value={watch('work_mode')}
+                  onChange={(value) => setValue('work_mode', value as z.infer<typeof jobFormSchema>['work_mode'], { shouldValidate: true })}
+                  options={[
+                    { label: 'Remote', value: 'REMOTE' },
+                    { label: 'Hybrid', value: 'HYBRID' },
+                    { label: 'On-site', value: 'ONSITE' },
+                  ]}
+                />
+              </div>
 
-              <Input
-                label="Duration (Months)"
-                type="number"
-                min={1}
-                max={36}
-                error={errors.duration_months?.message}
-                {...register('duration_months')}
-              />
+              <div>
+                <RequiredJobFieldLabel htmlFor="duration_months">Duration (Months)</RequiredJobFieldLabel>
+                <Input
+                  id="duration_months"
+                  type="number"
+                  min={1}
+                  max={36}
+                  error={errors.duration_months?.message}
+                  aria-required="true"
+                  {...register('duration_months')}
+                />
+              </div>
 
-              <Input
-                label="Monthly Stipend"
-                type="number"
-                min={0}
-                error={errors.stipend?.message}
-                {...register('stipend')}
-              />
+              <div>
+                <RequiredJobFieldLabel htmlFor="stipend">{`Monthly stipend (${INR_CURRENCY_SYMBOL})`}</RequiredJobFieldLabel>
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-500 dark:text-slate-400" aria-hidden="true">{INR_CURRENCY_SYMBOL}</span>
+                  <Input
+                    id="stipend"
+                    type="number"
+                    min={0}
+                    max={1_000_000}
+                    error={errors.stipend?.message}
+                    aria-required="true"
+                    className="pl-8"
+                    {...register('stipend')}
+                  />
+                </div>
+              </div>
             </div>
 
+            <RequiredJobFieldLabel htmlFor="deadline">Application Deadline</RequiredJobFieldLabel>
             <Input
-              label="Application Deadline "
+              id="deadline"
               type="date"
               error={errors.deadline?.message}
+              aria-required="true"
               {...register('deadline')}
             />
 
@@ -1284,13 +1231,17 @@ export function JobFormPage() {
               {...register('skills')}
             />
 
-            <Textarea
-              label="Full Description & Requirements"
-              placeholder="Describe candidate responsibilities, day-to-day work, and desired experience..."
-              rows={6}
-              error={errors.description?.message}
-              {...register('description')}
-            />
+            <div>
+              <RequiredJobFieldLabel htmlFor="description">Full Description &amp; Requirements</RequiredJobFieldLabel>
+              <Textarea
+                id="description"
+                placeholder="Describe candidate responsibilities, day-to-day work, and desired experience..."
+                rows={6}
+                error={errors.description?.message}
+                aria-required="true"
+                {...register('description')}
+              />
+            </div>
 
             <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
               <Button type="button" variant="outline" size="sm" onClick={() => navigate(routes.companyJobs())}>
@@ -1778,7 +1729,7 @@ export function JobApplicantsPage() {
         </div>
       ) : (
         /* TABLE VIEW */
-        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-x-auto shadow-2xs">
+        <div className="glass-strong bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-x-auto shadow-2xs">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/75 dark:bg-slate-800/50 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
@@ -1915,7 +1866,7 @@ const companyProfileSchema = z.object({
   website: z.string().url().optional().or(z.literal('')),
   description: z.string().optional().or(z.literal('')),
   company_size: z.string().max(40).optional().or(z.literal('')),
-  location: z.string().max(255).optional().or(z.literal('')),
+  location: z.string().trim().min(2, 'Location is required (e.g. Remote or San Francisco, CA)').max(255, 'Location must be 255 characters or fewer'),
   recruiter_contact_name: z.string().max(255).optional().or(z.literal('')),
   recruiter_contact_phone: z.string().max(40).optional().or(z.literal('')),
   recruiter_contact_email: z.string().email().optional().or(z.literal('')),
@@ -2164,7 +2115,7 @@ export function CompanyProfilePage() {
                   <ChevronDown className="h-3.5 w-3.5" />
                 </button>
                 {documentTypeMenuOpen && (
-                  <div role="menu" aria-label="Document types" className="absolute left-0 top-full z-20 mt-1 w-full rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                  <div role="menu" aria-label="Document types" className="glass-strong absolute left-0 top-full z-20 mt-1 w-full rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
                     {[
                       ['BUSINESS_REGISTRATION', 'Business registration'],
                       ['GST_OR_PAN', 'GST or PAN'],
@@ -2228,7 +2179,12 @@ export function CompanyProfilePage() {
             />
 
             <Input label="Company size" placeholder="e.g. 50-200 employees" {...register('company_size')} />
-            <Input label="Location" placeholder="City, country" {...register('location')} />
+            <Input
+              label="Location (city, state or Remote)"
+              placeholder="City, state or Remote"
+              error={errors.location?.message}
+              {...register('location')}
+            />
             <Input label="Recruiter contact name" {...register('recruiter_contact_name')} />
             <Input label="Recruiter contact phone" type="tel" {...register('recruiter_contact_phone')} />
             <Input

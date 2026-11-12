@@ -12,6 +12,33 @@ afterEach(() => {
 })
 
 describe('Company profile verification documents', () => {
+  it('requires a location and submits it with the profile', async () => {
+    vi.spyOn(api, 'get').mockImplementation(async (url) => {
+      if (url === '/profiles/company') return { data: {
+        company_name: 'Example Corp',
+        industry: 'Technology',
+        location: '',
+      } } as never
+      if (url === '/profiles/company/documents') return { data: [] } as never
+      return { data: [] } as never
+    })
+    const put = vi.spyOn(api, 'put').mockResolvedValue({ data: {} } as never)
+
+    render(<MemoryRouter><CompanyProfilePage /></MemoryRouter>)
+
+    const location = await screen.findByLabelText('Location (city, state or Remote)')
+    fireEvent.click(screen.getByRole('button', { name: 'Save Profile' }))
+    expect(await screen.findByText('Location is required (e.g. Remote or San Francisco, CA)')).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled()
+
+    fireEvent.change(location, { target: { value: 'Remote' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Profile' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith(
+      '/profiles/company',
+      expect.objectContaining({ location: 'Remote' }),
+    ))
+  })
+
   it('loads the document collection, displays verification notes, supports add-more and delete', async () => {
     const document = {
       id: 71,

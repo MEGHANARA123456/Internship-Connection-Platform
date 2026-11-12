@@ -7,6 +7,7 @@ import { Badge } from '../components/ui/Badge'
 import { Card } from '../components/ui/Card'
 import { SearchBox } from '../components/ui/SearchBox'
 import { routes } from '../lib/routes'
+import { formatINR } from '../lib/currency'
 import { stripMarkdownPreview } from '../lib/search'
 import {
   GraduationCap,
@@ -63,7 +64,7 @@ export function LandingPage() {
         {/* Quick Search Bar */}
         <form
           onSubmit={handleHeroSearch}
-          className="mt-8 w-full max-w-xl p-2 bg-white rounded-2xl border border-slate-200 shadow-md flex items-center gap-2"
+          className="glass-strong mt-8 w-full max-w-xl p-2 bg-white rounded-2xl border border-slate-200 shadow-md flex items-center gap-2"
         >
           <div className="min-w-0 flex-1">
             <SearchBox
@@ -239,7 +240,7 @@ export function LandingPage() {
                 <div className="flex items-start justify-between">
                   <Badge status={job.work_mode}>{job.work_mode}</Badge>
                   <span className="text-xs font-bold text-slate-900">
-                    {job.stipend > 0 ? `$${job.stipend}/mo` : 'Unpaid'}
+                    {job.stipend > 0 ? `${formatINR(job.stipend)}/mo` : 'Unpaid'}
                   </span>
                 </div>
                 <div>

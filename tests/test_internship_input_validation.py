@@ -58,7 +58,7 @@ async def test_create_internship_validation_variants() -> None:
                 "location": "Bangalore, Karnataka, India",
                 "industry": "Information Technology / Software Development / Artificial ...",
                 "duration_months": 3,
-                "stipend": 1500,
+                "stipend": 25000,
                 "work_mode": "REMOTE",
                 "skills": [],
                 "deadline": str(date.today() + timedelta(days=30)),
@@ -75,12 +75,14 @@ async def test_create_internship_validation_variants() -> None:
                 "31 skills": {"skills": [f"skill-{index}" for index in range(31)]},
                 "blank deadline": {"deadline": ""},
                 "empty stipend": {"stipend": ""},
+                "stipend above INR limit": {"stipend": 1_000_001},
             }
             expected_messages = {
-                "industry": "String should have at most 255 characters",
-                "skills": "List should have at most 30 items after validation, not 31",
-                "deadline": "Input should be a valid date or datetime, input is too short",
-                "stipend": "Input should be a valid integer, unable to parse string as an integer",
+                "industry over 255 characters": "String should have at most 255 characters",
+                "31 skills": "List should have at most 30 items after validation, not 31",
+                "blank deadline": "Input should be a valid date or datetime, input is too short",
+                "empty stipend": "Input should be a valid integer, unable to parse string as an integer",
+                "stipend above INR limit": "Input should be less than or equal to 1000000",
             }
 
             for name, changes in variants.items():
@@ -98,7 +100,7 @@ async def test_create_internship_validation_variants() -> None:
                 )
                 print(f"{name}: loc={failure['loc']}, msg={failure['msg']}")
                 assert failure["loc"] == ["body", expected_field]
-                assert failure["msg"] == expected_messages[expected_field]
+                assert failure["msg"] == expected_messages[name]
     finally:
         if previous_override is None:
             app.dependency_overrides.pop(get_db, None)

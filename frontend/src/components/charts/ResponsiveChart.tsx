@@ -146,7 +146,7 @@ export function ResponsiveBars({
         }}
       </ResponsiveChart>
       {active !== null && visibleItems[active] && (
-        <p role="tooltip" className="rounded-md bg-slate-900 px-2 py-1 text-xs text-white dark:bg-slate-700">
+        <p role="tooltip" className="glass-strong rounded-md bg-slate-900 px-2 py-1 text-xs text-white dark:bg-slate-700">
           {visibleItems[active].label}: {visibleItems[active].value}{visibleItems[active].detail ? ` · ${visibleItems[active].detail}` : ''}
         </p>
       )}
@@ -273,7 +273,7 @@ export function ResponsiveStackedBars({
         }}
       </ResponsiveChart>
       {activeRow !== null && items[activeRow] && (
-        <p role="tooltip" className="rounded-md bg-slate-900 px-2 py-1 text-xs text-white dark:bg-slate-700">
+        <p role="tooltip" className="glass-strong rounded-md bg-slate-900 px-2 py-1 text-xs text-white dark:bg-slate-700">
           {items[activeRow].label}: {visibleSeries.map((item) => `${item.label} ${items[activeRow].values[series.findIndex((entry) => entry.label === item.label)] ?? 0}`).join(' · ')}
         </p>
       )}

@@ -14,10 +14,15 @@ from app.chatbot.guardrails import (
     detect_cross_account_request,
     is_chatbot_capability_question,
 )
-from app.chatbot.scope import is_admin_only_query
+from app.chatbot.scope import is_admin_only_query, is_how_to_question
 from app.chatbot.rag.embeddings import embed_texts
 
 logger = logging.getLogger("internsphere.chatbot.intent")
+_FOLLOWUP = re.compile(
+    r"^(and|also|what about|how about|why|what if|then|so)\b"
+    r"|\b(that|it|this|those|these|them|same)\b",
+    re.IGNORECASE,
+)
 
 def _edit_distance_at_most_one(left: str, right: str) -> bool:
     """Match one insertion, deletion, or substitution without fuzzy-matching short words."""
@@ -77,6 +82,30 @@ class Intent:
     args: tuple[tuple[str, int], ...] = ()
     refusal_reason: str | None = None
     needs_clarification: str | None = None
+
+
+def resolve_followup(
+    message: str,
+    history: list[tuple[str, str]],
+    page: str,
+) -> str:
+    """Use only the last user question to resolve a short, genuine follow-up."""
+    if (
+        not history
+        or len(message.split()) > 7
+        or re.match(
+            r"^\s*(how do i|how can i|where can i|when can i|can i)\b",
+            message,
+            re.IGNORECASE,
+        )
+        or not _FOLLOWUP.search(message)
+    ):
+        return message
+    last_user = next(
+        (content[:200] for role, content in reversed(history) if role == "user"),
+        "",
+    )
+    return f"{last_user} Follow-up: {message}" if last_user else message
 
 
 INTENT_EXAMPLES = {
@@ -207,7 +236,11 @@ def _intent_examples_vectors(model_name: str) -> tuple[tuple[str, str, tuple[flo
 
 def _internship_id(message: str) -> int | None:
     """Extract a positive signed-32-bit internship/posting/role identifier, if present."""
-    match = re.search(r"\b(?:internship|posting|role)\s*#?\s*(\d+)\b", message, re.I)
+    match = re.search(
+        r"\b(?:internship|posting|role)\s*#?\s*(\d+)\b",
+        message,
+        re.IGNORECASE,
+    )
     if not match:
         return None
     value = int(match.group(1))
@@ -246,6 +279,12 @@ def classify_intent(message: str, role: str) -> Intent:
         and any(pattern.search(message) for pattern in OUT_OF_SCOPE_PATTERNS)
     ):
         return Intent("out_of_scope", refusal_reason="outside_product_scope")
+    if re.match(
+        r"^\s*(?:how do i|how can i|where can i|where do i|can i)\b",
+        message,
+        re.IGNORECASE,
+    ):
+        return Intent("rag_help")
 
     text = _normalize_intent_text(message)
     if re.search(r"\b(?:which|what)\s+(?:date )?period\b|\b(?:last|past) period\b", text):
@@ -282,6 +321,8 @@ def classify_intent(message: str, role: str) -> Intent:
         return Intent("both" if combined else "live_data", name, args)
 
     if normalized_role == "student":
+        if re.search(r"\bfollow up\s+(?:(?:and|also)\s+)?interview\b", text):
+            return live_or_both("student_interviews")
         if re.search(
             r"\b(retake|retry|take again)\b.{0,50}\b(skill )?assessments?\b"
             r"|\b(when|how soon|how long)\b.{0,40}\b(retake|retry|take again)\b",
@@ -289,13 +330,26 @@ def classify_intent(message: str, role: str) -> Intent:
         ):
             return Intent("both", "student_skill_retake")
         if re.search(
-            r"\b(my|what are my|show my|list my)\b.{0,50}\bskills?\b"
-            r".{0,80}\b(improve|improvement|weak|where|assessment|results?)\b"
-            r"|\bwhat are my skills\b"
-            r"|\bskills?\b.{0,40}\bwhere\b.{0,40}\b(improve|weak|assessment)\b",
+            r"\bskill gap\b|\bwhat are my skills\b"
+            r"|\bwhere\b.{0,45}\b(?:do i need to|i need to|have to|can i)\s+improve\b"
+            r"|\bmy skills\b.{0,50}\b(?:weak|where|improve)\b",
+            text,
+        ):
+            return live_or_both("student_skill_gap")
+        if re.search(
+            r"\b(my|show my|list my)\b.{0,50}\bskills?\b"
+            r".{0,80}\b(improve|improvement|weak|assessment|results?)\b",
             text,
         ):
             return live_or_both("student_skills_improvement")
+        if re.search(
+            r"\b(?:how many|count|number of)\b.{0,40}\bapplications?\b"
+            r"|\b(?:shortlisted|applied|under review|interview|offers?)\b.{0,35}"
+            r"\b(?:count|number of|applications?)\b"
+            r"|\bany offers?\b",
+            text,
+        ):
+            return live_or_both("student_application_counts")
         if re.search(
             r"\b(find|recommend|suggest|show|list)\b.{0,50}\b(internships?|roles?|opportunities)\b"
             r".{0,50}\b(match(?:ing)?|fit)\b.{0,30}\b(my profile|my skills|my background)\b"
@@ -510,6 +564,12 @@ def classify_intent(message: str, role: str) -> Intent:
         ):
             return live_or_both("admin_skill_assessment_stats")
         if re.search(
+            r"\b(show|list)\b.{0,35}\b(pending|awaiting)\b.{0,25}\b(postings?|internships?)\b"
+            r"|\b(show|list)\b.{0,25}\b(postings?|internships?)\b.{0,25}\b(pending|awaiting)\b",
+            text,
+        ):
+            return live_or_both("admin_pending_approvals")
+        if re.search(
             r"\b(how many|count|number of|pending verification)\b.{0,60}\bverifications?\b"
             r"|\b(company|companies)\b.{0,30}\bverification counts?\b"
             r"|\b(show|list)\b.{0,30}\b(company|companies)\b.{0,30}\bverification\b.{0,20}\b(counts?|status|totals?)\b"
@@ -545,7 +605,7 @@ def classify_intent(message: str, role: str) -> Intent:
 async def classify_intent_with_examples(message: str, role: str, model_name: str) -> Intent:
     """Use allow-listed semantic examples only when deterministic keyword routing is inconclusive."""
     intent = classify_intent(message, role)
-    if intent.category != "rag_help" or intent.needs_clarification:
+    if intent.category != "rag_help" or intent.needs_clarification or is_how_to_question(message):
         return intent
     examples = INTENT_EXAMPLES.get(role.lower(), {})
     if not examples:

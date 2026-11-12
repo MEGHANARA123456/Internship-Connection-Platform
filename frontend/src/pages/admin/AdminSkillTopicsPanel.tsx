@@ -97,8 +97,8 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
-const topicFieldClassName = 'mt-1 h-10 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500'
-const topicTextareaClassName = 'mt-1 w-full rounded-xl border border-slate-300 bg-white p-3 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500'
+const topicFieldClassName = 'glass-input mt-1 h-10 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500'
+const topicTextareaClassName = 'glass-input mt-1 w-full rounded-xl border border-slate-300 bg-white p-3 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500'
 
 function DifficultyPoolChips({ sizes }: { sizes: Record<string, number> }) {
   return (
@@ -532,7 +532,7 @@ export function AdminSkillTopicsPanel({
     : false
 
   return (
-    <section aria-labelledby="admin-skill-topics-heading" className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+    <section aria-labelledby="admin-skill-topics-heading" className="glass-strong space-y-4 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:p-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 id="admin-skill-topics-heading" className="text-lg font-bold text-slate-900 dark:text-white">Skill assessment topics</h2>
@@ -697,7 +697,7 @@ export function AdminSkillTopicsPanel({
                 </ul>
               )}
               {attempts.length < filteredAttemptTotal && <Button className="mt-3 w-full" size="sm" variant="outline" disabled={loadingAttempts} onClick={() => setAttemptPage((page) => page + 1)}>Load more</Button>}
-              {details && details.topic === selectedTopic && <div role="dialog" aria-label="Assessment attempt details" className="mt-4 rounded-lg bg-indigo-50 p-3 text-sm dark:bg-indigo-950/30"><div className="flex items-center justify-between"><h4 className="font-semibold">Attempt #{details.id}</h4><Button size="sm" variant="ghost" aria-label="Close attempt details" onClick={() => setDetails(null)}>Close</Button></div><p className="mt-2">{details.student_email} · {displayStatus(details.status)} · {details.status === 'EXPIRED' || details.score == null ? '—' : `${details.score}%`}</p><p className="text-xs text-slate-600 dark:text-slate-300">{details.passed ? 'Passed' : details.passed === false ? 'Not passed' : 'Result unavailable'} · {details.level ?? 'No level'} · Percentile {details.percentile ?? '—'}</p><ul className="mt-2 space-y-1 text-xs">{Object.entries(details.subtopic_scores).map(([key, value]) => <li key={key} className="flex justify-between"><span>{key}</span><span>{value.percentage}%</span></li>)}</ul></div>}
+              {details && details.topic === selectedTopic && <div role="dialog" aria-label="Assessment attempt details" className="glass-strong mt-4 rounded-lg bg-indigo-50 p-3 text-sm dark:bg-indigo-950/30"><div className="flex items-center justify-between"><h4 className="font-semibold">Attempt #{details.id}</h4><Button size="sm" variant="ghost" aria-label="Close attempt details" onClick={() => setDetails(null)}>Close</Button></div><p className="mt-2">{details.student_email} · {displayStatus(details.status)} · {details.status === 'EXPIRED' || details.score == null ? '—' : `${details.score}%`}</p><p className="text-xs text-slate-600 dark:text-slate-300">{details.passed ? 'Passed' : details.passed === false ? 'Not passed' : 'Result unavailable'} · {details.level ?? 'No level'} · Percentile {details.percentile ?? '—'}</p><ul className="mt-2 space-y-1 text-xs">{Object.entries(details.subtopic_scores).map(([key, value]) => <li key={key} className="flex justify-between"><span>{key}</span><span>{value.percentage}%</span></li>)}</ul></div>}
             </>
           )}
         </aside>

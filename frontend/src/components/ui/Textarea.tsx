@@ -23,9 +23,9 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
           id={inputId}
           ref={ref}
           className={cn(
-            'flex min-h-[90px] w-full rounded-lg border bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-950 transition-all',
+            'glass-input flex min-h-[90px] w-full rounded-lg border bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-950 transition-all',
             error
-              ? 'border-rose-400 focus-visible:ring-rose-400 bg-rose-50/20'
+              ? 'glass-input-error border-rose-400 focus-visible:ring-rose-400 bg-rose-50/20'
               : 'border-slate-300 dark:border-slate-700 focus-visible:ring-indigo-500 focus-visible:border-indigo-500 hover:border-slate-400 dark:hover:border-slate-600',
             'disabled:cursor-not-allowed disabled:bg-slate-50 dark:disabled:bg-slate-900 disabled:text-slate-500',
             className

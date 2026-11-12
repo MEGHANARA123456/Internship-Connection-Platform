@@ -180,22 +180,22 @@ export function SkillAssessmentResultPage() {
       {error && <p role="alert" className="mb-4 rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:bg-rose-950/40 dark:text-rose-200">{error}</p>}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="Assessment score summary">
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <article className="glass-static rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Weighted score</p>
           <p className="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{result.weighted_percentage}%</p>
         </article>
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <article className="glass-static rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Level</p>
           <p className="mt-2 text-2xl font-bold text-indigo-700 dark:text-indigo-300">{result.level}</p>
         </article>
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <article className="glass-static rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Result</p>
           <p className={`mt-2 text-2xl font-bold ${result.passed ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'}`}>
             {result.passed ? 'Passed' : 'Not passed'}
           </p>
           <p className="mt-1 text-xs text-slate-500">Raw score: {result.raw_score}/10</p>
         </article>
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <article className="glass-static rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Time · percentile</p>
           <p className="mt-2 text-xl font-bold text-slate-900 dark:text-white">{Math.floor(result.time_taken_seconds / 60)}m {result.time_taken_seconds % 60}s</p>
           <p className="mt-1 text-xs text-slate-500">{typeof result.percentile === 'number' ? `${result.percentile}th percentile` : result.percentile}</p>
@@ -210,7 +210,7 @@ export function SkillAssessmentResultPage() {
       )}
 
       <section className="mt-6 grid gap-5 lg:grid-cols-2">
-        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <article className="glass-static rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <h2 className="mb-3 text-base font-bold text-slate-900 dark:text-white">Performance by subtopic</h2>
           <div className="h-64" role="img" aria-label="Bar chart of performance by subtopic">
             <ResponsiveContainer width="100%" height="100%">
@@ -224,7 +224,7 @@ export function SkillAssessmentResultPage() {
             </ResponsiveContainer>
           </div>
         </article>
-        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <article className="glass-static rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <h2 className="mb-3 text-base font-bold text-slate-900 dark:text-white">Performance by difficulty</h2>
           <div className="h-64" role="img" aria-label="Bar chart of performance by difficulty">
             <ResponsiveContainer width="100%" height="100%">
@@ -241,7 +241,7 @@ export function SkillAssessmentResultPage() {
       </section>
 
       <section className="mt-6 grid gap-5 lg:grid-cols-2">
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <article className="glass-static rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           <h2 className="text-base font-bold text-slate-900 dark:text-white">Strengths and study plan</h2>
           <p className="mt-2 text-sm text-emerald-700 dark:text-emerald-300">
             Strengths: {result.strengths.length ? result.strengths.map((value) => value.replaceAll('-', ' ')).join(', ') : 'Keep practicing to build topic strengths.'}
@@ -267,7 +267,7 @@ export function SkillAssessmentResultPage() {
           )}
           <p className="mt-4 text-xs text-slate-500 dark:text-slate-400">Recommended retake after {formatDate(result.retake_at)}.</p>
         </article>
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <article className="glass-static rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           <h2 className="text-base font-bold text-slate-900 dark:text-white">Internships matching verified skills</h2>
           {!result.passed ? (
             <p className="mt-3 text-sm text-slate-600 dark:text-slate-400">Pass this assessment to see internships matched to the verified skill.</p>
@@ -286,7 +286,7 @@ export function SkillAssessmentResultPage() {
         </article>
       </section>
 
-      <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+      <section className="mt-6 glass-static rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
         <h2 className="text-base font-bold text-slate-900 dark:text-white">Question review</h2>
         <div className="mt-3 space-y-3">
           {result.questions.map((question, index) => (
@@ -348,7 +348,7 @@ export function SkillAssessmentHistoryPage() {
       </header>
       {error && <p role="alert" className="mb-4 rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:bg-rose-950/40 dark:text-rose-200">{error}</p>}
       {attempts.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center dark:border-slate-800 dark:bg-slate-900">
+        <div className="glass-static rounded-2xl border border-slate-200 bg-white p-8 text-center dark:border-slate-800 dark:bg-slate-900">
           <AlertCircle className="mx-auto h-8 w-8 text-slate-400" />
           <h2 className="mt-3 font-semibold text-slate-900 dark:text-white">No completed assessments yet</h2>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Take an assessment to start tracking your progress.</p>
@@ -363,7 +363,7 @@ export function SkillAssessmentHistoryPage() {
               </button>
             ))}
           </div>
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <section className="glass-static rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
             <h2 className="mb-3 text-base font-bold capitalize text-slate-900 dark:text-white">{topic.replaceAll('-', ' ')} score trend</h2>
             <div className="h-72" role="img" aria-label={`Score-over-time chart for ${topic}`}>
               <ResponsiveContainer width="100%" height="100%">
@@ -377,7 +377,7 @@ export function SkillAssessmentHistoryPage() {
               </ResponsiveContainer>
             </div>
           </section>
-          <section className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+          <section className="mt-5 overflow-hidden glass-strong rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
             <h2 className="p-5 text-base font-bold text-slate-900 dark:text-white">Completed attempts</h2>
             <ul className="divide-y divide-slate-200 dark:divide-slate-800">
               {attempts.filter((attempt) => attempt.topic === topic).slice().reverse().map((attempt) => (

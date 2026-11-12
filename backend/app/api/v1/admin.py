@@ -870,10 +870,23 @@ async def list_all_companies(
         .group_by(Internship.company_id)
         .subquery()
     )
+    most_recent_posting_location = (
+        select(Internship.location)
+        .where(Internship.company_id == CompanyProfile.user_id)
+        .order_by(Internship.created_at.desc(), Internship.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    company_location = func.coalesce(
+        func.nullif(func.trim(CompanyProfile.location), ""),
+        func.nullif(func.trim(most_recent_posting_location), ""),
+        "Not provided",
+    )
     query = (
         select(
             CompanyProfile,
             User,
+            company_location.label("location"),
             func.coalesce(role_counts.c.posting_count, 0).label("posting_count"),
             func.coalesce(role_counts.c.active_roles, 0).label("active_roles"),
             func.coalesce(applicant_counts.c.total_applicants, 0).label("total_applicants"),
@@ -894,7 +907,7 @@ async def list_all_companies(
             (
                 CompanyProfile.company_name,
                 CompanyProfile.industry,
-                CompanyProfile.location,
+                company_location,
                 CompanyProfile.recruiter_contact_name,
                 CompanyProfile.recruiter_contact_email,
             ),
@@ -915,7 +928,7 @@ async def list_all_companies(
         "created_at": User.created_at,
         "company_name": CompanyProfile.company_name,
         "industry": CompanyProfile.industry,
-        "location": CompanyProfile.location,
+        "location": company_location,
         "verification_status": CompanyProfile.verification_status,
         "posting_count": func.coalesce(role_counts.c.posting_count, 0),
         "active_roles": func.coalesce(role_counts.c.active_roles, 0),
@@ -936,7 +949,7 @@ async def list_all_companies(
         query = query.offset((effective_page - 1) * effective_page_size).limit(effective_page_size)
     company_rows = list(await db.execute(query))
 
-    user_ids = [profile.user_id for profile, _, _, _, _ in company_rows]
+    user_ids = [profile.user_id for profile, _, _, _, _, _ in company_rows]
     metrics_by_company = await get_company_metrics_batch(db, user_ids)
     filter_names = [
         key for key, value in {
@@ -958,7 +971,7 @@ async def list_all_companies(
                 verification_note=profile.verification_note,
                 posting_count=int(postings),
             )
-            for profile, _, postings, _, _ in company_rows
+            for profile, _, _, postings, _, _ in company_rows
         ]
     return AdminPage(
         items=[
@@ -966,7 +979,7 @@ async def list_all_companies(
                 user_id=profile.user_id,
                 company_name=profile.company_name,
                 industry=profile.industry,
-                location=profile.location,
+                location=location,
                 company_size=profile.company_size,
                 verification_status=profile.verification_status,
                 posting_count=int(postings),
@@ -975,7 +988,7 @@ async def list_all_companies(
                 created_at=account.created_at,
                 suspended_at=account.suspended_at,
             )
-            for profile, account, postings, active_roles, applicants in company_rows
+            for profile, account, location, postings, active_roles, applicants in company_rows
         ],
         total=total,
         page=effective_page,

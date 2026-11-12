@@ -572,7 +572,7 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
                             : 'Not passed'
                     const Icon = topicIcon(topic.id)
                     return (
-                      <article key={topic.id} className={`relative min-h-56 overflow-hidden rounded-2xl border bg-white p-4 shadow-sm dark:bg-slate-800/60 ${initialTopic === topic.id ? 'border-indigo-500 ring-1 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-800' : 'border-slate-200 dark:border-slate-700'}`}>
+                      <article key={topic.id} className={`glass-static relative min-h-56 overflow-hidden rounded-2xl border bg-white p-4 shadow-sm dark:bg-slate-800/60 ${initialTopic === topic.id ? 'border-indigo-500 ring-1 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-800' : 'border-slate-200 dark:border-slate-700'}`}>
                         <Icon aria-hidden="true" className="pointer-events-none absolute bottom-3 right-3 h-16 w-16 text-indigo-500 opacity-[0.08]" />
                         <div className="relative flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -641,7 +641,7 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
                     const activeAttempt = activeAttempts[topic.id]
                     const retakeAt = nextRetakeDate(topic.id, attemptSummaries, overviewLoadedAt)
                     return (
-                      <article key={topic.id} className="relative flex min-h-56 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800/60">
+                      <article key={topic.id} className="glass-static relative flex min-h-56 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800/60">
                         <Icon aria-hidden="true" className="pointer-events-none absolute bottom-3 right-3 h-16 w-16 text-indigo-500 opacity-[0.08]" />
                         <div className="relative flex-1">
                           <h4 className="font-semibold text-slate-900 dark:text-white">{topic.name}</h4>

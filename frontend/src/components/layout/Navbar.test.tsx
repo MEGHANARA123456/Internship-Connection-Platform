@@ -171,6 +171,46 @@ describe('Navbar menus', () => {
     expect(useViewModeStore.getState().isMobileView).toBe(true)
   })
 
+  it('shows all company destinations with counts and highlights the current interview page', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'token',
+      refreshToken: 'refresh',
+      userId: 7,
+      role: 'COMPANY',
+      email: 'company@example.com',
+    })
+    vi.mocked(api.get).mockResolvedValue({
+      data: { new_applicants: 3, upcoming_interviews: 2, unread_notifications: 4 },
+    } as never)
+    render(<MemoryRouter initialEntries={['/interviews?tab=completed']}><Navbar /></MemoryRouter>)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+    const menu = screen.getByRole('menu', { name: 'Navigation' })
+    for (const label of [
+      'Overview',
+      'Company Profile',
+      'My Internships',
+      'Post Internship',
+      'Applicants',
+      'Hiring Pipeline',
+      'Interviews',
+      'Shortlisted',
+      'Notifications',
+      'Analytics',
+      'Settings',
+    ]) {
+      expect(within(menu).getByRole('menuitem', { name: new RegExp(label) })).toBeInTheDocument()
+    }
+
+    await waitFor(() => {
+      expect(within(menu).getByRole('menuitem', { name: /Applicants/ })).toHaveTextContent('3')
+      expect(within(menu).getByRole('menuitem', { name: /Interviews/ })).toHaveTextContent('2')
+      expect(within(menu).getByRole('menuitem', { name: /Notifications/ })).toHaveTextContent('4')
+    })
+    expect(within(menu).getByRole('menuitem', { name: /Interviews/ })).toHaveAttribute('aria-current', 'page')
+    expect(within(menu).queryByRole('menuitem', { name: /Overview/ })).not.toHaveAttribute('aria-current', 'page')
+  })
+
   it('hides the mobile preview action when the viewport becomes narrower than 768px', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 768 })
     useAuthStore.getState().setSession({
@@ -200,6 +240,10 @@ describe('Navbar menus', () => {
       email: 'admin@example.com',
     })
     render(<MemoryRouter initialEntries={['/admin?preview=1']}><Navbar /></MemoryRouter>)
+
+    const searchButton = screen.getByRole('button', { name: 'Open search' })
+    expect(searchButton.parentElement).toHaveClass('w-9', 'flex-none', 'md:flex-1', 'md:px-6')
+    expect(screen.getByText('ADMIN')).toHaveClass('hidden', 'sm:inline-flex')
 
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
     const menu = screen.getByRole('menu', { name: 'Navigation' })

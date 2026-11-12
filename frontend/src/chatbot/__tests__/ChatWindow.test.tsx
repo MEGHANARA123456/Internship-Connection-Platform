@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
@@ -84,6 +84,44 @@ describe('chatbot dialog accessibility', () => {
     await screen.findByDisplayValue('')
   })
 
+  it('auto-grows the composer, hides its scrollbar, and resets after sending', async () => {
+    const composer = render(<MemoryRouter><ChatWindow {...props} /></MemoryRouter>)
+      .getByLabelText('Ask a question about InternSphere') as HTMLTextAreaElement
+    Object.defineProperty(composer, 'scrollHeight', {
+      configurable: true,
+      get: () => Math.max(
+        composer.value.split('\n').length,
+        Math.ceil(composer.value.length / 40),
+        1,
+      ) * 24,
+    })
+
+    fireEvent.change(composer, { target: { value: '' } })
+    expect(composer.style.overflowY).toBe('hidden')
+    expect(composer).toHaveClass('[scrollbar-width:none]', '[&::-webkit-scrollbar]:hidden')
+
+    fireEvent.change(composer, { target: { value: 'One line' } })
+    expect(composer.style.height).toBe('24px')
+    expect(composer.style.overflowY).toBe('hidden')
+
+    fireEvent.change(composer, { target: { value: 'Line one\nLine two\nLine three' } })
+    expect(composer.style.height).toBe('72px')
+    expect(composer.style.overflowY).toBe('hidden')
+
+    fireEvent.change(composer, { target: { value: 'x'.repeat(500) } })
+    expect(composer.style.height).toBe('120px')
+    expect(composer.style.overflowY).toBe('auto')
+    expect(screen.getByText('500/500')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+    await screen.findByDisplayValue('')
+    await waitFor(() => {
+      expect(composer.style.height).toBe('24px')
+      expect(composer.style.overflowY).toBe('hidden')
+    })
+    expect(screen.getByText('0/500')).toBeInTheDocument()
+  })
+
   it.each([
     ['STUDENT', /discover internships, track applications/i],
     ['COMPANY', /manage internship postings, review applicants/i],
@@ -119,7 +157,7 @@ describe('chatbot dialog accessibility', () => {
     expect(screen.getByText('General help')).toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: /Applications/ })).toHaveLength(1)
     expect(screen.queryByRole('link', { name: 'Applications guide' })).not.toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Go to page: Profile guide' })).toHaveAttribute('href', '/profile/student')
+    expect(screen.getByRole('link', { name: 'Learn more' })).toHaveAttribute('href', '/profile/student')
     fireEvent.click(screen.getByRole('button', { name: 'How do I withdraw an application?' }))
     expect(props.onSend).toHaveBeenCalledWith('How do I withdraw an application?')
     fireEvent.click(screen.getByRole('button', { name: 'Helpful response' }))

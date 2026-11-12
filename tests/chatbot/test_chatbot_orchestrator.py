@@ -3,11 +3,11 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.chatbot.orchestrator import classify_intent
+from app.chatbot.orchestrator import classify_intent, resolve_followup
 from app.chatbot.guardrails import detect_cross_account_request
 from app.chatbot.tools.read_only import ToolResult
 from app.chatbot.tools.read_only import execute_read_tool
-from app.models import CompanyProfile, Internship, User, UserRole
+from app.models import Application, CompanyProfile, Internship, StudentProfile, User, UserRole
 
 
 @pytest.mark.parametrize(
@@ -28,14 +28,17 @@ from app.models import CompanyProfile, Internship, User, UserRole
         ("How many postings are pending approval?", "admin", "live_data", "admin_pending_approvals"),
         ("How do I review pending postings?", "admin", "rag_help", None),
         ("How do I review company verification requests?", "admin", "rag_help", None),
+        ("Show pending postings.", "admin", "live_data", "admin_pending_approvals"),
         ("Show company verification counts.", "admin", "live_data", "admin_verification_counts"),
         ("how many topics in skill assessment", "admin", "live_data", "admin_skill_assessment_stats"),
         ("How do I import assessment questions?", "admin", "rag_help", None),
-        ("How many applications i have", "student", "live_data", "student_applications"),
-        ("shortlisted count of applications", "student", "live_data", "student_applications"),
-        ("how many applications are applied", "student", "live_data", "student_applications"),
+        ("How many applications i have", "student", "live_data", "student_application_counts"),
+        ("shortlisted count of applications", "student", "live_data", "student_application_counts"),
+        ("how many applications are applied", "student", "live_data", "student_application_counts"),
+        ("How many applications have I submitted?", "student", "live_data", "student_application_counts"),
         ("When can I retake a skill assessment?", "student", "both", "student_skill_retake"),
-        ("what are my skills and where i have to improve", "student", "live_data", "student_skills_improvement"),
+        ("what are my skills and where i have to improve", "student", "live_data", "student_skill_gap"),
+        ("any offers", "student", "live_data", "student_application_counts"),
         ("Find internships matching my profile.", "student", "live_data", "student_recommended_internships"),
         ("how many applicants do I have", "company", "live_data", "company_applicants"),
         ("shortlisted candidates", "company", "live_data", "company_shortlisted"),
@@ -64,6 +67,22 @@ def test_cross_account_request_is_refused_before_tool_selection() -> None:
         assert intent.refusal_reason == "cross_account_request"
         assert intent.tool_name is None
         assert detect_cross_account_request(message)
+
+
+def test_followup_context_uses_only_the_last_user_turn() -> None:
+    history = [
+        ("user", "How many applications do I have?"),
+        ("assistant", "You have 6 applications, including an assessment attempt."),
+    ]
+    assert resolve_followup("and interviews?", history, "applications") == (
+        "How many applications do I have? Follow-up: and interviews?"
+    )
+    assert resolve_followup(
+        "When can I retake a skill assessment?",
+        history,
+        "profile",
+    ) == "When can I retake a skill assessment?"
+    assert resolve_followup("then?", [("assistant", "assessment counts")], "home") == "then?"
 
 
 @pytest.mark.anyio
@@ -282,7 +301,7 @@ STUDENT_ROUTING_CASES = [
     ("List my applications.", "student_applications"),
     ("Check my application timeline.", "student_applications"),
     ("Where are my applications?", "student_applications"),
-    ("How many applications have I submitted?", "student_applications"),
+    ("How many applications have I submitted?", "student_application_counts"),
     ("Tell me my application status.", "student_applications"),
     ("What is the status of my submission?", "student_applications"),
     ("Show my recent applications.", "student_applications"),
@@ -441,7 +460,345 @@ async def test_live_tool_executes_read_only_query_without_writing() -> None:
             raise AssertionError("Chatbot tools must not commit database records.")
 
     result = await execute_read_tool("student_applications", {}, student, ReadOnlyDb())
-    assert result.answer == "You have no application records yet."
+    assert result.answer == (
+        "You have 0 applications: 0 applied, 0 under review, 0 shortlisted, "
+        "0 interview, 0 offer, 0 rejected."
+    )
+
+
+@pytest.mark.anyio
+async def test_student_application_count_tool_uses_own_database_rows() -> None:
+    from datetime import date
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.models.base import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with sessions() as db:
+        company = User(
+            email="company@example.test",
+            password_hash="unused",
+            role=UserRole.COMPANY,
+        )
+        student = User(
+            email="student@example.test",
+            password_hash="unused",
+            role=UserRole.STUDENT,
+        )
+        other_student = User(
+            email="other@example.test",
+            password_hash="unused",
+            role=UserRole.STUDENT,
+        )
+        db.add_all((company, student, other_student))
+        await db.flush()
+        statuses = (
+            "APPLIED",
+            "UNDER_REVIEW",
+            "SHORTLISTED",
+            "INTERVIEW_SCHEDULED",
+            "SELECTED",
+            "ACCEPTED",
+            "REJECTED",
+        )
+        for index, status in enumerate(statuses):
+            internship = Internship(
+                company_id=company.id,
+                title=f"Role {index}",
+                description="",
+                location="Remote",
+                industry="Technology",
+                duration_months=3,
+                work_mode="REMOTE",
+                skills="",
+                deadline=date.today(),
+                status="PUBLISHED",
+            )
+            db.add(internship)
+            await db.flush()
+            db.add(Application(
+                internship_id=internship.id,
+                student_id=student.id,
+                status=status,
+            ))
+        other_internship = Internship(
+            company_id=company.id,
+            title="Other role",
+            description="",
+            location="Remote",
+            industry="Technology",
+            duration_months=3,
+            work_mode="REMOTE",
+            skills="",
+            deadline=date.today(),
+            status="PUBLISHED",
+        )
+        db.add(other_internship)
+        await db.flush()
+        db.add(Application(
+            internship_id=other_internship.id,
+            student_id=other_student.id,
+            status="APPLIED",
+        ))
+        await db.commit()
+
+        result = await execute_read_tool("student_application_counts", {}, student, db)
+
+    await engine.dispose()
+    assert result.answer == (
+        "You have 7 applications: 1 applied, 1 under review, 1 shortlisted, "
+        "1 interview, 2 offer, 1 rejected."
+    )
+    assert result.route == "/applications"
+
+
+@pytest.mark.anyio
+async def test_student_recommendations_exclude_own_applications_and_keep_best_matches(monkeypatch) -> None:
+    from datetime import date, datetime, timedelta
+
+    import app.services.ai as ai_service
+    from app.models.base import Base
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    score_by_description = {
+        "applied": 100,
+        "other student application": 95,
+        "duplicate low score": 70,
+        "duplicate high score": 80,
+        "zero score": 0,
+        "expired": 100,
+        "closed": 100,
+        "unpublished": 100,
+        "control": 60,
+    }
+
+    def fake_compute_match(_skills, _resume, _title, description, _internship_skills):
+        return {"score": score_by_description[description], "matched": ["Python"]}
+
+    monkeypatch.setattr(ai_service, "compute_match", fake_compute_match)
+
+    async with sessions() as db:
+        company = User(email="company@example.test", password_hash="unused", role=UserRole.COMPANY)
+        student = User(email="student@example.test", password_hash="unused", role=UserRole.STUDENT)
+        another_student = User(email="another@example.test", password_hash="unused", role=UserRole.STUDENT)
+        student_without_applications = User(
+            email="no-applications@example.test",
+            password_hash="unused",
+            role=UserRole.STUDENT,
+        )
+        student_with_no_matches = User(
+            email="no-matches@example.test",
+            password_hash="unused",
+            role=UserRole.STUDENT,
+        )
+        db.add_all((company, student, another_student, student_without_applications, student_with_no_matches))
+        await db.flush()
+        db.add(CompanyProfile(user_id=company.id, company_name="Acme", industry="Technology"))
+        for profile_user in (student, another_student, student_without_applications, student_with_no_matches):
+            db.add(StudentProfile(
+                user_id=profile_user.id,
+                full_name="Test Student",
+                university="Example University",
+                major="Computer Science",
+                graduation_year=2027,
+                skills="Python",
+            ))
+        await db.flush()
+
+        def posting(title, description, *, deadline=None, status="PUBLISHED", closed_at=None):
+            return Internship(
+                company_id=company.id,
+                title=title,
+                description=description,
+                location="Remote",
+                industry="Technology",
+                duration_months=3,
+                work_mode="REMOTE",
+                skills="Python",
+                deadline=deadline or date.today(),
+                status=status,
+                closed_at=closed_at,
+            )
+
+        status_postings = [
+            posting(f"Applied {status}", "applied")
+            for status in (
+                "APPLIED",
+                "UNDER_REVIEW",
+                "SHORTLISTED",
+                "INTERVIEW_SCHEDULED",
+                "SELECTED",
+                "REJECTED",
+                "WITHDRAWN",
+            )
+        ]
+        other_student_posting = posting("Other student application", "other student application")
+        duplicate_low = posting("Duplicate role", "duplicate low score")
+        duplicate_high = posting("Duplicate role", "duplicate high score")
+        zero_score = posting("Zero match role", "zero score")
+        expired = posting("Expired role", "expired", deadline=date.today() - timedelta(days=1))
+        closed = posting("Closed role", "closed", closed_at=datetime(2026, 1, 1))
+        unpublished = posting("Unpublished role", "unpublished", status="DRAFT")
+        control = posting("Control role", "control")
+        postings = [
+            *status_postings,
+            other_student_posting,
+            duplicate_low,
+            duplicate_high,
+            zero_score,
+            expired,
+            closed,
+            unpublished,
+            control,
+        ]
+        db.add_all(postings)
+        await db.flush()
+
+        db.add_all([
+            Application(student_id=student.id, internship_id=item.id, status=status)
+            for item, status in zip(
+                status_postings,
+                ("APPLIED", "UNDER_REVIEW", "SHORTLISTED", "INTERVIEW_SCHEDULED", "SELECTED", "REJECTED", "WITHDRAWN"),
+            )
+        ])
+        db.add(Application(
+            student_id=another_student.id,
+            internship_id=other_student_posting.id,
+            status="APPLIED",
+        ))
+        db.add_all([
+            Application(student_id=student_with_no_matches.id, internship_id=item.id, status="APPLIED")
+            for item in (*status_postings, other_student_posting, duplicate_low, duplicate_high, control)
+        ])
+        await db.commit()
+
+        own_results = await execute_read_tool("student_recommended_internships", {}, student, db)
+        no_application_results = await execute_read_tool(
+            "student_recommended_internships", {}, student_without_applications, db
+        )
+        no_match_results = await execute_read_tool(
+            "student_recommended_internships", {}, student_with_no_matches, db
+        )
+
+    await engine.dispose()
+
+    assert "Other student application" in own_results.answer
+    assert "Duplicate role" in own_results.answer
+    assert own_results.answer.count("Duplicate role") == 1
+    assert ("Duplicate role", f"/opportunities/{duplicate_high.id}") in own_results.links
+    assert ("Duplicate role", f"/opportunities/{duplicate_low.id}") not in own_results.links
+    assert all(f"/opportunities/{item.id}" not in dict(own_results.links).values() for item in status_postings)
+    assert "Zero match role" not in own_results.answer
+    assert all(name not in own_results.answer for name in ("Expired role", "Closed role", "Unpublished role"))
+    assert own_results.route == "/opportunities"
+    assert no_application_results.links[:5] == tuple(
+        (item.title, f"/opportunities/{item.id}") for item in status_postings[:5]
+    )
+    assert "You've applied to or seen all the internships that match your skills right now. Browse more under Opportunities." == no_match_results.answer
+    assert no_match_results.route == "/opportunities"
+
+
+@pytest.mark.anyio
+async def test_student_skill_gap_lists_owned_skills_badges_and_weak_topics() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    student = SimpleNamespace(id=818, role=UserRole.STUDENT)
+    now = datetime.now(timezone.utc)
+
+    class Rows:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def all(self):
+            return self.rows
+
+    class ScalarRows:
+        def all(self):
+            return [SimpleNamespace(title="Verified React Pro")]
+
+    class SkillDb:
+        def __init__(self):
+            self.execution = 0
+
+        async def scalar(self, *_args):
+            return SimpleNamespace(skills="Python, React")
+
+        async def execute(self, *_args):
+            self.execution += 1
+            if self.execution == 1:
+                return Rows([
+                    ("python", "Python & Backend Architecture"),
+                    ("react", "React & Modern Frontend"),
+                    ("sql", "SQL & Database Design"),
+                    ("dsa", "Data Structures & Algorithms"),
+                ])
+            if self.execution == 2:
+                return Rows([
+                    (topic, level, needed)
+                    for topic in ("python", "react", "sql", "dsa")
+                    for level, needed in (("EASY", 4), ("MEDIUM", 4), ("HARD", 2))
+                ])
+            return Rows([
+                ("python", "COMPLETED", 55, False),
+                ("react", "COMPLETED", 95, True),
+                ("sql", "EXPIRED", None, None),
+            ])
+
+        async def scalars(self, *_args):
+            return ScalarRows()
+
+    result = await execute_read_tool("student_skill_gap", {}, student, SkillDb())
+
+    assert "Python, React" in result.answer
+    assert "Verified React Pro" in result.answer
+    assert "failed: Python & Backend Architecture" in result.answer
+    assert "expired: SQL & Database Design" in result.answer
+    assert "not taken: Data Structures & Algorithms" in result.answer
+    assert result.route == "/skills/history"
+
+
+@pytest.mark.anyio
+async def test_student_skill_retake_uses_assessment_policy_and_topic_history() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    student = SimpleNamespace(id=819, role=UserRole.STUDENT)
+    attempt = SimpleNamespace(
+        topic="python",
+        started_at=datetime.now(timezone.utc) - timedelta(hours=12),
+    )
+
+    class Rows:
+        def all(self):
+            return [("python", "Python & Backend Architecture", None), ("react", "React & Modern Frontend", None)]
+
+    class ScalarRows:
+        def all(self):
+            return [attempt]
+
+    class RetakeDb:
+        async def scalars(self, *_args):
+            return ScalarRows()
+
+        async def execute(self, *_args):
+            return Rows()
+
+    result = await execute_read_tool("student_skill_retake", {}, student, RetakeDb())
+
+    assert "24 hours" in result.answer
+    assert "3 attempts in 7 days" in result.answer
+    assert "Python & Backend Architecture: eligible " in result.answer
+    assert "React & Modern Frontend: eligible now" in result.answer
+    assert result.route == "/skills/history"
 
 
 @pytest.mark.anyio

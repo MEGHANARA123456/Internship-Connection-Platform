@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { BrowserRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { DesktopAnalysisVisuals } from '../../components/analytics/DesktopAnalysisVisuals'
-import { CompanyJobsPage } from '../CompanyPages'
+import { CompanyAnalyticsPage, CompanyJobsPage } from '../CompanyPages'
 import { AdminDashboardPage } from '../AdminPages'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
@@ -98,6 +98,7 @@ describe('Dashboard Features & Buttons', () => {
   })
 
   it('renders CompanyJobsPage with the Interview Scheduling button in header and job cards', async () => {
+    vi.mocked(api.get).mockClear()
     vi.mocked(api.get).mockImplementation(async (url: string) => {
       if (url === '/internships/mine') {
         return {
@@ -151,6 +152,20 @@ describe('Dashboard Features & Buttons', () => {
     await waitFor(() => {
       expect(screen.getByText('Internship Postings')).toBeDefined()
     })
+    expect(screen.queryByText('Company Hiring Pipeline & Conversion Analytics')).toBeNull()
+    for (const label of ['Active roles', 'Total applicants', 'Shortlisted', 'Interviews scheduled', 'Offers']) {
+      expect(screen.queryByText(label, { selector: 'p' })).toBeNull()
+    }
+    expect(screen.queryByRole('button', { name: /Analytics view:/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Company analytics range' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /view as table/i })).toBeNull()
+    const companyJobsRequests = vi.mocked(api.get).mock.calls.map(([url]) => String(url))
+    expect(companyJobsRequests.some((url) => (
+      url.includes('/analytics/')
+      || url.includes('/companies/me/metrics')
+      || url.includes('/companies/me/insights')
+    ))).toBe(false)
 
     // Interview Scheduling button in header and on the job card
     const interviewButtons = screen.getAllByRole('button', { name: /Interview Scheduling/i })
@@ -161,6 +176,24 @@ describe('Dashboard Features & Buttons', () => {
     const closeButton = screen.getByRole('button', { name: 'Close Role' })
     expect(closeButton).toBeEnabled()
     expect(closeButton.className).toContain('h-10')
+    expect(screen.getByText('Full Stack Engineering Intern')).toBeInTheDocument()
+  })
+
+  it('keeps company charts on the dedicated analytics page', async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => {
+      if (url.startsWith('/companies/me/insights')) {
+        return { data: { role: 'COMPANY', has_activity: true, funnel: { applied: 2, screened: 1, interviews: 1, offers: 0 }, domains: [], monthly_trends: [] } }
+      }
+      if (url === '/companies/me/metrics') {
+        return { data: { kpis: {}, role: 'COMPANY' } }
+      }
+      return { data: [] }
+    })
+
+    render(<BrowserRouter><CompanyAnalyticsPage /></BrowserRouter>)
+
+    expect(await screen.findByRole('heading', { name: 'Company hiring analytics' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Current application status' })).toBeInTheDocument()
   })
 
   it('keeps job card actions aligned and disabled until a role is published', async () => {

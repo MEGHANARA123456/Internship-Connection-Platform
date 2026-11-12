@@ -17,6 +17,7 @@ import { VideoInterviewModal } from '../components/modals/VideoInterviewModal'
 import { ScheduleInterviewModal } from '../components/modals/ScheduleInterviewModal'
 import { useWebSocketChat } from '../lib/useWebSocketChat'
 import { routes } from '../lib/routes'
+import { formatINR } from '../lib/currency'
 import { isSensitiveNotification, maskCodes, requestNotificationPermission } from '../lib/notifications'
 import { showToast } from '../lib/feedback'
 import {
@@ -34,7 +35,6 @@ import {
   ChevronLeft,
   Mail,
   RefreshCw,
-  Eye,
   Inbox,
   Lock,
   Sparkles,
@@ -98,7 +98,7 @@ export function InterviewsPage() {
   const downloadIcs = (item: any) => {
     try {
       const start = new Date(item.scheduled_at).toISOString().replace(/-|:|\.\d\d\d/g, "")
-      const end = new Date(new Date(item.scheduled_at).getTime() + 45*60000).toISOString().replace(/-|:|\.\d\d\d/g, "")
+      const end = new Date(new Date(item.scheduled_at).getTime() + 45 * 60000).toISOString().replace(/-|:|\.\d\d\d/g, "")
       const icsData = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -305,9 +305,9 @@ export function InterviewsPage() {
             const count = tab.key === 'EXPIRED'
               ? interviews.filter(isExpiredInterview).length
               : tab.statuses
-              ? interviews.filter((item) => tab.statuses?.includes(item.status)
-                && (tab.key !== 'UPCOMING' || isUpcomingInterview(item))).length
-              : interviews.length
+                ? interviews.filter((item) => tab.statuses?.includes(item.status)
+                  && (tab.key !== 'UPCOMING' || isUpcomingInterview(item))).length
+                : interviews.length
             const selected = activeStatusTab === tab.key
             return (
               <button
@@ -317,19 +317,17 @@ export function InterviewsPage() {
                 aria-selected={selected}
                 onClick={() => {
                   setActiveStatusTab(tab.key)
-                    setSearchParams(tab.key === 'ALL' ? {} : { tab: tab.key.toLowerCase() })
+                  setSearchParams(tab.key === 'ALL' ? {} : { tab: tab.key.toLowerCase() })
                   setPage(1)
                 }}
-                className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
-                  selected
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
-                }`}
+                className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${selected
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
+                  }`}
               >
                 {tab.label}
-                <span className={`rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
-                  selected ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700'
-                }`}>
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] leading-none ${selected ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700'
+                  }`}>
                   {count}
                 </span>
               </button>
@@ -518,7 +516,7 @@ export function InterviewsPage() {
           />
         )
       ) : calendarView ? (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
+        <div className="glass-strong overflow-x-auto rounded-xl border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
           <div className="grid min-w-[700px] grid-cols-7 gap-1">
             {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((weekday) => (
               <div key={weekday} className="px-2 py-1 text-[10px] font-bold uppercase text-slate-500">{weekday}</div>
@@ -567,220 +565,220 @@ export function InterviewsPage() {
 
             return (
               <div key={item.id} className="space-y-3">
-              {group !== previousGroup && activeStatusTab === 'ALL' && (
-                <h2 className="pt-2 text-sm font-bold text-slate-700 dark:text-slate-200">{group}</h2>
-              )}
-              <Card id={`interview-${item.id}`} className={`space-y-3 border p-5 transition-colors dark:bg-slate-900 ${highlightedId === String(item.id) ? 'border-indigo-500 ring-2 ring-indigo-300 dark:ring-indigo-700' : 'border-slate-200 dark:border-slate-800'}`}>
-                <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex items-center gap-2.5 flex-wrap">
-                      <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                        {item.interview_type} Interview
-                        {item.internship_title ? ` • ${item.internship_title}` : ''}
-                      </h3>
-                      <Badge status={isExpiredInterview(item) ? 'EXPIRED' : item.status}>
-                        {isExpiredInterview(item) ? 'Expired' : item.status}
-                      </Badge>
-                    </div>
-                    {isExpiredInterview(item) && isCompany && (
-                      <p className="text-xs font-medium text-amber-700 dark:text-amber-300">Interview completed. Update the application status.</p>
-                    )}
-
-                    {item.company_name && !isCompany && (
-                      <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
-                        <Users className="w-3.5 h-3.5 text-indigo-500" />
-                        Company: {item.company_name}
-                      </p>
-                    )}
-
-                    {item.candidate_name && isCompany && (
-                      <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
-                        <Users className="w-3.5 h-3.5 text-indigo-500" />
-                        Candidate: {item.candidate_name}
-                      </p>
-                    )}
-
-                    {item.interview_type && (
-                      <p className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
-                        <Badge variant="slate" className="!px-2 !py-0.5">{item.interview_type}</Badge>
-                      </p>
-                    )}
-
-                    {!isExpiredInterview(item) && isExternalUrl(item.meeting_link) && (
-                      <p className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
-                        <ExternalLink className="w-3.5 h-3.5 text-indigo-500" />
-                        Meeting link: <a href={item.meeting_link} target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 underline">Open link</a>
-                      </p>
-                    )}
-
-                    <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 pt-1">
-                      <span className="flex items-center gap-1">
-                        <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                        {dateObj.toLocaleDateString(undefined, {
-                          weekday: 'short',
-                          month: 'short',
-                          day: 'numeric',
-                          year: 'numeric',
-                        })}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3.5 h-3.5 text-slate-400" />
-                        {dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-
-                    {item.notes && (
-                      <p className="text-xs text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-md border border-slate-100 dark:border-slate-700/60 mt-2">
-                        <strong className="text-slate-700 dark:text-slate-200">Instructions:</strong> {item.notes}
-                      </p>
-                    )}
-                    {item.status === 'CANCELLED' && (
-                      <p className="rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">
-                        {item.cancel_reason === 'TIME_PASSED'
-                          ? 'Cancelled automatically: time passed'
-                          : `Cancelled: ${item.cancel_reason || 'Manual cancellation'}`}
-                      </p>
-                    )}
-                    {isCompany && item.result && (
-                      <div className="rounded-md border border-indigo-100 bg-indigo-50 p-2.5 text-xs dark:border-indigo-900/60 dark:bg-indigo-950/30">
-                        <strong>Private outcome: {item.result.replaceAll('_', ' ')}</strong>
-                        {item.rating != null && <span> · Rating {item.rating}/5</span>}
-                        {item.feedback && <p className="mt-1 whitespace-pre-wrap">{item.feedback}</p>}
+                {group !== previousGroup && activeStatusTab === 'ALL' && (
+                  <h2 className="pt-2 text-sm font-bold text-slate-700 dark:text-slate-200">{group}</h2>
+                )}
+                <Card id={`interview-${item.id}`} className={`space-y-3 border p-5 transition-colors dark:bg-slate-900 ${highlightedId === String(item.id) ? 'border-indigo-500 ring-2 ring-indigo-300 dark:ring-indigo-700' : 'border-slate-200 dark:border-slate-800'}`}>
+                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                          {item.interview_type} Interview
+                          {item.internship_title ? ` • ${item.internship_title}` : ''}
+                        </h3>
+                        <Badge status={isExpiredInterview(item) ? 'EXPIRED' : item.status}>
+                          {isExpiredInterview(item) ? 'Expired' : item.status}
+                        </Badge>
                       </div>
-                    )}
-                  </div>
+                      {isExpiredInterview(item) && isCompany && (
+                        <p className="text-xs font-medium text-amber-700 dark:text-amber-300">Interview completed. Update the application status.</p>
+                      )}
 
-                  <CardActions>
-                    <CardActionsRow>
-                      <CardActionButton
-                        className="whitespace-nowrap"
-                        aria-label={`Sync calendar invitation for ${item.internship_title || item.interview_type} interview`}
-                        title={item.status === 'CANCELLED' ? 'Calendar sync is unavailable for cancelled interviews' : 'Export .ics calendar invitation'}
-                        disabled={item.status === 'CANCELLED'}
-                        leftIcon={<Download className="h-4 w-4" />}
-                        onClick={() => downloadIcs(item)}
-                      >
-                        Sync .ics
-                      </CardActionButton>
-                      <CardActionButton
-                        className="whitespace-nowrap"
-                        aria-label={`Add ${item.internship_title || item.interview_type} interview to Google Calendar`}
-                        title={item.status === 'CANCELLED' ? 'Google Calendar is unavailable for cancelled interviews' : 'Add to Google Calendar'}
-                        disabled={item.status === 'CANCELLED'}
-                        leftIcon={<Calendar className="h-4 w-4 text-indigo-500" />}
-                        onClick={() => window.open(getGoogleCalendarUrl(item), '_blank', 'noopener,noreferrer')}
-                      >
-                        Google Cal
-                      </CardActionButton>
-                    </CardActionsRow>
+                      {item.company_name && !isCompany && (
+                        <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
+                          <Users className="w-3.5 h-3.5 text-indigo-500" />
+                          Company: {item.company_name}
+                        </p>
+                      )}
 
-                    {isCompany && ['SCHEDULED', 'RESCHEDULED'].includes(item.status) && !isExpiredInterview(item) && (
+                      {item.candidate_name && isCompany && (
+                        <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 pt-0.5">
+                          <Users className="w-3.5 h-3.5 text-indigo-500" />
+                          Candidate: {item.candidate_name}
+                        </p>
+                      )}
+
+                      {item.interview_type && (
+                        <p className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+                          <Badge variant="slate" className="!px-2 !py-0.5">{item.interview_type}</Badge>
+                        </p>
+                      )}
+
+                      {!isExpiredInterview(item) && isExternalUrl(item.meeting_link) && (
+                        <p className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+                          <ExternalLink className="w-3.5 h-3.5 text-indigo-500" />
+                          Meeting link: <a href={item.meeting_link} target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 underline">Open link</a>
+                        </p>
+                      )}
+
+                      <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 pt-1">
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                          {dateObj.toLocaleDateString(undefined, {
+                            weekday: 'short',
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                          })}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5 text-slate-400" />
+                          {dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+
+                      {item.notes && (
+                        <p className="text-xs text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-md border border-slate-100 dark:border-slate-700/60 mt-2">
+                          <strong className="text-slate-700 dark:text-slate-200">Instructions:</strong> {item.notes}
+                        </p>
+                      )}
+                      {item.status === 'CANCELLED' && (
+                        <p className="rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">
+                          {item.cancel_reason === 'TIME_PASSED'
+                            ? 'Cancelled automatically: time passed'
+                            : `Cancelled: ${item.cancel_reason || 'Manual cancellation'}`}
+                        </p>
+                      )}
+                      {isCompany && item.result && (
+                        <div className="rounded-md border border-indigo-100 bg-indigo-50 p-2.5 text-xs dark:border-indigo-900/60 dark:bg-indigo-950/30">
+                          <strong>Private outcome: {item.result.replaceAll('_', ' ')}</strong>
+                          {item.rating != null && <span> · Rating {item.rating}/5</span>}
+                          {item.feedback && <p className="mt-1 whitespace-pre-wrap">{item.feedback}</p>}
+                        </div>
+                      )}
+                    </div>
+
+                    <CardActions>
                       <CardActionsRow>
                         <CardActionButton
-                          aria-label={`Mark ${item.internship_title || item.interview_type} interview done`}
-                          isLoading={updatingId === item.id}
-                          onClick={() => handleUpdateStatus(item.id, 'COMPLETED')}
+                          className="whitespace-nowrap"
+                          aria-label={`Sync calendar invitation for ${item.internship_title || item.interview_type} interview`}
+                          title={item.status === 'CANCELLED' ? 'Calendar sync is unavailable for cancelled interviews' : 'Export .ics calendar invitation'}
+                          disabled={item.status === 'CANCELLED'}
+                          leftIcon={<Download className="h-4 w-4" />}
+                          onClick={() => downloadIcs(item)}
                         >
-                          Mark Done
+                          Sync .ics
                         </CardActionButton>
                         <CardActionButton
-                          aria-label={`Reschedule ${item.internship_title || item.interview_type} interview`}
-                          onClick={() => {
-                            setChangeInterview(item)
-                            setChangeKind('RESCHEDULED')
-                            setRescheduledAt(new Date(item.scheduled_at).toISOString().slice(0, 16))
-                            setChangeReason('')
-                          }}
+                          className="whitespace-nowrap"
+                          aria-label={`Add ${item.internship_title || item.interview_type} interview to Google Calendar`}
+                          title={item.status === 'CANCELLED' ? 'Google Calendar is unavailable for cancelled interviews' : 'Add to Google Calendar'}
+                          disabled={item.status === 'CANCELLED'}
+                          leftIcon={<Calendar className="h-4 w-4 text-indigo-500" />}
+                          onClick={() => window.open(getGoogleCalendarUrl(item), '_blank', 'noopener,noreferrer')}
                         >
-                          Reschedule
-                        </CardActionButton>
-                        <CardActionButton
-                          intent="danger"
-                          aria-label={`Cancel ${item.internship_title || item.interview_type} interview`}
-                          isLoading={updatingId === item.id}
-                          onClick={() => {
-                            setChangeInterview(item)
-                            setChangeKind('CANCELLED')
-                            setChangeReason('')
-                          }}
-                        >
-                          Cancel
+                          Google Cal
                         </CardActionButton>
                       </CardActionsRow>
-                    )}
-                    {isCompany && item.status === 'COMPLETED' && (
-                      <CardActionsRow>
-                        <CardActionButton
-                          aria-label={`Record outcome for ${item.internship_title || item.interview_type} interview`}
-                          onClick={() => {
-                            setFeedbackInterview(item)
-                            setFeedbackResult(item.result || 'PASS')
-                            setFeedbackRating(item.rating ? String(item.rating) : '')
-                            setFeedbackText(item.feedback || '')
-                          }}
-                        >
-                          {item.result ? 'Edit outcome' : 'Record outcome'}
-                        </CardActionButton>
-                      </CardActionsRow>
-                    )}
 
-                    {isCompany && item.status === 'CANCELLED' && (
-                      <CardActionsRow>
-                        <CardActionButton
-                          intent="primary"
-                          aria-label={`Reschedule ${item.internship_title || item.interview_type} interview`}
-                          onClick={() => setCancelledReschedule(item)}
-                        >
-                          Reschedule
-                        </CardActionButton>
-                        {item.cancel_reason === 'TIME_PASSED' && (
+                      {isCompany && ['SCHEDULED', 'RESCHEDULED'].includes(item.status) && !isExpiredInterview(item) && (
+                        <CardActionsRow>
                           <CardActionButton
-                            aria-label={`Mark ${item.internship_title || item.interview_type} interview completed`}
+                            aria-label={`Mark ${item.internship_title || item.interview_type} interview done`}
                             isLoading={updatingId === item.id}
                             onClick={() => handleUpdateStatus(item.id, 'COMPLETED')}
                           >
-                            Mark completed
+                            Mark Done
                           </CardActionButton>
-                        )}
-                      </CardActionsRow>
-                    )}
+                          <CardActionButton
+                            aria-label={`Reschedule ${item.internship_title || item.interview_type} interview`}
+                            onClick={() => {
+                              setChangeInterview(item)
+                              setChangeKind('RESCHEDULED')
+                              setRescheduledAt(new Date(item.scheduled_at).toISOString().slice(0, 16))
+                              setChangeReason('')
+                            }}
+                          >
+                            Reschedule
+                          </CardActionButton>
+                          <CardActionButton
+                            intent="danger"
+                            aria-label={`Cancel ${item.internship_title || item.interview_type} interview`}
+                            isLoading={updatingId === item.id}
+                            onClick={() => {
+                              setChangeInterview(item)
+                              setChangeKind('CANCELLED')
+                              setChangeReason('')
+                            }}
+                          >
+                            Cancel
+                          </CardActionButton>
+                        </CardActionsRow>
+                      )}
+                      {isCompany && item.status === 'COMPLETED' && (
+                        <CardActionsRow>
+                          <CardActionButton
+                            aria-label={`Record outcome for ${item.internship_title || item.interview_type} interview`}
+                            onClick={() => {
+                              setFeedbackInterview(item)
+                              setFeedbackResult(item.result || 'PASS')
+                              setFeedbackRating(item.rating ? String(item.rating) : '')
+                              setFeedbackText(item.feedback || '')
+                            }}
+                          >
+                            {item.result ? 'Edit outcome' : 'Record outcome'}
+                          </CardActionButton>
+                        </CardActionsRow>
+                      )}
 
-                    {!isExpiredInterview(item) && isExternalUrl(item.meeting_link) && (
-                      <CardActionButton
-                        aria-label="Open external meeting link"
-                        rightIcon={<ExternalLink className="h-4 w-4" />}
-                        onClick={() => window.open(item.meeting_link, '_blank', 'noopener,noreferrer')}
-                      >
-                        External Link
-                      </CardActionButton>
-                    )}
+                      {isCompany && item.status === 'CANCELLED' && (
+                        <CardActionsRow>
+                          <CardActionButton
+                            intent="primary"
+                            aria-label={`Reschedule ${item.internship_title || item.interview_type} interview`}
+                            onClick={() => setCancelledReschedule(item)}
+                          >
+                            Reschedule
+                          </CardActionButton>
+                          {item.cancel_reason === 'TIME_PASSED' && (
+                            <CardActionButton
+                              aria-label={`Mark ${item.internship_title || item.interview_type} interview completed`}
+                              isLoading={updatingId === item.id}
+                              onClick={() => handleUpdateStatus(item.id, 'COMPLETED')}
+                            >
+                              Mark completed
+                            </CardActionButton>
+                          )}
+                        </CardActionsRow>
+                      )}
 
-                    {item.interview_type === 'VIDEO' && (
-                      <CardActionButton
-                        intent="primary"
-                        aria-label={['SCHEDULED', 'RESCHEDULED'].includes(item.status) && !isExpiredInterview(item)
-                          ? 'Launch In-App Video'
-                          : `Launch In-App Video unavailable for ${isExpiredInterview(item) ? 'expired' : item.status.toLowerCase()} interview`}
-                        title={['SCHEDULED', 'RESCHEDULED'].includes(item.status) && !isExpiredInterview(item)
-                          ? 'Launch the in-app video interview'
-                          : `Video launch is unavailable for ${isExpiredInterview(item) ? 'expired' : item.status.toLowerCase()} interviews`}
-                        disabled={!['SCHEDULED', 'RESCHEDULED'].includes(item.status) || isExpiredInterview(item)}
-                        leftIcon={<Video className="h-4 w-4" />}
-                        onClick={() => setVideoModalInterview(item)}
-                      >
-                        Launch In-App Video
-                      </CardActionButton>
-                    )}
-                    {!isCompany && item.status === 'CANCELLED' && (
-                      <Link to={routes.messages({ contactId: item.scheduled_by })} className="block w-full">
-                        <CardActionButton className="whitespace-nowrap" leftIcon={<MessageSquare className="h-4 w-4" />}>
-                          Message Recruiter
+                      {!isExpiredInterview(item) && isExternalUrl(item.meeting_link) && (
+                        <CardActionButton
+                          aria-label="Open external meeting link"
+                          rightIcon={<ExternalLink className="h-4 w-4" />}
+                          onClick={() => window.open(item.meeting_link, '_blank', 'noopener,noreferrer')}
+                        >
+                          External Link
                         </CardActionButton>
-                      </Link>
-                    )}
-                  </CardActions>
-                </div>
-              </Card>
+                      )}
+
+                      {item.interview_type === 'VIDEO' && (
+                        <CardActionButton
+                          intent="primary"
+                          aria-label={['SCHEDULED', 'RESCHEDULED'].includes(item.status) && !isExpiredInterview(item)
+                            ? 'Launch In-App Video'
+                            : `Launch In-App Video unavailable for ${isExpiredInterview(item) ? 'expired' : item.status.toLowerCase()} interview`}
+                          title={['SCHEDULED', 'RESCHEDULED'].includes(item.status) && !isExpiredInterview(item)
+                            ? 'Launch the in-app video interview'
+                            : `Video launch is unavailable for ${isExpiredInterview(item) ? 'expired' : item.status.toLowerCase()} interviews`}
+                          disabled={!['SCHEDULED', 'RESCHEDULED'].includes(item.status) || isExpiredInterview(item)}
+                          leftIcon={<Video className="h-4 w-4" />}
+                          onClick={() => setVideoModalInterview(item)}
+                        >
+                          Launch In-App Video
+                        </CardActionButton>
+                      )}
+                      {!isCompany && item.status === 'CANCELLED' && (
+                        <Link to={routes.messages({ contactId: item.scheduled_by })} className="block w-full">
+                          <CardActionButton className="whitespace-nowrap" leftIcon={<MessageSquare className="h-4 w-4" />}>
+                            Message Recruiter
+                          </CardActionButton>
+                        </Link>
+                      )}
+                    </CardActions>
+                  </div>
+                </Card>
               </div>
             )
           })}
@@ -902,7 +900,7 @@ export function MessagesPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    requestNotificationPermission().catch(() => {})
+    requestNotificationPermission().catch(() => { })
   }, [])
 
   // Fetch recommended hiring company contacts
@@ -1144,7 +1142,7 @@ export function MessagesPage() {
               const name = c.company_name || c.name || c.student_name || 'Recruiter'
               const roleBadge = c.relationship || c.status || (c.role === 'COMPANY' ? 'Hiring Now' : 'Candidate')
               const roleTitle = c.active_role || (c.recent_roles && c.recent_roles[0]) || c.applied_role || c.industry || 'Open Role'
-              const stipendText = c.stipend ? `₹${Number(c.stipend).toLocaleString()}/mo` : null
+              const stipendText = c.stipend ? `${formatINR(Number(c.stipend))}/mo` : null
               const workModeText = c.work_mode || null
 
               return (
@@ -1161,11 +1159,10 @@ export function MessagesPage() {
                         {name}
                       </span>
                       <span
-                        className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${
-                          roleBadge === 'Applied'
-                            ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300'
-                            : 'bg-indigo-100 dark:bg-indigo-950/80 text-indigo-800 dark:text-indigo-300'
-                        }`}
+                        className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${roleBadge === 'Applied'
+                          ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300'
+                          : 'bg-indigo-100 dark:bg-indigo-950/80 text-indigo-800 dark:text-indigo-300'
+                          }`}
                       >
                         {roleBadge}
                       </span>
@@ -1199,30 +1196,27 @@ export function MessagesPage() {
       <div className="flex-1 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xs overflow-hidden flex flex-col md:flex-row min-h-0">
         {/* Left Pane: Conversation List & Recruiter Switcher */}
         <div
-          className={`w-full md:w-84 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 flex-col shrink-0 bg-slate-50/50 dark:bg-slate-900/50 ${
-            selectedConv ? 'hidden md:flex' : 'flex'
-          }`}
+          className={`w-full md:w-84 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 flex-col shrink-0 bg-slate-50/50 dark:bg-slate-900/50 ${selectedConv ? 'hidden md:flex' : 'flex'
+            }`}
         >
           {/* Sidebar Tab Header */}
           <div className="p-2 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-1.5">
             <button
               onClick={() => setActiveTab('chats')}
-              className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
-                activeTab === 'chats'
-                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shadow-2xs'
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
+              className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${activeTab === 'chats'
+                ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shadow-2xs'
+                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
             >
               <MessageSquare className="w-3.5 h-3.5" />
               <span>Chats ({conversations.length})</span>
             </button>
             <button
               onClick={() => setActiveTab('recruiters')}
-              className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
-                activeTab === 'recruiters'
-                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shadow-2xs'
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
+              className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${activeTab === 'recruiters'
+                ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shadow-2xs'
+                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
             >
               <Users className="w-3.5 h-3.5" />
               <span>Recruiters ({recommendedContacts.length})</span>
@@ -1272,20 +1266,18 @@ export function MessagesPage() {
                     <button
                       key={conv.id}
                       onClick={() => setSelectedConv(conv)}
-                      className={`w-full p-3.5 text-left transition-colors flex items-center gap-3 cursor-pointer ${
-                        isSelected
-                          ? 'bg-indigo-50/80 dark:bg-indigo-950/40 border-l-4 border-indigo-600 dark:border-indigo-500'
-                          : 'hover:bg-white dark:hover:bg-slate-800/50'
-                      }`}
+                      className={`w-full p-3.5 text-left transition-colors flex items-center gap-3 cursor-pointer ${isSelected
+                        ? 'bg-indigo-50/80 dark:bg-indigo-950/40 border-l-4 border-indigo-600 dark:border-indigo-500'
+                        : 'hover:bg-white dark:hover:bg-slate-800/50'
+                        }`}
                     >
                       <div className="relative shrink-0">
                         <div className="w-9 h-9 rounded-full bg-indigo-100 dark:bg-indigo-900/60 flex items-center justify-center font-bold text-xs text-indigo-700 dark:text-indigo-300">
                           {(conv.partner_name || 'U')[0].toUpperCase()}
                         </div>
                         <span
-                          className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-slate-900 ${
-                            isOnline ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
-                          }`}
+                          className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-slate-900 ${isOnline ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
+                            }`}
                           title={isOnline ? 'Online' : 'Offline'}
                         />
                       </div>
@@ -1398,20 +1390,18 @@ export function MessagesPage() {
                       {(selectedConv.partner_name || 'U')[0].toUpperCase()}
                     </div>
                     <span
-                      className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-slate-900 ${
-                        isUserOnline(selectedConv.partner_id) ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
-                      }`}
+                      className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-slate-900 ${isUserOnline(selectedConv.partner_id) ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
+                        }`}
                     />
                   </div>
                   <div>
                     <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                       {selectedConv.partner_name || `Conversation #${selectedConv.id}`}
                       <span
-                        className={`text-[10px] font-normal ${
-                          isUserOnline(selectedConv.partner_id)
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : 'text-slate-400'
-                        }`}
+                        className={`text-[10px] font-normal ${isUserOnline(selectedConv.partner_id)
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-slate-400'
+                          }`}
                       >
                         {isUserOnline(selectedConv.partner_id) ? 'Active now' : 'Offline'}
                       </span>
@@ -1472,11 +1462,10 @@ export function MessagesPage() {
                         className={`flex flex-col ${isMine ? 'items-end' : 'items-start'}`}
                       >
                         <div
-                          className={`max-w-[75%] px-3.5 py-2 rounded-2xl text-xs ${
-                            isMine
-                              ? 'bg-indigo-600 text-white rounded-br-xs'
-                              : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-bl-xs shadow-2xs'
-                          }`}
+                          className={`max-w-[75%] px-3.5 py-2 rounded-2xl text-xs ${isMine
+                            ? 'bg-indigo-600 text-white rounded-br-xs'
+                            : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-bl-xs shadow-2xs'
+                            }`}
                         >
                           <p className="leading-relaxed whitespace-pre-wrap">{msg.body}</p>
                         </div>
@@ -1512,7 +1501,7 @@ export function MessagesPage() {
                   placeholder="Type a message..."
                   value={newMessageText}
                   onChange={handleInputChange}
-                  className="flex-1 px-3.5 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="glass-input flex-1 px-3.5 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
                 <Button
                   type="submit"
@@ -1682,6 +1671,7 @@ export function MessagesPage() {
 
 export function NotificationsPage() {
   const { session } = useAuthStore()
+  const [searchParams, setSearchParams] = useSearchParams()
   const userEmail = session?.email || ''
 
   const [activeTab, setActiveTab] = useState<'notifications' | 'emails'>('notifications')
@@ -1693,7 +1683,6 @@ export function NotificationsPage() {
   const [emails, setEmails] = useState<any[]>([])
   const [loadingEmails, setLoadingEmails] = useState(false)
   const [emailError, setEmailError] = useState<string | null>(null)
-  const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null)
   const [selectedEmail, setSelectedEmail] = useState<any | null>(null)
   const [loadingEmailId, setLoadingEmailId] = useState<string | null>(null)
   const [emailDetailError, setEmailDetailError] = useState<string | null>(null)
@@ -1777,19 +1766,22 @@ export function NotificationsPage() {
     }
   }
 
-  const handleViewEmail = async (id: number) => {
-    const emailId = String(id)
-    if (expandedEmailId === emailId) {
-      setExpandedEmailId(null)
-      return
-    }
-    setExpandedEmailId(emailId)
-    await fetchEmailDetail(id)
-  }
+  useEffect(() => {
+    const requestedEmailId = Number(searchParams.get('email_id'))
+    if (!Number.isSafeInteger(requestedEmailId) || requestedEmailId <= 0) return
 
-  const handleViewNotificationEmail = async (id: number) => {
+    setActiveTab('emails')
     setEmailModalOpen(true)
-    await fetchEmailDetail(id)
+    void fetchEmailDetail(requestedEmailId)
+  }, [searchParams])
+
+  const handleCloseEmailModal = () => {
+    setEmailModalOpen(false)
+    if (searchParams.has('email_id')) {
+      const nextParams = new URLSearchParams(searchParams)
+      nextParams.delete('email_id')
+      setSearchParams(nextParams, { replace: true })
+    }
   }
 
   const unreadCount = notifications.filter((n) => !n.read_at && !isSensitiveNotification(n)).length
@@ -1843,11 +1835,10 @@ export function NotificationsPage() {
             setActiveTab('notifications')
             fetchNotifications()
           }}
-          className={`pb-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
-            activeTab === 'notifications'
-              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-              : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
-          }`}
+          className={`pb-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${activeTab === 'notifications'
+            ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+            : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
         >
           <Bell className="w-4 h-4" />
           <span>Platform Alerts</span>
@@ -1864,11 +1855,10 @@ export function NotificationsPage() {
             setActiveTab('emails')
             fetchUserEmails()
           }}
-          className={`pb-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
-            activeTab === 'emails'
-              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-              : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
-          }`}
+          className={`pb-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${activeTab === 'emails'
+            ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+            : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
         >
           <Mail className="w-4 h-4" />
           <span>My Direct Emails</span>
@@ -1901,11 +1891,10 @@ export function NotificationsPage() {
               <Card
                 key={item.id}
                 onClick={() => !item.read_at && handleMarkRead(item.id)}
-                className={`p-4 transition-all cursor-pointer ${
-                  item.read_at
-                    ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 opacity-80'
-                    : 'bg-indigo-50/40 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-800 hover:border-indigo-300'
-                }`}
+                className={`p-4 transition-all cursor-pointer ${item.read_at
+                  ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 opacity-80'
+                  : 'bg-indigo-50/40 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-800 hover:border-indigo-300'
+                  }`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-0.5">
@@ -1929,18 +1918,6 @@ export function NotificationsPage() {
                           >
                             Track application
                           </Link>
-                        )}
-                        {item.email_id && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void handleViewNotificationEmail(item.email_id)
-                            }}
-                          >
-                            View Email
-                          </Button>
                         )}
                         {item.gmail_url && (
                           <GmailActionLink
@@ -1977,7 +1954,7 @@ export function NotificationsPage() {
                 <span className="font-mono font-bold underline">{userEmail || 'your email'}</span>.
               </span>
             </div>
-              <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold shrink-0 hidden sm:inline">
+            <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold shrink-0 hidden sm:inline">
               Private application mailbox
             </span>
           </div>
@@ -1997,92 +1974,49 @@ export function NotificationsPage() {
             />
           ) : (
             <div className="space-y-3">
-              {emails.map((mail) => {
-                const isExpanded = expandedEmailId === mail.id
-
-                return (
-                  <Card
-                    key={mail.id}
-                    className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-3 transition-all"
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                      <div className="space-y-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                            {maskCodes(mail.subject)}
-                          </h3>
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                            To: {mail.to}
-                          </span>
-                        </div>
-
-                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                          From: <span className="font-medium text-slate-700 dark:text-slate-300">{mail.from}</span>
-                          {' • '}
-                          {new Date(mail.created_at).toLocaleString()}
-                        </p>
+              {emails.map((mail) => (
+                <Card
+                  key={mail.id}
+                  className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-3 transition-all"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {maskCodes(mail.subject)}
+                        </h3>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                          To: {mail.to}
+                        </span>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void handleViewEmail(mail.id)}
-                          leftIcon={<Eye className="w-3.5 h-3.5 text-slate-500" />}
-                        >
-                          {isExpanded ? 'Hide Email' : 'View Email'}
-                        </Button>
-                        {mail.gmail_url && (
-                          <GmailActionLink
-                            href={mail.gmail_url}
-                            className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-indigo-200 bg-white px-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-indigo-800 dark:bg-slate-900 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
-                          >
-                            Open in Gmail <ExternalLink className="h-3.5 w-3.5" />
-                          </GmailActionLink>
-                        )}
-                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        From: <span className="font-medium text-slate-700 dark:text-slate-300">{mail.from}</span>
+                        {' • '}
+                        {new Date(mail.created_at).toLocaleString()}
+                      </p>
                     </div>
 
-                    {isExpanded && (
-                      <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
-                        {loadingEmailId === String(mail.id) ? (
-                          <p className="text-sm text-slate-500">Loading email…</p>
-                        ) : emailDetailError ? (
-                          <p role="alert" className="text-sm text-rose-600">{emailDetailError}</p>
-                        ) : selectedEmail ? (
-                          <>
-                            <dl className="grid gap-1 text-xs text-slate-600 dark:text-slate-300">
-                              <div><dt className="inline font-semibold">From: </dt><dd className="inline">{selectedEmail.from}</dd></div>
-                              <div><dt className="inline font-semibold">To: </dt><dd className="inline">{selectedEmail.to}</dd></div>
-                              <div><dt className="inline font-semibold">Date: </dt><dd className="inline">{new Date(selectedEmail.created_at).toLocaleString()}</dd></div>
-                              <div><dt className="inline font-semibold">Subject: </dt><dd className="inline">{maskCodes(selectedEmail.subject)}</dd></div>
-                            </dl>
-                            {selectedEmail.html ? (
-                              <iframe
-                                title={`Email content: ${selectedEmail.subject}`}
-                                sandbox=""
-                                srcDoc={selectedEmail.html}
-                                className="h-80 w-full rounded-xl border border-slate-200 bg-white dark:border-slate-700"
-                              />
-                            ) : (
-                              <div className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 font-sans text-xs leading-relaxed text-slate-800 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
-                                {maskCodes(selectedEmail.body)}
-                              </div>
-                            )}
-                          </>
-                        ) : null}
-                      </div>
-                    )}
-                  </Card>
-                )
-              })}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {mail.gmail_url && (
+                        <GmailActionLink
+                          href={mail.gmail_url}
+                          className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-indigo-200 bg-white px-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-indigo-800 dark:bg-slate-900 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
+                        >
+                          Open in Gmail <ExternalLink className="h-3.5 w-3.5" />
+                        </GmailActionLink>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              ))}
             </div>
           )}
         </div>
       )}
       <Modal
         isOpen={emailModalOpen}
-        onClose={() => setEmailModalOpen(false)}
+        onClose={handleCloseEmailModal}
         title={selectedEmail?.subject ? maskCodes(selectedEmail.subject) : 'Email'}
         description="Private email addressed to your account."
       >

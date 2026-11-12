@@ -7,6 +7,13 @@ import { greetingForRole, suggestedQuestionsForPage } from './suggestions'
 import type { ChatFeedbackSourceType, ChatMessage, ChatPage } from './types'
 import { routes } from '../lib/routes'
 
+function resizeComposer(input: HTMLTextAreaElement) {
+  input.style.height = 'auto'
+  const scrollHeight = input.scrollHeight
+  input.style.height = `${Math.min(scrollHeight, 120)}px`
+  input.style.overflowY = scrollHeight > 120 ? 'auto' : 'hidden'
+}
+
 interface ChatWindowProps {
   messages: ChatMessage[]
   typing: boolean
@@ -71,8 +78,7 @@ export function ChatWindow({ messages, typing, error, role, page, mode, retrieva
   useEffect(() => {
     const input = inputRef.current
     if (!input) return
-    input.style.height = 'auto'
-    input.style.height = `${Math.min(input.scrollHeight, 120)}px`
+    resizeComposer(input)
   }, [draft])
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -97,7 +103,7 @@ export function ChatWindow({ messages, typing, error, role, page, mode, retrieva
       role="dialog"
       aria-modal="true"
       aria-labelledby="chatbot-title"
-      className="chatbot-window-enter fixed inset-x-0 bottom-[env(safe-area-inset-bottom)] z-[70] flex h-[calc(100dvh-env(safe-area-inset-bottom))] flex-col bg-white pb-[env(safe-area-inset-bottom)] text-slate-900 shadow-2xl dark:bg-slate-950 dark:text-white sm:inset-auto sm:bottom-6 sm:right-6 sm:h-[min(38rem,calc(100dvh-3rem))] sm:w-[min(24rem,calc(100vw-3rem))] sm:rounded-2xl sm:border sm:border-slate-200 sm:pb-0 sm:dark:border-slate-800"
+      className="chat-window-surface chatbot-window-enter fixed inset-x-0 bottom-[env(safe-area-inset-bottom)] z-[70] flex h-[calc(100dvh-env(safe-area-inset-bottom))] flex-col rounded-none border-0 bg-white pb-[env(safe-area-inset-bottom)] text-slate-900 shadow-2xl dark:bg-slate-950 dark:text-white sm:inset-auto sm:bottom-6 sm:right-6 sm:h-[min(38rem,calc(100dvh-3rem))] sm:w-[min(24rem,calc(100vw-3rem))] sm:rounded-2xl sm:border sm:border-slate-200 sm:pb-0 sm:dark:border-slate-800"
     >
       <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
         <div className="flex items-center gap-2">
@@ -176,11 +182,14 @@ export function ChatWindow({ messages, typing, error, role, page, mode, retrieva
             value={draft}
             rows={1}
             maxLength={500}
-            onChange={(event) => setDraft(event.target.value.slice(0, 500))}
+            onChange={(event) => {
+              resizeComposer(event.currentTarget)
+              setDraft(event.currentTarget.value.slice(0, 500))
+            }}
             onKeyDown={handleInputKeyDown}
             placeholder="Ask about using InternSphere…"
             disabled={typing || !online || statusDisabled}
-            className="max-h-[120px] min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:focus:ring-indigo-900"
+            className="glass-input max-h-[120px] min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:focus:ring-indigo-900"
           />
           <button type="submit" disabled={!draft.trim() || typing || !online || statusDisabled} aria-label="Send question" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"><ArrowUp className="h-4 w-4" /></button>
         </div>

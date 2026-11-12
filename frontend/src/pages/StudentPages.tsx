@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -28,8 +28,10 @@ import { AvatarUploadCard } from '../components/ui/AvatarUploadCard'
 import { PaginationControls } from '../components/ui/PaginationControls'
 import { CardActionButton, CardActions } from '../components/ui/CardActions'
 import { StatusFilterMenu } from '../components/applications/StatusFilterMenu'
+import { ApplicationTrackerModal } from '../components/applications/ApplicationTrackerModal'
 import { GmailActionLink } from '../components/mail/GmailActionLink'
 import { routes } from '../lib/routes'
+import { formatINR } from '../lib/currency'
 import { confirmAction, showToast } from '../lib/feedback'
 import { parseGithubHandle, parseLeetCodeHandle } from '../lib/handles'
 import { stripMarkdownPreview } from '../lib/search'
@@ -109,6 +111,7 @@ function readNormalizedHandle(key: string, parse: (value: string) => string | nu
 export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' | 'saved' }) {
   const { session } = useAuthStore()
   const navigate = useNavigate()
+  const routerLocation = useLocation()
   const { id } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -161,6 +164,25 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
   const [reportModalJob, setReportModalJob] = useState<any | null>(null)
   const [mockInterviewJob, setMockInterviewJob] = useState<any | null>(null)
   const [companyReviewsSummary, setCompanyReviewsSummary] = useState<{ average_rating: number; total_reviews: number } | null>(null)
+  const previousOpportunityIdRef = useRef(id)
+
+  const closeOpportunityDetails = useCallback(() => {
+    setSelectedJob(null)
+    if (!id) return
+    const navigationState = routerLocation.state as { opportunityModal?: boolean } | null
+    if (navigationState?.opportunityModal) {
+      navigate(-1)
+      return
+    }
+    const query = searchParams.toString()
+    navigate(query ? `${routes.opportunities}?${query}` : routes.opportunities, { replace: true })
+  }, [id, navigate, routerLocation.state, searchParams])
+
+  const closeApplicationTracker = useCallback(() => {
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('track')
+    setSearchParams(nextParams, { replace: true })
+  }, [searchParams, setSearchParams])
 
   useEffect(() => {
     if (selectedJob?.company_id) {
@@ -368,7 +390,12 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
 
   // Auto-open selected job if :id route param is present (e.g. /opportunities/:id or /internships/:id)
   useEffect(() => {
-    if (!id) return
+    if (!id) {
+      if (previousOpportunityIdRef.current) setSelectedJob(null)
+      previousOpportunityIdRef.current = undefined
+      return
+    }
+    previousOpportunityIdRef.current = id
     const numericId = parseInt(id, 10)
     if (isNaN(numericId)) return
 
@@ -561,7 +588,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
           </p>
         </div>
       ) : (
-      <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200/90 dark:border-slate-800 shadow-2xs mb-6 space-y-3">
+      <div className="glass-strong bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200/90 dark:border-slate-800 shadow-2xs mb-6 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
 
           <SearchBox
@@ -583,7 +610,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                 setLocation(e.target.value)
                 setPage(1)
               }}
-              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="glass-input w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
 
@@ -602,7 +629,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
               setSkills(e.target.value)
               setPage(1)
             }}
-            className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="glass-input w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
 
           <DropdownSelect aria-label="Sort opportunities" value={sortBy} onChange={(value) => { setSortBy(value); setPage(1) }} options={[
@@ -693,14 +720,24 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => navigate(routes.opportunity(application.internship_id))}
+                      onClick={() => {
+                        const query = searchParams.toString()
+                        navigate({
+                          pathname: routes.opportunity(application.internship_id),
+                          search: query ? `?${query}` : '',
+                        }, { state: { opportunityModal: true } })
+                      }}
                     >
                       View details
                     </Button>
                     <Button
                       size="sm"
                       variant="primary"
-                      onClick={() => navigate(routes.applications())}
+                      onClick={() => {
+                        const nextParams = new URLSearchParams(searchParams)
+                        nextParams.set('track', String(application.id))
+                        setSearchParams(nextParams)
+                      }}
                     >
                       Track application
                     </Button>
@@ -807,7 +844,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
 
                 <div className="sm:text-right shrink-0 space-y-2">
                   <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                    {job.stipend > 0 ? `$${job.stipend}/mo` : 'Unpaid / Experience'}
+                    {job.stipend > 0 ? `${formatINR(job.stipend)}/mo` : 'Unpaid / Experience'}
                   </div>
                   <div className="flex sm:flex-col items-center sm:items-end gap-1.5">
                     <div className="flex items-center gap-1.5">
@@ -927,7 +964,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
       {selectedJob && (
         <Modal
           isOpen={!!selectedJob}
-          onClose={() => setSelectedJob(null)}
+          onClose={closeOpportunityDetails}
           title={selectedJob.title}
           description={`${selectedJob.company_name ? `${selectedJob.company_name} • ` : ''}${selectedJob.industry} • ${selectedJob.location}`}
           maxWidth="lg"
@@ -975,7 +1012,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
               <div>
                 <span className="text-slate-400 block font-medium">Stipend</span>
                 <span className="font-semibold text-slate-800 text-sm">
-                  {selectedJob.stipend > 0 ? `$${selectedJob.stipend}/mo` : 'Unpaid'}
+                  {selectedJob.stipend > 0 ? `${formatINR(selectedJob.stipend)}/mo` : 'Unpaid'}
                 </span>
               </div>
               <div>
@@ -1022,7 +1059,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                 size="sm"
                 onClick={() => {
                   setReportModalJob(selectedJob)
-                  setSelectedJob(null)
+                  closeOpportunityDetails()
                 }}
                 leftIcon={<ShieldAlert className="w-3.5 h-3.5 text-rose-500" />}
                 className="text-rose-600 hover:bg-rose-50"
@@ -1047,7 +1084,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                     {selectedJob.is_saved ? 'Saved' : 'Save'}
                   </Button>
                 )}
-                <Button variant="outline" size="sm" onClick={() => setSelectedJob(null)}>
+                <Button variant="outline" size="sm" onClick={closeOpportunityDetails}>
                   Close
                 </Button>
                 <Button
@@ -1057,7 +1094,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                   title={selectedJob.status === 'CLOSED' ? 'This internship is closed and no longer accepts applications.' : 'Apply for this internship'}
                   onClick={() => {
                     const j = selectedJob
-                    setSelectedJob(null)
+                    closeOpportunityDetails()
                     handleApplyClick(j)
                   }}
                 >
@@ -1105,6 +1142,13 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
           onClose={() => setMockInterviewJob(null)}
           internshipId={mockInterviewJob.id}
           jobTitle={mockInterviewJob.title}
+        />
+      )}
+      {searchParams.get('track') && (
+        <ApplicationTrackerModal
+          isOpen
+          application={applications.find((item) => String(item.id) === searchParams.get('track')) || { id: searchParams.get('track') || '' }}
+          onClose={closeApplicationTracker}
         />
       )}
     </div>
@@ -1749,10 +1793,19 @@ export function ApplicationTimelinePage() {
                       )}
                       {eventEmails.map((mail: any) => (
                         <div key={mail.id || mail.message_id} className="mt-3 flex flex-wrap items-center gap-2">
-                          {mail.gmail_url ? (
-                            <GmailActionLink href={mail.gmail_url} className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400">View Email</GmailActionLink>
-                          ) : (
-                            <Link to={routes.notifications} className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400">View in app mailbox</Link>
+                          <Link
+                            to={`${routes.notifications}?email_id=${encodeURIComponent(String(mail.id))}`}
+                            className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                          >
+                            View Email
+                          </Link>
+                          {mail.gmail_url && (
+                            <GmailActionLink
+                              href={mail.gmail_url}
+                              className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                            >
+                              Open in Gmail
+                            </GmailActionLink>
                           )}
                         </div>
                       ))}

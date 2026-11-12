@@ -9,6 +9,13 @@ import { Textarea } from '../ui/Textarea'
 import { Button } from '../ui/Button'
 import { DropdownSelect as OptionMenu } from '../ui/DropdownSelect'
 import { Calendar, CheckCircle2, Clock, Sparkles, User, Briefcase, AlertCircle } from 'lucide-react'
+import { Link } from 'react-router-dom'
+
+interface CompanyInternship {
+  id: number
+  title: string
+  status: string
+}
 
 const normalizeMeetingLink = (value: string) => {
   const trimmed = value.trim()
@@ -67,11 +74,15 @@ export function ScheduleInterviewModal({
   const [selectedDuration, setSelectedDuration] = useState('30 min')
 
   // Dynamic selection state when applicationId is not pre-provided
-  const [jobs, setJobs] = useState<any[]>([])
+  const [jobs, setJobs] = useState<CompanyInternship[]>([])
   const [selectedJobId, setSelectedJobId] = useState<number | undefined>(jobId)
   const [candidates, setCandidates] = useState<any[]>([])
   const [selectedAppId, setSelectedAppId] = useState<number | undefined>(applicationId)
-  const [loadingOptions, setLoadingOptions] = useState(false)
+  const [loadingJobs, setLoadingJobs] = useState(!applicationId && !jobId)
+  const [roleLoadError, setRoleLoadError] = useState('')
+  const [rolesRetryCount, setRolesRetryCount] = useState(0)
+  const [loadingCandidates, setLoadingCandidates] = useState(false)
+  const [candidateLoadError, setCandidateLoadError] = useState('')
   const localNow = new Date()
   localNow.setMinutes(localNow.getMinutes() - localNow.getTimezoneOffset())
   const minScheduledAt = localNow.toISOString().slice(0, 16)
@@ -93,16 +104,19 @@ export function ScheduleInterviewModal({
     },
   })
 
-  // Synchronize incoming props
+  // Reset transient selection and messages each time the modal is opened.
   useEffect(() => {
-    if (jobId) {
-      setSelectedJobId(jobId)
-    }
-    if (applicationId) {
-      setSelectedAppId(applicationId)
-      setValue('meeting_link', '')
-    }
-  }, [jobId, applicationId, setValue])
+    if (!isOpen) return
+    setSelectedJobId(jobId)
+    setSelectedAppId(applicationId)
+    setCandidates([])
+    setJobs([])
+    setRoleLoadError('')
+    setLoadingJobs(!applicationId && !jobId)
+    setCandidateLoadError('')
+    setServerError('')
+    setValue('meeting_link', '')
+  }, [isOpen, jobId, applicationId, setValue])
 
   useEffect(() => {
     if (!rescheduleInterview) return
@@ -116,42 +130,62 @@ export function ScheduleInterviewModal({
 
   // Load jobs if neither applicationId nor jobId is passed
   useEffect(() => {
-    if (isOpen && !applicationId && !jobId) {
-      setLoadingOptions(true)
-      api.get('/internships/company')
-        .then((res) => {
-          const list = res.data || []
-          setJobs(list)
-          if (list.length > 0 && !selectedJobId) {
-            setSelectedJobId(list[0].id)
-          }
-        })
-        .catch(() => {})
-        .finally(() => setLoadingOptions(false))
+    if (!isOpen || applicationId || jobId) {
+      setLoadingJobs(false)
+      return
     }
-  }, [isOpen, applicationId, jobId])
+
+    let active = true
+    setLoadingJobs(true)
+    setJobs([])
+    setRoleLoadError('')
+    api.get<CompanyInternship[]>('/internships/mine')
+      .then(({ data }) => {
+        if (!Array.isArray(data)) throw new Error('Invalid company internships response.')
+        if (active) setJobs(data.filter((job) => job.status === 'PUBLISHED'))
+      })
+      .catch(() => {
+        if (active) {
+          setJobs([])
+          setRoleLoadError('Unable to load your open roles. Please try again.')
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingJobs(false)
+      })
+    return () => { active = false }
+  }, [isOpen, applicationId, jobId, rolesRetryCount])
 
   // Fetch applicants whenever selectedJobId changes (and no fixed applicationId)
   useEffect(() => {
-    if (isOpen && !applicationId && selectedJobId) {
-      setLoadingOptions(true)
-      api.get(`/applications/internships/${selectedJobId}`)
-        .then((res) => {
-          const list = res.data || []
-          setCandidates(list)
-          if (list.length > 0) {
-            setSelectedAppId(list[0].id)
-          } else {
-            setSelectedAppId(undefined)
-          }
-        })
-        .catch(() => {
-          setCandidates([])
-          setSelectedAppId(undefined)
-        })
-        .finally(() => setLoadingOptions(false))
+    if (!isOpen || applicationId || !selectedJobId) {
+      setCandidates([])
+      setSelectedAppId(applicationId)
+      setCandidateLoadError('')
+      setLoadingCandidates(false)
+      return
     }
-  }, [isOpen, applicationId, selectedJobId, setValue])
+
+    let active = true
+    setCandidates([])
+    setSelectedAppId(undefined)
+    setCandidateLoadError('')
+    setLoadingCandidates(true)
+    api.get(`/applications/internships/${selectedJobId}`)
+      .then((res) => {
+        if (active) setCandidates(res.data || [])
+      })
+      .catch(() => {
+        if (active) {
+          setCandidates([])
+          setCandidateLoadError('Unable to load candidates. Please try again.')
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingCandidates(false)
+      })
+    return () => { active = false }
+  }, [isOpen, applicationId, selectedJobId])
 
   // Quick slot helpers (Tomorrow 10 AM, etc.)
   const generateQuickSlots = () => {
@@ -273,13 +307,44 @@ export function ScheduleInterviewModal({
             <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
               {/* Job Selector (if not locked by jobId prop) */}
               {!jobId && (
-                <OptionMenu
-                  label="Internship Role"
-                  value={String(selectedJobId || '')}
-                  onChange={(value) => setSelectedJobId(Number(value))}
-                  disabled={loadingOptions || jobs.length === 0}
-                  options={jobs.map((job) => ({ label: `${job.title} (${job.status})`, value: String(job.id) }))}
-                />
+                loadingJobs ? (
+                  <OptionMenu
+                    label="Internship Role"
+                    value=""
+                    onChange={() => undefined}
+                    disabled
+                    options={[{ label: 'Loading roles...', value: '' }]}
+                  />
+                ) : roleLoadError ? (
+                  <div className="space-y-2">
+                    <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{roleLoadError}</p>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setRolesRetryCount((count) => count + 1)}>
+                      Retry
+                    </Button>
+                  </div>
+                ) : jobs.length === 0 ? (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    You have no open roles yet.{' '}
+                    <Link to="/company/internships/new" className="font-medium text-indigo-600 underline dark:text-indigo-400">
+                      Post Internship
+                    </Link>
+                  </p>
+                ) : (
+                  <OptionMenu
+                    label="Internship Role"
+                    value={String(selectedJobId || '')}
+                    onChange={(value) => {
+                      const nextJobId = Number(value) || undefined
+                      setSelectedJobId(nextJobId)
+                      setSelectedAppId(undefined)
+                      setCandidates([])
+                      setLoadingCandidates(Boolean(nextJobId))
+                      setCandidateLoadError('')
+                      setServerError('')
+                    }}
+                    options={jobs.map((job) => ({ label: job.title, value: String(job.id) }))}
+                  />
+                )
               )}
 
               {jobId && jobTitle && (
@@ -290,13 +355,24 @@ export function ScheduleInterviewModal({
               )}
 
               {/* Candidate Picker */}
-              {loadingOptions ? (
-                <p className="text-xs text-slate-500">Loading candidates...</p>
+              {!selectedJobId ? (
+                !loadingJobs && !roleLoadError && jobs.length > 0 && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Select an internship role to see its candidates.
+                  </p>
+                )
+              ) : loadingCandidates ? (
+                <p role="status" className="text-xs text-slate-500 dark:text-slate-400">Loading candidates...</p>
+              ) : candidateLoadError ? (
+                <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{candidateLoadError}</p>
               ) : candidates.length > 0 ? (
                 <OptionMenu
                   label="Select Candidate"
                   value={String(selectedAppId || '')}
-                  onChange={(value) => setSelectedAppId(Number(value))}
+                  onChange={(value) => {
+                    setSelectedAppId(Number(value))
+                    setServerError('')
+                  }}
                   options={candidates.map((candidate) => ({
                     label: `${candidate.student_name || `Applicant #${candidate.student_id}`} (${candidate.status}) • ${candidate.student_university || 'Student'}`,
                     value: String(candidate.id),
@@ -410,7 +486,7 @@ export function ScheduleInterviewModal({
               variant="primary"
               size="sm"
               isLoading={isSubmitting}
-              disabled={!activeAppId}
+              disabled={!activeAppId || (!applicationId && (!selectedJobId || !selectedAppId || loadingCandidates))}
               leftIcon={<Calendar className="w-3.5 h-3.5" />}
             >
               {rescheduleInterview ? 'Confirm Reschedule' : 'Confirm & Schedule'}

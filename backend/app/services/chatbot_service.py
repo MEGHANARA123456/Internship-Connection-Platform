@@ -1,23 +1,33 @@
 """Stateless, privacy-preserving chatbot decision pipeline."""
 
+import json
 import logging
 import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import timezone
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..chatbot.chatbot_config import ChatbotConfig, load_config
-from ..chatbot.guardrails import is_role_capability_question, output_is_safe
+from ..chatbot.guardrails import (
+    _output_safety_failure,
+    is_role_capability_question,
+    output_is_safe,
+)
 from ..chatbot.providers import create_answer_provider
-from ..chatbot.providers.base import AnswerProvider, ChatbotRouterProvider, Passage, ProviderPayload
+from ..chatbot.providers.base import (
+    AnswerProvider,
+    ChatbotRouterProvider,
+    Passage,
+    ProviderPayload,
+)
 from ..chatbot.providers.retrieval_only import RetrievalOnlyProvider
 from ..chatbot.rag.retriever import HybridRetriever
 from ..chatbot.redaction import contains_secret, redact
-from ..models import ChatbotLowConfidenceLog
-from ..chatbot.retriever import BM25Retriever
+from ..chatbot.retriever import QUERY_STOPWORDS, BM25Retriever, _section_slug, _tokens
 from ..chatbot.scope import (
     ScopeDecision,
     decide_scope,
@@ -25,6 +35,7 @@ from ..chatbot.scope import (
     is_admin_audit_query,
     is_how_to_question,
 )
+from ..models import ChatbotLowConfidenceLog
 from .audit import AuditEventSummary, audit_action_label
 
 logger = logging.getLogger("internsphere.chatbot")
@@ -74,6 +85,13 @@ GUIDANCE = {
 }
 WORD_LIMIT = 120
 NO_EVIDENCE_ANSWER = "I don't have sufficient data to answer this question."
+CURATED_ANSWERS_PATH = Path(__file__).resolve().parents[2] / "kb" / "curated_answers.yaml"
+CURATED_IGNORED_TOKENS = QUERY_STOPWORDS | {
+    "help", "please", "page", "platform", "internsphere", "want", "need", "get",
+    "show", "find", "see", "open", "use", "go", "tell", "give", "me", "my",
+    "i", "we", "you", "the", "a", "an", "to", "how", "what", "where", "when",
+    "can", "do", "does", "is", "are", "for", "on", "in", "of", "and", "about",
+}
 SAFE_QUESTION_WORDS = set(
     "a about account accounts active activity admin applications apply are audit badges "
     "best by can candidate candidates company companies completed count current data delete "
@@ -120,6 +138,130 @@ class ChatResult:
     matched_ids: tuple[str, ...]
     refusal_reason: str | None
     needs_clarification: str | None = None
+
+
+@dataclass(frozen=True)
+class CuratedAnswer:
+    id: str
+    audience: str
+    questions: tuple[str, ...]
+    answer: str
+    source: str
+    label: str
+    route: str
+
+
+def _load_curated_answers(path: Path = CURATED_ANSWERS_PATH) -> tuple[CuratedAnswer, ...]:
+    """Load and validate curated, role-specific help answers from the KB."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    entries = data.get("answers") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        raise TypeError(f"Curated chatbot answers are invalid: {path.name}")
+    answers = []
+    for entry in entries:
+        if (
+            not isinstance(entry, dict)
+            or entry.get("audience") not in {"guest", "student", "company", "admin"}
+            or not all(isinstance(entry.get(key), str) and entry[key].strip() for key in (
+                "id", "answer", "source", "label", "route",
+            ))
+            or not isinstance(entry.get("questions"), list)
+            or not entry["questions"]
+            or not all(isinstance(question, str) and question.strip() for question in entry["questions"])
+        ):
+            raise ValueError(f"Curated chatbot answer entry is invalid: {path.name}")
+        answers.append(CuratedAnswer(
+            id=entry["id"],
+            audience=entry["audience"],
+            questions=tuple(entry["questions"]),
+            answer=entry["answer"],
+            source=entry["source"],
+            label=entry["label"],
+            route=entry["route"],
+        ))
+    return tuple(answers)
+
+
+def _curated_tokens(text: str) -> set[str]:
+    tokens = set(_tokens(text)) - CURATED_IGNORED_TOKENS
+    normalized = {
+        {"job": "posting", "jobs": "posting", "role": "internship", "roles": "internship"}.get(
+            token,
+            token,
+        )
+        for token in tokens
+    }
+    return normalized - CURATED_IGNORED_TOKENS
+
+
+def _curated_match_score(query: str, example: str) -> float:
+    query_tokens = _curated_tokens(query)
+    example_tokens = _curated_tokens(example)
+    if not query_tokens or not example_tokens:
+        return 0.0
+    overlap = len(query_tokens & example_tokens)
+    return 2 * overlap / (len(query_tokens) + len(example_tokens))
+
+
+def _match_curated_question(
+    message: str,
+    role: str,
+    answers: tuple[CuratedAnswer, ...],
+) -> tuple[CuratedAnswer, ...]:
+    """Match one or two distinct help questions to unambiguous role-visible answers."""
+    parts = [
+        part.strip(" ,;")
+        for part in re.split(
+            r"\?\s*|\s*;\s*|\s+\band\s+(?=(?:what|how|where|when|who|why|can|do|is|are)\b)",
+            message,
+            flags=re.IGNORECASE,
+        )
+        if part.strip(" ,;")
+    ]
+    if not parts:
+        return ()
+    selected: list[CuratedAnswer] = []
+    for part in parts[:2]:
+        ranked = sorted(
+            (
+                (_curated_match_score(part, example), answer)
+                for answer in answers
+                if answer.audience == role
+                for example in answer.questions
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        if not ranked or ranked[0][0] < 0.68:
+            return ()
+        if (
+            len(ranked) > 1
+            and ranked[0][0] - ranked[1][0] < 0.04
+            and ranked[0][1].id != ranked[1][1].id
+        ):
+            return ()
+        answer = ranked[0][1]
+        if answer not in selected:
+            selected.append(answer)
+    return tuple(selected)
+
+
+def _curated_source(answer: CuratedAnswer, query: str, retriever: BM25Retriever) -> tuple[str, str]:
+    """Resolve a curated answer to its closest audience-visible KB section."""
+    for document in getattr(retriever, "documents", ()):
+        if document.id != answer.source:
+            continue
+        section = max(
+            document.sections,
+            key=lambda value: (
+                _curated_match_score(query, value.splitlines()[0]),
+                _curated_match_score(query, value),
+            ),
+            default="",
+        )
+        if section:
+            return f"{document.id}#{_section_slug(section)}", document.title
+    return f"{answer.source}#curated-answer", answer.label
 
 
 def _truncate_answer(text: str) -> str:
@@ -218,7 +360,7 @@ def _closest_supported_questions(
     for passage in passages:
         if passage.score <= 0:
             continue
-        document = documents.get(passage.id)
+        document = documents.get(passage.doc_id or passage.id.split("#", 1)[0])
         if document is None:
             continue
         question = next(
@@ -296,11 +438,11 @@ def _allowed_routes(passages: list[Passage], role: str) -> set[str]:
 
 
 def _links_for(passages: list[Passage], role: str) -> tuple[tuple[str, str], ...]:
-    """Build up to two unique, role-authorized links across the ranked passages."""
+    """Build up to two unique, role-authorized links from the selected passage only."""
     links = []
     seen_routes: set[str] = set()
     seen_labels: set[str] = set()
-    for passage in passages:
+    for passage in passages[:1]:
         passage_links = passage.links or tuple((passage.title, route) for route in passage.related_routes)
         for label, route in passage_links:
             if (
@@ -317,10 +459,9 @@ def _links_for(passages: list[Passage], role: str) -> tuple[tuple[str, str], ...
 
 
 def _sources_for(passages: list[Passage], role: str) -> tuple[tuple[str, str, str], ...]:
-    """Return up to five distinct passage IDs paired with titles and each passage's first allowed route."""
+    """Return the selected passage paired with its first role-authorized route."""
     sources = []
-    seen: set[str] = set()
-    for passage in passages:
+    for passage in passages[:1]:
         route = next(
             (
                 route for _, route in (
@@ -330,10 +471,34 @@ def _sources_for(passages: list[Passage], role: str) -> tuple[tuple[str, str, st
             ),
             None,
         )
-        if route and passage.id not in seen:
-            seen.add(passage.id)
+        if route:
             sources.append((passage.id, passage.title, route))
-    return tuple(sources[:5])
+    return tuple(sources)
+
+
+def _sectioned_passages(passages: list[Passage]) -> list[Passage]:
+    """Give hybrid-retrieval passages the same stable IDs as BM25 section chunks."""
+    sectioned = []
+    for passage in passages:
+        heading = re.match(r"^##\s+([^\r\n]+)", passage.text)
+        if passage.doc_id and heading:
+            passage = Passage(
+                id=f"{passage.doc_id}#{_section_slug(f'## {heading.group(1)}')}",
+                title=passage.title,
+                audience=passage.audience,
+                text=passage.text,
+                related_routes=passage.related_routes,
+                score=passage.score,
+                doc_id=passage.doc_id,
+                links=passage.links,
+            )
+        sectioned.append(passage)
+    return sectioned
+
+
+def _counts_only_summary(answer: str) -> str:
+    counts = re.findall(r"(?<!\w)\d+(?:\.\d+)?%?(?!\w)", answer)
+    return f"Live result counts: {', '.join(counts[:8])}." if counts else ""
 
 
 def _dedupe_links(links: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
@@ -621,7 +786,7 @@ def _suggested_followups(
         "company_internships": (
             "How do I create or edit an internship posting?",
             "How do I close a posting?",
-            "How do I check a posting's moderation status?",
+            "How do I review applicants?",
         ),
         "company_interviews": (
             "How do I reschedule an interview?",
@@ -629,7 +794,21 @@ def _suggested_followups(
             "How do interview reminders work?",
         ),
     }
-    if matched_intent in intent_suggestions:
+    if matched_intent == "public_open_internships_count":
+        suggestions = (
+            (
+                "How do I search internships?",
+                "How does InternSphere work?",
+                "How do I register as a student?",
+            )
+            if role == "guest"
+            else (
+                "How do I search internships by skills and location?",
+                "How do I apply for an internship?",
+                "Where can I see my applications?",
+            )
+        )
+    elif matched_intent in intent_suggestions:
         suggestions = intent_suggestions[matched_intent]
     topic_suggestions = {
         "internship-verification-and-moderation": (
@@ -747,6 +926,7 @@ class ChatbotService:
         """Configure retrieval and answer providers, accepting injected dependencies for deterministic use."""
         self.config = config or load_config()
         self.retriever = retriever or BM25Retriever()
+        self.curated_answers = _load_curated_answers()
         self.provider = provider or (
             create_answer_provider(self.config)
             if self.config.mode == "llm"
@@ -822,6 +1002,15 @@ class ChatbotService:
         )
         retrieval_query = normalized_message
         preflight = decide_scope(retrieval_query, [], score_threshold, role_name)
+        curated_matches = (
+            _match_curated_question(normalized_message, role_name, self.curated_answers)
+            if (
+                live_answer is None
+                and not preflight.account_specific
+                and not is_role_capability_question(normalized_message)
+            )
+            else ()
+        )
         passages: list[Passage] = []
         if not secret_in_request and (
             not preflight.refused
@@ -829,12 +1018,12 @@ class ChatbotService:
         ) and include_docs:
             if self.config.uses_vector and self.vector_available and db is not None:
                 try:
-                    passages = await HybridRetriever(self.config).retrieve(
+                    passages = _sectioned_passages(await HybridRetriever(self.config).retrieve(
                         db,
                         retrieval_query,
                         retrieval_role,
                         [],
-                    )
+                    ))
                 except Exception as error:
                     self.vector_available = False
                     logger.warning(
@@ -869,6 +1058,11 @@ class ChatbotService:
             and decision.refusal_reason == "no_product_intent_or_knowledge_match"
         ):
             decision = ScopeDecision("live_data", True, False)
+        elif (
+            curated_matches
+            and decision.refusal_reason == "no_product_intent_or_knowledge_match"
+        ):
+            decision = ScopeDecision("in_scope", True, False)
 
         if (
             db is not None
@@ -896,6 +1090,22 @@ class ChatbotService:
             if low_confidence:
                 source_type = "none"
                 links = (("Help docs", "/#faq"),)
+        elif curated_matches:
+            answer = _truncate_answer("\n\n".join(item.answer for item in curated_matches))
+            links = tuple(
+                (item.label, item.route)
+                for item in curated_matches
+                if _is_allowed_live_route(item.route, role_name)
+            )
+            sources = tuple(
+                (
+                    *_curated_source(item, normalized_message, self.retriever),
+                    item.route,
+                )
+                for item in curated_matches
+                if _is_allowed_live_route(item.route, role_name)
+            )
+            answer_path = "curated"
         elif is_role_capability_question(normalized_message):
             answer, role_route = _role_capabilities(role_name)
             links = (("Your InternSphere role", role_route),)
@@ -906,8 +1116,8 @@ class ChatbotService:
             docs_links: tuple[tuple[str, str], ...] = ()
             if include_docs and passages:
                 docs_answer = _render_retrieval_answer(passages)
-                sources = _sources_for(passages, role_name)
-                docs_links = _links_for(passages, role_name)
+                sources = _sources_for(passages[:1], role_name)
+                docs_links = _links_for(passages[:1], role_name)
                 if docs_answer:
                     answer = f"{answer}\n\nHelp docs: {docs_answer}"
                     source_type = "docs + live data"
@@ -984,8 +1194,8 @@ class ChatbotService:
                     await db.commit()
         else:
             answer = _render_retrieval_answer(passages)
-            sources = _sources_for(passages, role_name)
-            links = _links_for(passages, role_name)
+            sources = _sources_for(passages[:1], role_name)
+            links = _links_for(passages[:1], role_name)
 
         allowed_routes = _allowed_routes(passages, role_name) | _role_routes(role_name)
         if live_route and _is_allowed_live_route(live_route, role_name):
@@ -995,6 +1205,7 @@ class ChatbotService:
         )
         answer = _truncate_answer(answer)
         if not output_is_safe(answer, allowed_routes):
+            safety_failure = _output_safety_failure(answer, allowed_routes)
             safe_live_answer = _truncate_answer(live_answer or "")
             if live_answer is not None and output_is_safe(safe_live_answer, allowed_routes):
                 answer = safe_live_answer
@@ -1018,11 +1229,28 @@ class ChatbotService:
                 )
                 source_type = "live data"
             else:
-                answer = _render_retrieval_answer(passages) or "I couldn’t find a safe answer in the help guide."
-                sources = _sources_for(passages, role_name)
-                links = _links_for(passages, role_name)
-                source_type = "docs"
-                if not output_is_safe(answer, allowed_routes):
+                docs_answer = _render_retrieval_answer(passages)
+                if docs_answer and output_is_safe(docs_answer, allowed_routes):
+                    answer = docs_answer
+                    sources = _sources_for(passages[:1], role_name)
+                    links = _links_for(passages[:1], role_name)
+                    source_type = "docs"
+                elif live_answer is not None and safety_failure != "secret_detection" and (
+                    safe_summary := _counts_only_summary(live_answer)
+                ) and output_is_safe(safe_summary, _role_routes(role_name)):
+                    answer = safe_summary
+                    links = ()
+                    sources = ()
+                    source_type = "live data"
+                elif live_answer is not None and live_route and _is_allowed_live_route(
+                    live_route,
+                    role_name,
+                ):
+                    answer = "Your live result is available in InternSphere."
+                    links = ((live_route.rsplit("/", 1)[-1].replace("-", " ").title(), live_route),)
+                    sources = ()
+                    source_type = "live data"
+                else:
                     answer = "I couldn’t find a safe answer in the help guide."
                     links = ()
                     sources = ()
@@ -1074,13 +1302,13 @@ class ChatbotService:
                     normalized_message,
                     page,
                     history[-3:],
-                    tuple(passage.id for passage in passages),
+                    tuple(passage.doc_id or passage.id.split("#", 1)[0] for passage in passages),
                     previous_suggestions or [],
                     tuple(
                         example
                         for passage in passages
                         for document in getattr(self.retriever, "documents", ())
-                        if document.id == passage.id
+                        if document.id == (passage.doc_id or passage.id.split("#", 1)[0])
                         for example in document.examples
                     ),
                     matched_intent,
@@ -1088,7 +1316,13 @@ class ChatbotService:
             ),
             category=category,
             refused=refused,
-            matched_ids=tuple(passage.id for passage in passages),
+            matched_ids=tuple(dict.fromkeys((
+                *(
+                    passage.doc_id or passage.id.split("#", 1)[0]
+                    for passage in passages
+                ),
+                *(item.source for item in curated_matches),
+            ))),
             refusal_reason=decision.refusal_reason,
             needs_clarification=needs_clarification,
         )
@@ -1169,7 +1403,18 @@ class ChatbotService:
         except (OSError, RuntimeError, TimeoutError, ValueError):
             fallback_answer = _render_retrieval_answer(passages)
             fallback_answer = _truncate_answer(fallback_answer)
-            answer = fallback_answer or "I don't have this in the help guide yet."
+            if fallback_answer:
+                answer = fallback_answer
+            else:
+                questions = _closest_supported_questions(
+                    self.retriever,
+                    payload.question,
+                    role,
+                    page,
+                )
+                answer = "I'm not sure about that yet. I can help with:\n" + "\n".join(
+                    f"- {question}" for question in questions[:3]
+                )
             return (
                 answer,
                 _sources_for(passages, role),

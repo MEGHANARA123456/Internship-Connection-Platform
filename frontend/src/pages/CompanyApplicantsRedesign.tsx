@@ -99,7 +99,7 @@ function CandidateFilters({
     <div
       role="group"
       aria-label="Candidate filters"
-      className="grid grid-cols-1 items-end gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-[repeat(5,minmax(0,1fr))_minmax(160px,1fr)_auto]"
+      className="glass-strong grid grid-cols-1 items-end gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-[repeat(5,minmax(0,1fr))_minmax(160px,1fr)_auto]"
     >
       <SearchBox
         ariaLabel="Search candidate"
@@ -129,7 +129,7 @@ function CandidateFilters({
           onChange={(event) => setSkills(event.target.value)}
           onKeyDown={submitOnEnter}
           placeholder="Skills"
-          className="h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800"
+          className="glass-input h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800"
         />
       </label>
       <label className="min-w-0">
@@ -140,7 +140,7 @@ function CandidateFilters({
           onChange={(event) => setEducation(event.target.value)}
           onKeyDown={submitOnEnter}
           placeholder="Education"
-          className="h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800"
+          className="glass-input h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800"
         />
       </label>
       <div className="min-w-0">
@@ -226,11 +226,27 @@ function initials(name: string | null) {
   return (name || 'Candidate').trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? '').join('')
 }
 
+function parseAppliedAt(createdAt: string) {
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(createdAt)
+  return new Date(hasTimezone ? createdAt : `${createdAt}Z`)
+}
+
 function relativeAppliedTime(createdAt: string) {
-  const days = Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000))
+  const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+  const days = Math.max(0, Math.round(
+    (startOfDay(new Date()) - startOfDay(parseAppliedAt(createdAt))) / 86_400_000,
+  ))
   if (days === 0) return 'today'
-  if (days === 1) return '1 day ago'
+  if (days === 1) return 'yesterday'
   return `${days} days ago`
+}
+
+function appliedDate(createdAt: string) {
+  return new Intl.DateTimeFormat('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(parseAppliedAt(createdAt))
 }
 
 function matchTone(score: number | null) {
@@ -272,7 +288,7 @@ function ApplicantCard({
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`relative rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-opacity dark:border-slate-700 dark:bg-slate-900 ${dragging ? 'opacity-40' : ''}`}
+      className={`glass-static relative rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-opacity dark:border-slate-700 dark:bg-slate-900 ${dragging ? 'opacity-40' : ''}`}
       aria-label={`${item.student_name || 'Candidate'} application`}
     >
       {saving && <span role="status" aria-label="Saving status" className="absolute right-2 top-2"><Loader2 className="h-4 w-4 animate-spin text-indigo-600" /></span>}
@@ -613,7 +629,7 @@ export function CompanyApplicantsRedesign({
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{total.toLocaleString()} candidates across your internships</p>
         </div>
         {pipeline ? (
-          <Card className="grid w-full gap-2 bg-white p-3 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-4 xl:max-w-6xl">
+          <Card className="glass-strong grid w-full gap-2 bg-white p-3 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-4 xl:max-w-6xl">
             <SearchBox
               ariaLabel="Search candidate"
               value={search}
@@ -631,8 +647,8 @@ export function CompanyApplicantsRedesign({
               { label: 'Not reviewed (Applied)', value: 'not_reviewed' },
             ]} />
             <DropdownSelect aria-label="Sort candidates" value={sort} onChange={(value) => { setSort(value); updateFilter('sort', value) }} options={[{ label: 'Best match', value: 'best_match' }, { label: 'Newest', value: 'newest' }, { label: 'Oldest', value: 'oldest' }, { label: 'Name A-Z', value: 'name' }]} />
-            <input aria-label="Filter by skills" value={skills} onChange={(event) => setSkills(event.target.value)} placeholder="Skills" className="h-10 min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
-            <input aria-label="Filter by education" value={education} onChange={(event) => setEducation(event.target.value)} placeholder="Education" className="h-10 min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+            <input aria-label="Filter by skills" value={skills} onChange={(event) => setSkills(event.target.value)} placeholder="Skills" className="glass-input h-10 min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
+            <input aria-label="Filter by education" value={education} onChange={(event) => setEducation(event.target.value)} placeholder="Education" className="glass-input h-10 min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
             <div className="flex items-center gap-2 lg:col-span-2">
               <Button size="md" variant="primary" className="h-10 flex-1" onClick={applyFilters}>Apply</Button>
               <Button size="md" variant="ghost" className="h-10 flex-1" onClick={resetFilters}>Clear filters</Button>
@@ -680,7 +696,7 @@ export function CompanyApplicantsRedesign({
       {!pipeline && <div className="flex justify-end"><Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>Refresh</Button></div>}
       {pipeline ? (
         error ? <ErrorState message={error} onRetry={() => void load()} /> : !loading && items.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-700 dark:bg-slate-900">
+          <div className="glass-static rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-700 dark:bg-slate-900">
             <BriefcaseBusiness className="mx-auto h-8 w-8 text-slate-400" />
             <h2 className="mt-3 font-semibold text-slate-900 dark:text-white">No candidates match these filters</h2>
             <Button className="mt-4" variant="outline" size="sm" onClick={resetFilters}>Clear filters</Button>
@@ -701,14 +717,14 @@ export function CompanyApplicantsRedesign({
                     aria-label={`${group.label} applicants`}
                     onDragOver={(event) => { if (validTarget) { event.preventDefault(); event.dataTransfer.dropEffect = 'move' } }}
                     onDrop={(event) => handleDrop(event, group.key)}
-                    className={`w-full shrink-0 snap-start rounded-xl border border-t-4 ${group.color} border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-950/60 md:w-[300px] ${visibleOnMobile ? 'block' : 'hidden md:block'} ${draggedId !== null && !validTarget ? 'opacity-40' : ''} ${validTarget ? 'ring-2 ring-indigo-500 ring-offset-2 dark:ring-offset-slate-950' : ''}`}
+                    className={`glass-static w-full shrink-0 snap-start rounded-xl border border-t-4 ${group.color} border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-950/60 md:w-[300px] ${visibleOnMobile ? 'block' : 'hidden md:block'} ${draggedId !== null && !validTarget ? 'opacity-40' : ''} ${validTarget ? 'ring-2 ring-indigo-500 ring-offset-2 dark:ring-offset-slate-950' : ''}`}
                   >
                     <header className="sticky top-0 z-10 flex items-center justify-between rounded-t-lg border-b border-slate-200 bg-slate-50/95 px-3 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
                       {rejected ? <button type="button" aria-expanded={rejectedExpanded} onClick={() => setRejectedExpanded((value) => !value)} className="flex w-full items-center justify-between text-sm font-bold text-slate-800 dark:text-slate-200">{group.label}<span className="flex items-center gap-2"><Badge variant="slate">{group.items.length}</Badge><ChevronDown className={`h-4 w-4 transition-transform ${rejectedExpanded ? 'rotate-180' : ''}`} /></span></button> : <h2 className="flex w-full items-center justify-between text-sm font-bold text-slate-800 dark:text-slate-200">{group.label}<Badge variant="slate">{group.items.length}</Badge></h2>}
                     </header>
                     {(!rejected || rejectedExpanded) && (
                       <div className="max-h-[calc(100dvh-19rem)] min-h-36 space-y-2 overflow-y-auto p-2.5">
-                        {loading ? Array.from({ length: 3 }).map((_, index) => <div key={index} className="h-36 animate-pulse rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900" />) : group.items.length === 0 ? <div className="flex min-h-32 items-center justify-center rounded-lg border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">No candidates here yet</div> : group.items.map((item) => (
+                        {loading ? Array.from({ length: 3 }).map((_, index) => <div key={index} className="glass-static h-36 animate-pulse rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900" />) : group.items.length === 0 ? <div className="glass-static flex min-h-32 items-center justify-center rounded-lg border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">No candidates here yet</div> : group.items.map((item) => (
                           <ApplicantCard
                             key={item.id}
                             item={item}
@@ -734,32 +750,32 @@ export function CompanyApplicantsRedesign({
       ) : (
         <>
           {error ? <ErrorState message={error} onRetry={() => void load()} /> : loading ? <TableSkeleton rows={6} /> : items.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-700 dark:bg-slate-900">
+            <div className="glass-static rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-700 dark:bg-slate-900">
               <BriefcaseBusiness className="mx-auto h-8 w-8 text-slate-400" />
               <h2 className="mt-3 font-semibold text-slate-900 dark:text-white">{view === 'shortlisted' ? 'No shortlisted candidates' : 'No applicants'}</h2>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">No candidates match the current filters.</p>
             </div>
           ) : (
             <>
-              <div className="hidden max-h-[calc(100dvh-18rem)] overflow-auto rounded-xl border border-slate-200 dark:border-slate-800 md:block">
-                <table className="w-full min-w-[1050px] bg-white text-left text-sm dark:bg-slate-900">
+              <div className="glass-strong hidden max-h-[calc(100dvh-18rem)] overflow-auto rounded-xl border border-slate-200 dark:border-slate-800 md:block">
+                <table className="w-full min-w-[1050px] bg-transparent text-left text-sm dark:bg-slate-900">
                   <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-300"><tr><th className="px-4 py-3">Candidate</th><th className="px-4 py-3">Internship</th><th className="px-4 py-3">Skills / match</th><th className="px-4 py-3">Applied</th><th className="px-4 py-3">Status</th><th className="w-[190px] px-4 py-3">Actions</th></tr></thead>
                   <tbody>{items.map((item) => <tr key={item.id} className="border-t border-slate-100 align-top dark:border-slate-800">
                     <td className="px-4 py-3"><div className="flex items-center gap-2"><CandidateAvatar name={item.student_name} /><div className="min-w-0"><strong className="block truncate">{item.student_name || 'Candidate'}</strong><span className="block truncate text-xs text-slate-500 dark:text-slate-400">{item.student_university || 'Education not provided'}</span></div></div></td>
                     <td className="max-w-48 px-4 py-3"><p className="line-clamp-2" title={item.internship_title || 'Internship'}>{item.internship_title || 'Internship'}</p></td>
                     <td className="max-w-64 px-4 py-3"><div className="flex flex-wrap gap-1">{item.student_skills.slice(0, 5).map((skill) => <span key={skill} title={skill} className="max-w-24 truncate rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">{skill}</span>)}{item.student_skills.length > 5 && <span title={item.student_skills.join(', ')} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">+{item.student_skills.length - 5} more</span>}{item.student_skills.length === 0 && <span className="text-xs text-slate-400">—</span>}</div>{item.match_score != null && <div className="mt-2 max-w-40"><div className="mb-1 flex items-center justify-between"><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${matchTone(item.match_score)}`}>{Math.round(item.match_score)}% match</span><span className="sr-only">Match score</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className={`h-full ${item.match_score >= 70 ? 'bg-emerald-500' : item.match_score >= 50 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${Math.min(100, Math.max(0, item.match_score))}%` }} /></div></div>}</td>
-                    <td className="whitespace-nowrap px-4 py-3 text-xs"><span className="flex items-center gap-1 text-slate-700 dark:text-slate-300"><Clock3 className="h-3 w-3" />{relativeAppliedTime(item.created_at)}</span><time className="mt-1 block text-slate-500" dateTime={item.created_at}>{new Date(item.created_at).toLocaleDateString()}</time></td>
+                    <td className="whitespace-nowrap px-4 py-3 text-xs"><span className="flex items-center gap-1 text-slate-700 dark:text-slate-300"><Clock3 className="h-3 w-3" />{relativeAppliedTime(item.created_at)}</span><time className="mt-1 block text-slate-500" dateTime={item.created_at}>{appliedDate(item.created_at)}</time></td>
                     <td className="px-4 py-3"><Badge status={item.display_status || item.status}>{item.display_status === 'EXPIRED' ? 'Expired' : item.status.replaceAll('_', ' ')}</Badge>{item.display_status === 'EXPIRED' && <p className="mt-1 max-w-36 text-xs text-amber-700 dark:text-amber-300">Interview completed. Update the status</p>}</td>
                     <td className="w-[190px] px-3 py-2">{candidateActions(item, 'stacked')}</td>
                   </tr>)}</tbody>
                 </table>
               </div>
-              <div className="grid gap-3 md:hidden">{items.map((item) => <article key={item.id} className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <div className="grid gap-3 md:hidden">{items.map((item) => <article key={item.id} className="glass-static rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
                 <div className="flex items-start gap-2"><CandidateAvatar name={item.student_name} /><div className="min-w-0 flex-1"><p className="truncate font-semibold">{item.student_name || 'Candidate'}</p><p className="truncate text-xs text-slate-500">{item.student_university || 'Education not provided'}</p><p className="mt-2 line-clamp-2 text-sm" title={item.internship_title || 'Internship'}>{item.internship_title || 'Internship'}</p></div><Badge status={item.display_status || item.status}>{item.display_status === 'EXPIRED' ? 'Expired' : item.status.replaceAll('_', ' ')}</Badge></div>
                 {item.display_status === 'EXPIRED' && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Interview completed. Update the status</p>}
                 <div className="mt-3 flex flex-wrap gap-1">{item.student_skills.slice(0, 6).map((skill) => <span key={skill} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] dark:bg-slate-800">{skill}</span>)}{item.student_skills.length > 6 && <span title={item.student_skills.join(', ')} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] dark:bg-slate-800">+{item.student_skills.length - 6} more</span>}</div>
                 {item.match_score != null && <span className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-bold ${matchTone(item.match_score)}`}>{Math.round(item.match_score)}% match</span>}
-                <p className="mt-2 text-xs text-slate-500">Applied {relativeAppliedTime(item.created_at)} · {new Date(item.created_at).toLocaleDateString()}</p>
+                <p className="mt-2 text-xs text-slate-500">Applied {relativeAppliedTime(item.created_at)} · {appliedDate(item.created_at)}</p>
                 <div className="mt-3 border-t border-slate-100 pt-2 dark:border-slate-800">{candidateActions(item, 'stacked')}</div>
               </article>)}</div>
               <div className="flex items-center justify-between gap-3">

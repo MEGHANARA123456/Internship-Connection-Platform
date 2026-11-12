@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.v1.dependencies import get_current_user, get_db
 from app.main import app
-from app.models import AuditLog, CompanyProfile, StudentProfile, User, UserRole
+from app.models import AuditLog, CompanyProfile, Internship, StudentProfile, User, UserRole
 from app.models.base import Base
 
 
@@ -181,3 +181,69 @@ async def test_company_directory_has_paginated_company_metrics(directory_db) -> 
     assert payload["items"][0]["user_id"] == 20
     assert payload["items"][0]["active_roles"] == 0
     assert payload["items"][0]["total_applicants"] == 0
+
+
+@pytest.mark.anyio
+async def test_company_directory_uses_latest_posting_location_and_searches_it(directory_db) -> None:
+    admin = _account("admin@example.test", UserRole.ADMIN, 1)
+    companies = [
+        _account("fallback@example.test", UserRole.COMPANY, 20),
+        _account("missing@example.test", UserRole.COMPANY, 21),
+    ]
+    async with directory_db() as db:
+        db.add_all(
+            [
+                admin,
+                *companies,
+                CompanyProfile(
+                    user_id=20,
+                    company_name="Fallback Inc",
+                    industry="Technology",
+                    location="",
+                ),
+                CompanyProfile(
+                    user_id=21,
+                    company_name="No Location Inc",
+                    industry="Finance",
+                    location=None,
+                ),
+                Internship(
+                    company_id=20,
+                    title="Older posting",
+                    description="Older listing",
+                    location="Pune",
+                    industry="Technology",
+                    duration_months=3,
+                    work_mode="ONSITE",
+                    deadline=date(2027, 1, 1),
+                    status="DRAFT",
+                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                ),
+                Internship(
+                    company_id=20,
+                    title="Most recent posting",
+                    description="Latest listing",
+                    location="Remote",
+                    industry="Technology",
+                    duration_months=3,
+                    work_mode="REMOTE",
+                    deadline=date(2027, 1, 1),
+                    status="DRAFT",
+                    created_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        await db.commit()
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        search_response = await client.get("/api/v1/admin/companies?q=Remote&page=1&page_size=10")
+        list_response = await client.get("/api/v1/admin/companies?page=1&page_size=10")
+
+    assert search_response.status_code == list_response.status_code == 200
+    searched = search_response.json()
+    assert searched["total"] == 1
+    assert searched["items"][0]["location"] == "Remote"
+    listed_by_id = {item["user_id"]: item for item in list_response.json()["items"]}
+    assert listed_by_id[20]["location"] == "Remote"
+    assert listed_by_id[21]["location"] == "Not provided"

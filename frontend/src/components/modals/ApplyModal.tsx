@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertCircle, Award, CheckCircle2, ChevronLeft, ChevronRight, FileText, Loader2, Send, Sparkles, Target } from 'lucide-react'
 import { api } from '../../api/client'
+import { formatINR } from '../../lib/currency'
 import { Button } from '../ui/Button'
 import { Modal } from '../ui/Modal'
 import { Textarea } from '../ui/Textarea'
@@ -257,7 +258,7 @@ export function ApplyModal({
                     {companyName && <p className="mt-1 text-sm text-indigo-700 dark:text-indigo-300">{companyName}</p>}
                     <dl className="mt-3 grid grid-cols-1 gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-3">
                       <div><dt className="font-semibold">Location</dt><dd>{location || 'Not specified'}</dd></div>
-                      <div><dt className="font-semibold">Stipend</dt><dd>{stipend == null ? 'Not specified' : `${stipend.toLocaleString()} / month`}</dd></div>
+                      <div><dt className="font-semibold">Stipend</dt><dd>{stipend == null ? 'Not specified' : `${formatINR(stipend)} / month`}</dd></div>
                       <div><dt className="font-semibold">Deadline</dt><dd>{formatDate(deadline)}</dd></div>
                     </dl>
                   </div>

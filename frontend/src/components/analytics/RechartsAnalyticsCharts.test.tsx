@@ -63,6 +63,23 @@ describe('Recharts analytics legends', () => {
     expect(screen.getByText('Future admin action')).toBeInTheDocument()
   })
 
+  it('renders stipend distribution bands in INR in both charts and tables', () => {
+    const rows = [
+      { name: '1-10000', count: 2 },
+      { name: '10001-25000', count: 3 },
+      { name: '25001+', count: 1 },
+    ]
+    const { unmount } = render(<MemoryRouter><RechartsAnalyticsCharts kind="stipend_distribution" label="Stipend distribution" rows={rows} viewAsTable /></MemoryRouter>)
+
+    expect(screen.getByText('₹1–₹10,000')).toBeInTheDocument()
+    expect(screen.getByText('₹10,001–₹25,000')).toBeInTheDocument()
+    expect(screen.getByText('₹25,001+')).toBeInTheDocument()
+    unmount()
+
+    render(<MemoryRouter><RechartsAnalyticsCharts kind="stipend_distribution" label="Stipend distribution" rows={rows} viewAsTable={false} /></MemoryRouter>)
+    expect(screen.getByRole('group', { name: /Stipend distribution/ })).toBeInTheDocument()
+  })
+
   it('uses distinct fixed work-mode colors for donut slices and matching legend swatches', () => {
     render(<MemoryRouter><RechartsAnalyticsCharts kind="work_modes" label="Work-mode split" rows={[
       { name: 'Remote', count: 4 },

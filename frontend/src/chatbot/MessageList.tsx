@@ -70,7 +70,7 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
       className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3"
     >
       {messages.map((message) => (
-        <article key={message.id} className={`max-w-[92%] rounded-2xl px-3 py-2.5 ${message.role === 'user' ? 'ml-auto bg-indigo-600 text-white' : 'mr-auto border border-slate-200 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'}`}>
+        <article key={message.id} className={`max-w-[92%] rounded-2xl px-3 py-2.5 ${message.role === 'user' ? 'ml-auto bg-indigo-600 text-white' : 'glass-static mr-auto border border-slate-200 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'}`}>
           <SafeText text={message.content} />
           {message.needsClarification && (
             <p role="status" className="mt-2 text-xs font-semibold text-amber-800 dark:text-amber-200">
@@ -100,11 +100,11 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
               </div>
             </div>
           )}
-          {uniqueByRoute(message.sources, new Set((message.links ?? []).map((link) => link.route))).length ? (
+          {uniqueByRoute(message.sources, new Set((message.links ?? []).map((link) => link.route))).slice(0, 1).length ? (
             <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-200/70 pt-2 text-[10px] dark:border-slate-600">
-              {uniqueByRoute(message.sources, new Set((message.links ?? []).map((link) => link.route))).map((source) => (
-                <Link key={source.id} to={source.route} className="rounded-full bg-indigo-50 px-2.5 py-1 font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-200 dark:hover:bg-indigo-900">
-                  Go to page: {source.title}
+              {uniqueByRoute(message.sources, new Set((message.links ?? []).map((link) => link.route))).slice(0, 1).map((source) => (
+                <Link key={source.id} to={source.route} title={source.title} className="rounded-full bg-indigo-50 px-2.5 py-1 font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-200 dark:hover:bg-indigo-900">
+                  Learn more
                 </Link>
               ))}
             </div>
@@ -164,7 +164,7 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
       ))}
       {copyError && <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">{copyError}</p>}
       {typing && (
-        <div role="status" aria-label="Assistant is typing" className="mr-auto flex gap-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
+        <div role="status" aria-label="Assistant is typing" className="glass-static mr-auto flex gap-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-500" />
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-500 [animation-delay:120ms]" />
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-500 [animation-delay:240ms]" />

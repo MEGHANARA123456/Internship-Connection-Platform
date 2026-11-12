@@ -110,7 +110,7 @@ export function PrivacyPolicyPage() {
           <h2 className="text-lg font-bold text-slate-900 dark:text-white">
             Cookies we use
           </h2>
-          <div className="overflow-x-auto">
+          <div className="glass-strong overflow-x-auto">
             <table className="w-full text-left text-xs sm:text-sm">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-700">

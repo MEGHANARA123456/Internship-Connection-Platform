@@ -217,7 +217,7 @@ export function CandidateActions({
           data-placement={placement}
           onKeyDown={handleMenuKeyDown}
           style={menuStyle}
-          className="z-[60] flex flex-col gap-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+          className="glass-strong z-[60] flex flex-col gap-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
         >
           {items}
         </div>,

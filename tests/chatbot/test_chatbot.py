@@ -1,23 +1,26 @@
-from datetime import datetime, timezone
 import json
 import logging
-from pathlib import Path
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.api.v1.dependencies import get_current_user_optional
 from app.chatbot.chatbot_config import ChatbotConfig, load_config, provider_configured
 from app.chatbot.guardrails import output_is_safe
+from app.chatbot.orchestrator import classify_intent
+from app.chatbot.prompts import system_prompt_for
 from app.chatbot.providers.anthropic import AnthropicProvider
 from app.chatbot.providers.base import ProviderPayload, ProviderResult
 from app.chatbot.providers.llm_http import LLMHTTPProvider
-from app.chatbot.orchestrator import classify_intent
-from app.chatbot.scope import decide_scope
 from app.chatbot.redaction import contains_secret, redact
 from app.chatbot.retriever import BM25Retriever, load_documents
+from app.chatbot.scope import decide_scope, fixed_reply
+from app.chatbot.tools.read_only import ToolResult
+from app.main import app
+from app.models import User, UserRole
+from app.schemas.chatbot import ChatAskRequest
 from app.services.audit import AuditEventSummary
 from app.services.chatbot_service import (
     ChatbotService,
@@ -27,9 +30,7 @@ from app.services.chatbot_service import (
     _suggested_followups,
     _truncate_answer,
 )
-from app.chatbot.prompts import system_prompt_for
-from app.schemas.chatbot import ChatAskRequest
-from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture
@@ -365,7 +366,7 @@ async def test_llm_mode_calls_openai_compatible_provider(monkeypatch) -> None:
 
     monkeypatch.setattr(service.provider, "_post", fake_post)
     result = await service.ask(
-        "How do students apply to an internship?",
+        "Explain the application timeline and recorded status events.",
         [],
         "student",
         "applications",
@@ -401,7 +402,7 @@ async def test_llm_payload_contains_only_redacted_question_and_history() -> None
     passage = next(
         item for item in service.retriever.retrieve(
             "How do students apply to an internship?", "student", top_k=8
-        ) if item.id == "applying"
+        ) if item.id.startswith("applying#")
     )
     await service._answer_with_provider(
         "How do I apply with email demo.student@example.test?",
@@ -517,7 +518,103 @@ def test_guest_retrieval_excludes_restricted_documents() -> None:
 def test_guest_can_retrieve_public_internship_search_help() -> None:
     results = BM25Retriever().retrieve("How do I search internships?", "guest")
     assert results
-    assert results[0].id == "search-filters"
+    assert results[0].id.startswith("search-filters#")
+
+
+def test_retrieval_returns_the_best_matching_section() -> None:
+    retriever = BM25Retriever()
+    imported = retriever.retrieve("How do I import assessment questions?", "admin")
+    restored = retriever.retrieve("How do I restore an archived topic?", "admin")
+
+    assert imported
+    assert imported[0].id == "admin-skill-assessments#import-assessment-questions"
+    assert "correct_option" in imported[0].text
+    assert restored
+    assert restored[0].id == "admin-skill-assessments#archive-and-restore-a-topic"
+    assert "Archived topics" in restored[0].text
+
+
+def test_shared_article_filters_company_only_sections() -> None:
+    retriever = BM25Retriever()
+    student_results = retriever.retrieve(
+        "How can a company move a candidate through workflow stages?",
+        "student",
+        minimum_score=0.1,
+        minimum_margin=0,
+    )
+    company_results = retriever.retrieve(
+        "How can a company move a candidate through workflow stages?",
+        "company",
+        minimum_score=0.1,
+        minimum_margin=0,
+    )
+
+    assert not any(item.id.endswith("#company-workflow-updates") for item in student_results)
+    assert any(item.id.endswith("#company-workflow-updates") for item in company_results)
+
+
+@pytest.mark.anyio
+async def test_curated_answers_are_role_scoped_and_handle_two_how_to_questions() -> None:
+    service = ChatbotService(config=_config())
+    admin = await service.ask(
+        "How do I restore an archived topic?",
+        [],
+        "admin",
+        "admin-skills",
+    )
+    student = await service.ask(
+        "How do I restore an archived topic?",
+        [],
+        "student",
+        "student-dashboard",
+    )
+    combined = await service.ask(
+        "How do I apply for an internship? How do I withdraw an application?",
+        [],
+        "student",
+        "opportunities",
+    )
+
+    assert "Archived topics" in admin.answer
+    assert admin.links == (("Skill Assessments", "/admin/skill-assessments"),)
+    assert "admin-skill-assessments" in admin.matched_ids
+    assert student.refused
+    assert student.category == "admin_only"
+    assert "choose Apply" in combined.answer
+    assert "withdraw action" in combined.answer
+    assert len(combined.answer.split()) < 120
+    assert combined.links == (("Applications", "/opportunities"),)
+
+
+@pytest.mark.parametrize(
+    ("question", "role", "category", "expected_text"),
+    [
+        ("today news updates", "student", "out_of_scope", "only help with InternSphere"),
+        ("how to kill", "student", "abuse", "can’t help with harming"),
+        ("private company information", "company", "privacy", "your postings"),
+    ],
+)
+def test_short_fixed_replies_cover_scope_privacy_and_abuse(
+    question: str,
+    role: str,
+    category: str,
+    expected_text: str,
+) -> None:
+    decision = decide_scope(question, [], 0.5, role)
+    assert decision.category == category
+    assert expected_text in fixed_reply(decision, role)
+
+
+def test_admin_analytics_is_restricted_to_administrators() -> None:
+    decision = decide_scope("Show admin analytics.", [], 0.5, "student")
+    assert decision.refused
+    assert decision.category == "admin_only"
+
+
+def test_self_harm_refusal_includes_supportive_guidance() -> None:
+    decision = decide_scope("I want to kill myself", [], 0.5, "student")
+    assert decision.category == "abuse"
+    assert "crisis line" in fixed_reply(decision, "student")
 
 
 def test_output_allows_safe_documented_query_routes_only() -> None:
@@ -526,6 +623,7 @@ def test_output_allows_safe_documented_query_routes_only() -> None:
         "Open /interviews?next=javascript:alert(1)",
         {"/interviews"},
     )
+    assert output_is_safe("Your badge is AI/ML Engineer.", set())
 
 
 def test_student_is_refused_admin_verification_queue_requests() -> None:
@@ -609,7 +707,7 @@ def test_admin_skill_assessment_knowledge_is_filtered_before_ranking() -> None:
         top_k=3,
     )
 
-    assert admin_results and admin_results[0].id == "admin-skill-assessments"
+    assert admin_results and admin_results[0].id.startswith("admin-skill-assessments#")
     assert "admin-skill-assessments" not in {item.id for item in student_results}
     decision = decide_scope("How do I manage assessment questions?", [], 0.5, "student")
     assert decision.refused and decision.category == "admin_only"
@@ -642,7 +740,7 @@ def test_role_prompts_are_separated_and_page_context_ranks_related_help() -> Non
         page_route="/company/applicants",
     )
     assert results
-    assert results[0].id == "company-hiring-pipeline"
+    assert results[0].id.startswith("company-hiring-pipeline#")
 
 
 def test_output_rejects_external_or_unapproved_routes() -> None:
@@ -663,7 +761,7 @@ async def test_invalid_provider_output_falls_back_to_curated_content(caplog) -> 
     passage = next(
         item for item in service.retriever.retrieve(
             "How do students apply to an internship?", "student", top_k=8
-        ) if item.id == "applying"
+        ) if item.id.startswith("applying#")
     )
     with caplog.at_level(logging.WARNING, logger="internsphere.chatbot"):
         answer, sources, links, used_fallback, needs_clarification = await service._answer_with_provider(
@@ -739,14 +837,14 @@ async def test_provider_failure_returns_retrieval_answer_with_notice(caplog) -> 
     service = ChatbotService(config=_config(mode="llm"), provider=FailedProvider())
     with caplog.at_level(logging.INFO, logger="internsphere.chatbot"):
         result = await service.ask(
-            "How do students apply to an internship?",
+            "How is the internship match percentage calculated?",
             [],
             "student",
             "applications",
         )
 
     assert result.answer
-    assert "Students apply to an internship" in result.answer
+    assert "match" in result.answer.casefold()
     assert "provider unavailable" not in result.answer
     request_log = next(record for record in caplog.records if record.message == "chatbot_request")
     assert request_log.chatbot_meta["path"] == "fallback"
@@ -846,6 +944,58 @@ def test_followup_suggestions_match_the_retrieved_topic() -> None:
     assert any("verified company" in item.lower() for item in suggestions)
     assert any("report" in item.lower() for item in suggestions)
     assert any("warning signs" in item.lower() for item in suggestions)
+
+
+def test_suggested_chips_resolve_to_evaluated_role_safe_answers() -> None:
+    records = json.loads((Path(__file__).parent / "eval_questions.yaml").read_text(encoding="utf-8"))
+    in_scope = [record for record in records if record["kind"] == "in_scope"]
+    evaluated_sources = {
+        role: {
+            record["expected_source"]
+            for record in in_scope
+            if record["role"] == role and record["expected_path"] == "docs"
+        }
+        for role in ("guest", "student", "company", "admin")
+    }
+    evaluated_tools = {
+        role: {
+            record["expected_tool"]
+            for record in in_scope
+            if record["role"] == role and record.get("expected_tool")
+        }
+        for role in ("guest", "student", "company", "admin")
+    }
+    retriever = BM25Retriever()
+
+    for record in in_scope:
+        role = record["role"]
+        matched_intent = record.get("expected_tool")
+        source_ids = (
+            (record["expected_source"],)
+            if record["expected_path"] == "docs"
+            else ()
+        )
+        suggestions = _suggested_followups(
+            role,
+            record["question"],
+            "home",
+            [],
+            source_ids,
+            [],
+            matched_intent=matched_intent,
+        )
+        for suggestion in suggestions:
+            intent = classify_intent(suggestion, role)
+            if intent.tool_name:
+                assert intent.tool_name in evaluated_tools[role], (record["id"], suggestion, intent)
+                continue
+            assert intent.category == "rag_help", (record["id"], suggestion, intent)
+            passages = retriever.retrieve(suggestion, role, top_k=1, minimum_score=0.5)
+            assert passages and passages[0].doc_id in evaluated_sources[role], (
+                record["id"],
+                suggestion,
+                passages,
+            )
 
 
 def test_frontend_and_backend_chatbot_boundaries_have_no_extra_application_imports() -> None:
@@ -991,7 +1141,10 @@ async def test_api_filters_knowledge_by_authenticated_role(monkeypatch) -> None:
                 json={"message": "How do administrators review moderation reports?"},
             )
         assert response.status_code == 200
-        assert "admin-moderation" in {source["id"] for source in response.json()["sources"]}
+        assert any(
+            source["id"].startswith("admin-moderation#")
+            for source in response.json()["sources"]
+        )
     finally:
         app.dependency_overrides.pop(get_current_user_optional, None)
 
@@ -1110,12 +1263,225 @@ async def test_empty_retrieval_suggests_help_topics_for_each_role(role, expected
     service = ChatbotService(config=_config(), retriever=EmptyRetriever())
     result = await service.ask("How do skill assessments work?", [], role, "home")
 
-    assert result.answer == "I don't have sufficient data to answer this question."
-    assert not result.refused
-    assert result.category == "low_confidence"
-    assert len(result.suggested_followups) == 3
-    assert all(topic.casefold() in " ".join(result.suggested_followups).casefold() for topic in expected_topics)
-    assert result.links == (("Help docs", "/#faq"),)
+    if role == "student":
+        assert "Open Skill Assessments" in result.answer
+        assert result.links == (("Skill history", "/skills/history"),)
+    else:
+        assert result.answer == "I don't have sufficient data to answer this question."
+        assert not result.refused
+        assert result.category == "low_confidence"
+        assert len(result.suggested_followups) == 3
+        assert all(topic.casefold() in " ".join(result.suggested_followups).casefold() for topic in expected_topics)
+        assert result.links == (("Help docs", "/#faq"),)
+
+
+async def _ask_chatbot_with_history(monkeypatch, user, message, history, tool_answers=None):
+    import app.chatbot.router as chatbot_router
+    from app.api.v1.dependencies import get_db
+
+    calls = []
+    answers = tool_answers or {}
+
+    async def execute(name, _args, authenticated_user, _db):
+        calls.append((name, authenticated_user.id, authenticated_user.role))
+        answer = answers.get(name, f"Live result for {name}.")
+        route = {
+            "student_application_counts": "/applications",
+            "student_applications": "/applications",
+            "student_interviews": "/interviews",
+            "student_recommended_internships": "/opportunities",
+            "student_skill_retake": "/skills/history",
+            "admin_skill_assessment_stats": "/admin/skill-assessments",
+            "admin_audit_events": "/admin/audit-logs",
+        }[name]
+        return ToolResult(name, answer, route)
+
+    monkeypatch.setattr(chatbot_router, "_service", ChatbotService(config=_config()))
+    monkeypatch.setattr(chatbot_router, "execute_read_tool", execute)
+    app.dependency_overrides[get_current_user_optional] = lambda: user
+    app.dependency_overrides[get_db] = lambda: object()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/chatbot/ask",
+                json={"message": message, "history": history, "page": "home"},
+            )
+        assert response.status_code == 200, response.text
+        return response.json(), calls
+    finally:
+        app.dependency_overrides.pop(get_current_user_optional, None)
+        app.dependency_overrides.pop(get_db, None)
+
+
+def _history_turn(role, content):
+    return {"role": role, "content": content}
+
+
+@pytest.mark.anyio
+async def test_admin_restore_question_ignores_previous_topic_count_answer(monkeypatch):
+    admin = User(id=701, email="admin@example.test", password_hash="unused", role=UserRole.ADMIN)
+    history = [
+        _history_turn("user", "how many topics in skill assessment"),
+        _history_turn("assistant", "There are 8 active topics and 24 assessment attempts."),
+    ]
+
+    response, calls = await _ask_chatbot_with_history(
+        monkeypatch,
+        admin,
+        "How do I restore an archived topic?",
+        history,
+    )
+
+    assert not calls
+    assert response["source_type"] == "docs"
+    assert any(
+        source["id"] == "admin-skill-assessments#archive-and-restore-a-topic"
+        for source in response["sources"]
+    )
+    assert "Archived topics" in response["answer"]
+    assert "8 active topics" not in response["answer"]
+
+
+@pytest.mark.anyio
+async def test_admin_pending_posting_help_ignores_verification_counts_answer(monkeypatch):
+    admin = User(id=702, email="admin@example.test", password_hash="unused", role=UserRole.ADMIN)
+    history = [
+        _history_turn("user", "How do I review company verification requests?"),
+        _history_turn("assistant", "Company verification counts: 2 pending and 5 verified."),
+    ]
+
+    response, calls = await _ask_chatbot_with_history(
+        monkeypatch,
+        admin,
+        "How do I review pending postings?",
+        history,
+    )
+
+    assert not calls
+    assert response["source_type"] == "docs"
+    assert any(source["id"] == "admin-moderation#review-pending-postings" for source in response["sources"])
+    assert "Jobs Queue" in response["answer"]
+    assert "verified" not in response["answer"].casefold()
+
+
+@pytest.mark.anyio
+async def test_admin_consecutive_help_and_live_questions_keep_distinct_intents(monkeypatch):
+    admin = User(id=703, email="admin@example.test", password_hash="unused", role=UserRole.ADMIN)
+    answers = {
+        "admin_skill_assessment_stats": "There are 8 active assessment topics.",
+        "admin_audit_events": "There are 3 recent audit events.",
+    }
+    history = []
+    first, first_calls = await _ask_chatbot_with_history(
+        monkeypatch,
+        admin,
+        "How do I review company verification requests?",
+        history,
+        answers,
+    )
+    history.extend((
+        _history_turn("user", "How do I review company verification requests?"),
+        _history_turn("assistant", first["answer"]),
+    ))
+    second, second_calls = await _ask_chatbot_with_history(
+        monkeypatch,
+        admin,
+        "how many topics in skill assessment",
+        history,
+        answers,
+    )
+    history.extend((
+        _history_turn("user", "how many topics in skill assessment"),
+        _history_turn("assistant", second["answer"]),
+    ))
+    third, third_calls = await _ask_chatbot_with_history(
+        monkeypatch,
+        admin,
+        "Explain recent audit events.",
+        history,
+        answers,
+    )
+
+    assert first["source_type"] == "docs"
+    assert second["answer"].startswith("There are 8 active assessment topics.")
+    assert third["answer"].startswith("There are 3 recent audit events.")
+    assert first_calls == []
+    assert [call[0] for call in second_calls] == ["admin_skill_assessment_stats"]
+    assert [call[0] for call in third_calls] == ["admin_audit_events"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "previous_question",
+    [
+        "Find internships matching my profile.",
+        "how many applications i have",
+    ],
+)
+async def test_student_retake_question_ignores_previous_live_answer(monkeypatch, previous_question):
+    student = User(id=704, email="student@example.test", password_hash="unused", role=UserRole.STUDENT)
+    history = [
+        _history_turn("user", previous_question),
+        _history_turn(
+            "assistant",
+            "Here are internships matching your profile; your assessment attempts are listed separately.",
+        ),
+    ]
+
+    response, calls = await _ask_chatbot_with_history(
+        monkeypatch,
+        student,
+        "When can I retake a skill assessment?",
+        history,
+        {"student_skill_retake": "Rule: 24 hours between attempts; at most 3 in 7 days."},
+    )
+
+    assert [call[0] for call in calls] == ["student_skill_retake"]
+    assert all(call[1] == student.id and call[2] == UserRole.STUDENT for call in calls)
+    assert "24 hours" in response["answer"]
+    assert "internships matching your profile" not in response["answer"]
+
+
+@pytest.mark.anyio
+async def test_student_application_followup_routes_to_interviews(monkeypatch):
+    student = User(id=705, email="student@example.test", password_hash="unused", role=UserRole.STUDENT)
+    first_question = "How many applications do I have?"
+    first, first_calls = await _ask_chatbot_with_history(
+        monkeypatch,
+        student,
+        first_question,
+        [],
+        {"student_application_counts": "You have 6 applications: 1 applied, 2 under review, 3 shortlisted."},
+    )
+    second, second_calls = await _ask_chatbot_with_history(
+        monkeypatch,
+        student,
+        "and interviews?",
+        [
+            _history_turn("user", first_question),
+            _history_turn("assistant", first["answer"]),
+        ],
+        {"student_interviews": "You have 2 upcoming interviews."},
+    )
+
+    assert [call[0] for call in first_calls] == ["student_application_counts"]
+    assert [call[0] for call in second_calls] == ["student_interviews"]
+    assert second["answer"] == "You have 2 upcoming interviews."
+
+
+@pytest.mark.anyio
+async def test_student_admin_only_help_stays_role_restricted(monkeypatch):
+    student = User(id=706, email="student@example.test", password_hash="unused", role=UserRole.STUDENT)
+    response, calls = await _ask_chatbot_with_history(
+        monkeypatch,
+        student,
+        "How do I review pending company verification requests?",
+        [],
+    )
+
+    assert not calls
+    assert response["refused"]
+    assert "administrators" in response["answer"]
 
 
 def test_eval_corpus_has_required_categories_and_size() -> None:
@@ -1125,11 +1491,11 @@ def test_eval_corpus_has_required_categories_and_size() -> None:
     }}
     in_scope = [record for record in records if record["kind"] == "in_scope"]
     assert len(records) >= 240
-    assert counts == {"in_scope": 222, "out_of_scope": 8, "injection": 5, "credential": 5}
+    assert counts == {"in_scope": 225, "out_of_scope": 8, "injection": 5, "credential": 5}
     assert {
         role: sum(record["role"] == role for record in in_scope)
         for role in ("guest", "student", "company", "admin")
-    } == {"guest": 42, "student": 60, "company": 60, "admin": 60}
+    } == {"guest": 43, "student": 61, "company": 60, "admin": 61}
     assert all(
         sum(record.get("role", "guest") == role for record in records) >= 60
         for role in ("guest", "student", "company", "admin")
@@ -1179,9 +1545,23 @@ async def test_chatbot_evaluation_recall_and_refusal_metrics(capsys) -> None:
         for record in relevant:
             role = record.get("role", "guest")
             if kind == "in_scope":
-                if record["expected_path"] == "live_data":
+                if record.get("expected_tool"):
                     intent = classify_intent(record["question"], role)
-                    passed = intent.category == "live_data" and intent.tool_name == record["expected_tool"]
+                    expected_category = record.get("expected_intent_category", "live_data")
+                    passed = (
+                        intent.category == expected_category
+                        and intent.tool_name == record["expected_tool"]
+                    )
+                    if record["expected_path"] == "docs":
+                        result = await service.ask(record["question"], [], role, "home")
+                        passed = passed and (
+                            record["expected_source"] in result.matched_ids
+                            and any(route in record["expected_links"] for _, route in result.links)
+                            and all(
+                                str(fact).casefold() in result.answer.casefold()
+                                for fact in record.get("answer_contains", [])
+                            )
+                        )
                 else:
                     result = await service.ask(record["question"], [], role, "home")
                     passed = (

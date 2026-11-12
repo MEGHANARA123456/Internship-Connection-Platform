@@ -6,27 +6,28 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException
-from sqlalchemy import case, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.api.v1.skills import (
+    ASSESSMENT_ATTEMPT_LIMIT,
+    ASSESSMENT_RETAKE_COOLDOWN,
+    RETENTION_WINDOW,
+)
 from app.models import (
     Application,
     AuditLog,
     ChatbotLowConfidenceLog,
     CompanyProfile,
-    Interview,
+    Conversation,
     Internship,
+    Interview,
     Message,
     Notification,
     Report,
     Resume,
-    Conversation,
+    SavedInternship,
     SkillAttempt,
     SkillBadge,
     SkillQuestion,
     SkillTopic,
-    SavedInternship,
     StudentProfile,
     User,
     UserRole,
@@ -36,9 +37,13 @@ from app.services.company_metrics import get_company_metrics
 from app.services.interview_display import (
     get_interview_state,
 )
+from fastapi import HTTPException
+from sqlalchemy import case, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 TOOL_ROLES = {
     "student_applications": UserRole.STUDENT,
+    "student_application_counts": UserRole.STUDENT,
     "student_interviews": UserRole.STUDENT,
     "student_notifications": UserRole.STUDENT,
     "student_profile_completeness": UserRole.STUDENT,
@@ -47,6 +52,7 @@ TOOL_ROLES = {
     "student_skill_assessments": UserRole.STUDENT,
     "student_unread_messages": UserRole.STUDENT,
     "student_skills_improvement": UserRole.STUDENT,
+    "student_skill_gap": UserRole.STUDENT,
     "student_skill_retake": UserRole.STUDENT,
     "company_applicants": UserRole.COMPANY,
     "company_shortlisted": UserRole.COMPANY,
@@ -132,20 +138,28 @@ async def _student_applications(db: AsyncSession, user: User) -> ToolResult:
         ("Rejected", ("REJECTED",)),
         ("Withdrawn", ("WITHDRAWN",)),
     )
-    breakdown = [
-        f"{label}: {sum(counts.get(status, 0) for status in statuses)}"
+    grouped_counts = {
+        label: sum(counts.get(status, 0) for status in statuses)
         for label, statuses in status_groups
-    ]
+    }
     known_statuses = {status for _, statuses in status_groups for status in statuses}
     other_count = sum(count for status, count in counts.items() if status not in known_statuses)
     if other_count:
-        breakdown.append(f"Other: {other_count}")
+        grouped_counts["Other"] = other_count
     answer = (
-        "You have no application records yet."
-        if not total
-        else f"You have {total} application(s). " + ", ".join(breakdown) + "."
+        f"You have {total} applications: "
+        + ", ".join(
+            f"{grouped_counts[label]} {label.casefold()}"
+            for label in ("Applied", "Under review", "Shortlisted", "Interview", "Offer", "Rejected")
+        )
+        + "."
     )
     return ToolResult("student_applications", answer, "/applications")
+
+
+async def _student_application_counts(db: AsyncSession, user: User) -> ToolResult:
+    result = await _student_applications(db, user)
+    return ToolResult("student_application_counts", result.answer, result.route)
 
 
 async def _student_interviews(db: AsyncSession, user: User) -> ToolResult:
@@ -380,28 +394,53 @@ async def _student_skills_improvement(db: AsyncSession, user: User) -> ToolResul
         latest_attempts.setdefault(topic, (status, score, passed))
 
     weak_topics = []
+    failed_topics = []
+    expired_topics = []
+    untaken_topics = []
+    passed_topics = []
     for topic, name in ready_topics.items():
         attempt = latest_attempts.get(topic)
         if attempt is None:
             weak_topics.append((101, f"{name} (not attempted yet)"))
+            untaken_topics.append(name)
             continue
         status, score, passed = attempt
         if status == "EXPIRED":
             weak_topics.append((100, f"{name} (latest attempt expired)"))
+            expired_topics.append(name)
         elif passed is False:
             weak_topics.append((score if score is not None else 0, f"{name} (latest score {score if score is not None else 'not recorded'}%)"))
+            failed_topics.append(name)
+        elif passed is True:
+            passed_topics.append(name)
     weak_topics.sort(key=lambda item: (item[0], item[1]))
+    now = datetime.now(timezone.utc)
+    verified_badges = list((await db.scalars(
+        select(SkillBadge)
+        .where(SkillBadge.student_id == user.id, SkillBadge.expires_at > now)
+        .order_by(SkillBadge.expires_at.desc(), SkillBadge.id.desc())
+    )).all())
     skills_text = ", ".join(dict.fromkeys(skills)) if skills else "No profile skills are listed yet"
-    improvement_text = (
-        ", ".join(topic for _, topic in weak_topics[:3])
-        if weak_topics
-        else "no failed, expired, or unattempted ready topics"
-    )
+    badges_text = ", ".join(badge.title for badge in verified_badges[:3]) or "none currently valid"
+    needs_attention = []
+    if failed_topics:
+        needs_attention.append("failed: " + ", ".join(failed_topics[:3]))
+    if expired_topics:
+        needs_attention.append("expired: " + ", ".join(expired_topics[:3]))
+    if untaken_topics:
+        needs_attention.append("not taken: " + ", ".join(untaken_topics[:3]))
+    improvement_text = "; ".join(needs_attention) or "no failed, expired, or untaken ready topics"
+    next_topics = ", ".join(name for _, name in weak_topics[:3]) or "none"
     answer = (
-        f"Your profile skills: {skills_text}. Areas to improve: {improvement_text}. "
-        "Take the lowest-scoring ready topics next."
+        f"Your profile skills: {skills_text}. Verified badges: {badges_text}. "
+        f"Needs attention: {improvement_text}. Suggested topics to take next: {next_topics}."
     )
     return ToolResult("student_skills_improvement", answer, "/profile/student")
+
+
+async def _student_skill_gap(db: AsyncSession, user: User) -> ToolResult:
+    result = await _student_skills_improvement(db, user)
+    return ToolResult("student_skill_gap", result.answer, "/skills/history")
 
 
 async def _student_skill_retake(db: AsyncSession, user: User) -> ToolResult:
@@ -412,37 +451,54 @@ async def _student_skill_retake(db: AsyncSession, user: User) -> ToolResult:
         .where(SkillAttempt.student_id == user.id)
         .order_by(SkillAttempt.started_at.desc(), SkillAttempt.id.desc())
     )).all())
-    answer = (
-        "You can retake a topic 24 hours after your previous attempt starts, with a maximum of 3 assessment attempts in any 7-day period."
-    )
-    if not attempts:
-        return ToolResult(
-            "student_skill_retake",
-            answer + " You have no recorded attempts, so you can start an available assessment now.",
-            "/profile/student",
-        )
-
-    latest = attempts[0]
-    same_topic_retry = _utc_datetime(latest.started_at) + timedelta(hours=24)
     weekly_attempts = [
         attempt for attempt in attempts
-        if _utc_datetime(attempt.started_at) >= now - timedelta(days=7)
+        if _utc_datetime(attempt.started_at) >= now - RETENTION_WINDOW
     ]
-    next_allowed = same_topic_retry
-    reason = f"your latest {latest.status.lower()} attempt for {latest.topic}"
-    if len(weekly_attempts) >= 3:
-        weekly_retry = _utc_datetime(weekly_attempts[-1].started_at) + timedelta(days=7)
-        if weekly_retry > next_allowed:
-            next_allowed = weekly_retry
-            reason = "the 3-attempt weekly limit"
-    if latest.status == "EXPIRED" or latest.passed is False:
-        outcome = "Your latest attempt was expired" if latest.status == "EXPIRED" else "Your latest attempt did not pass"
-        answer += f" {outcome} ({latest.topic})."
-    if now < next_allowed:
-        answer += f" You can try again after {_when(next_allowed)} because of {reason}."
+    weekly_retry = None
+    if len(weekly_attempts) >= ASSESSMENT_ATTEMPT_LIMIT:
+        weekly_retry = _utc_datetime(weekly_attempts[-1].started_at) + RETENTION_WINDOW
+    topics = list((await db.execute(
+        select(SkillTopic.slug, SkillTopic.name, SkillTopic.archived_at)
+        .order_by(SkillTopic.name, SkillTopic.slug)
+    )).all())
+    names = {slug: name for slug, name, _ in topics}
+    archived = {slug for slug, _, archived_at in topics if archived_at is not None}
+    latest_by_topic: dict[str, SkillAttempt] = {}
+    for attempt in attempts:
+        latest_by_topic.setdefault(attempt.topic, attempt)
+
+    answer = (
+        f"Rule: retake after {int(ASSESSMENT_RETAKE_COOLDOWN.total_seconds() // 3600)} hours "
+        f"from that topic's previous attempt; at most {ASSESSMENT_ATTEMPT_LIMIT} attempts "
+        f"in {RETENTION_WINDOW.days} days."
+    )
+    eligible_topics = sorted(set(names) | set(latest_by_topic))
+    if not eligible_topics:
+        answer += " You can start an available assessment now."
     else:
-        answer += " You are currently eligible to start an available assessment."
-    return ToolResult("student_skill_retake", answer, "/profile/student")
+        statuses = []
+        for topic in eligible_topics:
+            label = names.get(topic, topic)
+            if topic in archived:
+                statuses.append(f"{label}: archived")
+                continue
+            latest = latest_by_topic.get(topic)
+            eligible_at = (
+                _utc_datetime(latest.started_at) + ASSESSMENT_RETAKE_COOLDOWN
+                if latest is not None
+                else now
+            )
+            if weekly_retry is not None:
+                eligible_at = max(eligible_at, weekly_retry)
+            status = (
+                f"eligible {eligible_at.strftime('%b %d at %H:%M UTC')}"
+                if eligible_at > now
+                else "eligible now"
+            )
+            statuses.append(f"{label}: {status}")
+        answer += " " + "; ".join(statuses) + "."
+    return ToolResult("student_skill_retake", answer, "/skills/history")
 
 
 def _utc_datetime(value: datetime) -> datetime:
@@ -466,8 +522,16 @@ async def _student_recommended_internships(db: AsyncSession, user: User) -> Tool
         select(Internship, CompanyProfile.company_name)
         .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
         .where(
+            Internship.id.not_in(
+                select(Application.internship_id).where(
+                    Application.student_id == user.id,
+                )
+            )
+        )
+        .where(
             Internship.status == "PUBLISHED",
             Internship.deadline >= date.today(),
+            Internship.closed_at.is_(None),
         )
         .order_by(Internship.created_at.desc(), Internship.id.desc())
         # Bound the candidates scored per request to keep this read tool predictable.
@@ -487,13 +551,26 @@ async def _student_recommended_internships(db: AsyncSession, user: User) -> Tool
             internship.description,
             [item.strip() for item in re.split(r"[,;\n]", internship.skills or "") if item.strip()],
         )
-        if match["score"] is not None:
+        if match["score"] is not None and match["score"] > 0:
             matches.append((match["score"], internship, company_name, match["matched"]))
-    # Break equal scores by internship ID so the recommendations remain deterministic.
+    # Break equal scores by internship ID, then retain the best duplicate title/company pair.
     matches.sort(key=lambda item: (-item[0], item[1].id))
+    unique_matches = []
+    seen_roles: set[tuple[str, str]] = set()
+    for match in matches:
+        _, internship, company_name, _ = match
+        role_key = (
+            internship.title.strip().casefold(),
+            (company_name or "company name unavailable").strip().casefold(),
+        )
+        if role_key in seen_roles:
+            continue
+        seen_roles.add(role_key)
+        unique_matches.append(match)
+    matches = unique_matches
     matches = matches[:5]
     answer = (
-        "No open internships matched your profile skills."
+        "You've applied to or seen all the internships that match your skills right now. Browse more under Opportunities."
         if not matches
         else "Top open internships matching your profile: " + " ".join(
             f"{internship.title} at {company_name or 'company name unavailable'} "
@@ -548,7 +625,7 @@ async def _company_internships(db: AsyncSession, user: User, internship_id: int 
     pending = statuses.get("PENDING_APPROVAL", 0)
     other = max(0, sum(statuses.values()) - metrics["active_roles"] - pending - closed)
     answer = (
-        f"Your postings: {metrics['active_roles']} active, {pending} pending approval, "
+        f"You have {total} postings: {metrics['active_roles']} active, {pending} pending approval, "
         f"{closed} closed."
     )
     if other:
@@ -557,10 +634,10 @@ async def _company_internships(db: AsyncSession, user: User, internship_id: int 
         answer += " Recent postings: " + " ".join(
             f"{title}: {status.replace('_', ' ').title()}, {role_counts.get(role_id, 0)} applicants, "
             f"deadline {_when(deadline)}."
-            for role_id, title, status, deadline in rows
+            for role_id, title, status, deadline in rows[:3]
         )
-    if total > len(rows):
-        answer += f" +{total - len(rows)} more."
+    if total > min(len(rows), 3):
+        answer += f" +{total - min(len(rows), 3)} more."
     return ToolResult("company_internships", answer, "/company/jobs")
 
 
@@ -597,7 +674,7 @@ async def _company_applicants(
             postings = [posting for posting in postings if posting["id"] == internship_id]
         if postings:
             posting_summaries = []
-            for posting in postings[:MAX_ROWS]:
+            for posting in postings[:3]:
                 posting_statuses = ", ".join(
                     f"{status.replace('_', ' ').title()} {count}"
                     for status, count in sorted(posting["status_counts"].items())
@@ -607,8 +684,8 @@ async def _company_applicants(
                     f"({posting_statuses})."
                 )
             answer += " By posting: " + " ".join(posting_summaries)
-        if len(postings) > MAX_ROWS:
-            answer += f" +{len(postings) - MAX_ROWS} more postings."
+        if len(postings) > 3:
+            answer += f" +{len(postings) - 3} more postings."
     return ToolResult(
         "company_shortlisted" if shortlisted else "company_applicants",
         answer,
@@ -1164,6 +1241,7 @@ async def execute_read_tool(
     # Keep tool dispatch explicit so the allowlist above and its role mapping stay auditable.
     actions = {
         "student_applications": lambda: _student_applications(db, user),
+        "student_application_counts": lambda: _student_application_counts(db, user),
         "student_interviews": lambda: _student_interviews(db, user),
         "student_notifications": lambda: _student_notifications(db, user),
         "student_unread_messages": lambda: _student_unread_messages(db, user),
@@ -1172,6 +1250,7 @@ async def execute_read_tool(
         "student_recommended_internships": lambda: _student_recommended_internships(db, user),
         "student_skill_assessments": lambda: _student_skill_assessments(db, user),
         "student_skills_improvement": lambda: _student_skills_improvement(db, user),
+        "student_skill_gap": lambda: _student_skill_gap(db, user),
         "student_skill_retake": lambda: _student_skill_retake(db, user),
         "company_applicants": lambda: _company_applicants(db, user, internship_id),
         "company_shortlisted": lambda: _company_applicants(db, user, internship_id, True),

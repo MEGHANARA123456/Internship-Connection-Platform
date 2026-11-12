@@ -3,6 +3,7 @@ import { routes } from '../../lib/routes'
 import { Button } from '../ui/Button'
 import { Search, Building } from 'lucide-react'
 import { Badge } from '../ui/Badge'
+import { formatINR } from '../../lib/currency'
 import { scrollToSection } from '../../lib/scroll'
 
 export function StudentsSection() {
@@ -78,7 +79,7 @@ export function StudentsSection() {
                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400">NEW</span>
                        <Badge status="REMOTE">Remote</Badge>
                     </div>
-                    <span className="text-sm font-bold">$1200/mo</span>
+                    <span className="text-sm font-bold">{formatINR(12000)}/mo</span>
                   </div>
                   <div>
                     <h5 className="font-bold text-sm">Frontend Developer Intern</h5>
@@ -94,7 +95,7 @@ export function StudentsSection() {
                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400">NEW</span>
                        <Badge status="HYBRID">Hybrid</Badge>
                     </div>
-                    <span className="text-sm font-bold">$800/mo</span>
+                    <span className="text-sm font-bold">{formatINR(8000)}/mo</span>
                   </div>
                   <div>
                     <h5 className="font-bold text-sm">Marketing Coordinator</h5>

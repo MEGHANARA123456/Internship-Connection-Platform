@@ -17,7 +17,7 @@ from app.models import User, UserRole
 from .chatbot_config import load_config, provider_configured
 from .guardrails import is_role_capability_question
 from ..schemas.chatbot import ChatAskRequest, ChatAskResponse, ChatFeedbackRequest, ChatLink, ChatSource
-from .orchestrator import Intent, classify_intent_with_examples
+from .orchestrator import Intent, classify_intent_with_examples, resolve_followup
 from .rag.ingest import ingest_knowledge
 from .scope import ScopeDecision, decide_scope
 from .tools.read_only import execute_read_tool
@@ -98,6 +98,8 @@ async def ask(
             headers={"Retry-After": str(retry_after)},
         )
     history = [(turn.role.value, turn.content) for turn in body.history]
+    contextual_message = resolve_followup(body.message, history, body.page.value)
+    intent_message = contextual_message if contextual_message != body.message else body.message
     threshold = config.rag_min_score if config.rag_enabled else config.min_score
     preflight = decide_scope(body.message, [], threshold, role)
     if any(contains_secret(content) for _, content in history) and not contains_secret(body.message):
@@ -108,7 +110,7 @@ async def ask(
     intent = (
         Intent("out_of_scope", refusal_reason=preflight.refusal_reason)
         if preflight.refused and preflight.refusal_reason != "no_product_intent_or_knowledge_match"
-        else await classify_intent_with_examples(body.message, role, config.embedding_model)
+        else await classify_intent_with_examples(intent_message, role, config.embedding_model)
     )
     if intent.needs_clarification:
         return ChatAskResponse(
@@ -125,9 +127,9 @@ async def ask(
     if (
         config.mode == "llm"
         and not preflight.refused
-        and not is_role_capability_question(body.message)
+        and not is_role_capability_question(intent_message)
     ):
-        router_intent = await _service.classify_intent_hint(body.message, role)
+        router_intent = await _service.classify_intent_hint(intent_message, role)
         if router_intent == "both" and intent.tool_name:
             intent = replace(intent, category="both")
     if (
@@ -163,7 +165,7 @@ async def ask(
             live_route = "/login"
 
     result = await _service.ask(
-        body.message,
+        intent_message,
         history,
         role,
         body.page.value,

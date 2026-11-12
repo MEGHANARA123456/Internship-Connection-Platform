@@ -555,7 +555,7 @@ export function DesktopAnalysisVisuals({
   if ((loadError || !analytics) && !fullAnalyticsMenu) {
     return (
       <div className="space-y-4">
-        <div role="alert" className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+        <div role="alert" className="glass-static flex min-h-40 flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
           <p>Couldn't load pipeline analytics.</p>
           <Button size="sm" variant="outline" isLoading={isRefreshing} onClick={() => void fetchAnalytics()}>Retry</Button>
         </div>
@@ -569,7 +569,7 @@ export function DesktopAnalysisVisuals({
   }
 
   return (
-    <div className="w-full bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-xs space-y-6 transition-all relative">
+    <div className="glass-static w-full bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-xs space-y-6 transition-all relative">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="absolute top-4 right-4 z-50 p-2.5 px-3.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl shadow-lg flex items-center gap-2 text-xs font-semibold animate-in fade-in slide-in-from-top-2">
@@ -628,7 +628,7 @@ export function DesktopAnalysisVisuals({
                       id="analytics-view-menu"
                       role="menu"
                       aria-label="Analytics views"
-                      className="absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl dark:border-slate-800 dark:bg-slate-900"
+                      className="glass-strong absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl dark:border-slate-800 dark:bg-slate-900"
                     >
                       {fullAnalyticsMenu ? fullViewGroups.map((group) => (
                         <div key={group.label} role="group" aria-label={group.label} className="py-1">
@@ -690,7 +690,7 @@ export function DesktopAnalysisVisuals({
                 {performanceRange === 'all' ? 'All' : `${performanceRange} days`}<ChevronDown className="h-3 w-3" />
               </button>
               {isPerformanceRangeMenuOpen && (
-                <div role="menu" aria-label="Company analytics time range" className="absolute right-0 top-full z-30 mt-1 w-32 rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                <div role="menu" aria-label="Company analytics time range" className="glass-strong absolute right-0 top-full z-30 mt-1 w-32 rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900">
                   {(['30', '90', 'all'] as const).map((range) => (
                     <button key={range} type="button" role="menuitemradio" aria-checked={performanceRange === range} onClick={() => { setPerformanceRange(range); setIsPerformanceRangeMenuOpen(false) }} className="block w-full rounded-md px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">
                       {range === 'all' ? 'All' : `${range} days`}

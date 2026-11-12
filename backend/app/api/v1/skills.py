@@ -43,6 +43,8 @@ ASSESSMENT_MIX = {"EASY": 4, "MEDIUM": 4, "HARD": 2}
 DIFFICULTY_WEIGHTS = {"EASY": 1, "MEDIUM": 2, "HARD": 3}
 ASSESSMENT_DURATION = timedelta(minutes=15)
 RETENTION_WINDOW = timedelta(days=7)
+ASSESSMENT_ATTEMPT_LIMIT = 3
+ASSESSMENT_RETAKE_COOLDOWN = timedelta(hours=24)
 PASS_PERCENTAGE = 80
 TOPIC_INFO: dict[str, dict[str, str]] = {
     "python": {"name": "Python & Backend Architecture", "icon": "🐍", "badge_title": "Verified Python Specialist", "description": "Build dependable Python services and backend systems."},
@@ -856,12 +858,13 @@ async def start_assessment(
         .where(SkillAttempt.student_id == student_id, SkillAttempt.started_at >= now - RETENTION_WINDOW)
         .order_by(SkillAttempt.started_at)
     ))
-    if len(weekly_attempts) >= 3:
+    if len(weekly_attempts) >= ASSESSMENT_ATTEMPT_LIMIT:
         oldest_expiry = _utc(weekly_attempts[0].started_at) + RETENTION_WINDOW
         response = _assessment_limit_error(
             "WEEKLY_LIMIT",
             oldest_expiry,
-            "You have reached the limit of 3 assessment attempts in 7 days. Try again after the oldest attempt leaves the weekly window.",
+            f"You have reached the limit of {ASSESSMENT_ATTEMPT_LIMIT} assessment attempts in "
+            f"{RETENTION_WINDOW.days} days. Try again after the oldest attempt leaves the weekly window.",
             now,
         )
         if expired_attempt_closed:
@@ -875,12 +878,13 @@ async def start_assessment(
         .limit(1)
     )
     if latest_for_topic is not None:
-        retry_at = _utc(latest_for_topic.started_at) + timedelta(hours=24)
+        retry_at = _utc(latest_for_topic.started_at) + ASSESSMENT_RETAKE_COOLDOWN
         if now < retry_at:
             response = _assessment_limit_error(
                 "COOLDOWN",
                 retry_at,
-                "You can retake this topic 24 hours after your previous attempt.",
+                f"You can retake this topic {int(ASSESSMENT_RETAKE_COOLDOWN.total_seconds() // 3600)} "
+                "hours after your previous attempt.",
                 now,
             )
             if expired_attempt_closed:

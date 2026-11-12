@@ -4,7 +4,7 @@ import { Input } from '../ui/Input'
 import { Button } from '../ui/Button'
 import { Badge } from '../ui/Badge'
 import { api } from '../../api/client'
-import { Lock, CheckCircle2, AlertCircle, Eye, EyeOff, Mail, ShieldCheck, KeyRound, Smartphone, ShieldAlert } from 'lucide-react'
+import { Lock, CheckCircle2, AlertCircle, Mail, ShieldCheck, KeyRound, Smartphone, ShieldAlert } from 'lucide-react'
 
 interface AccountSecurityCardProps {
   userEmail?: string
@@ -16,8 +16,6 @@ export function AccountSecurityCard({ userEmail, role: _role = 'User' }: Account
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [showCurrent, setShowCurrent] = useState(false)
-  const [showNew, setShowNew] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [updateSuccess, setUpdateSuccess] = useState('')
   const [updateError, setUpdateError] = useState('')
@@ -497,47 +495,37 @@ export function AccountSecurityCard({ userEmail, role: _role = 'User' }: Account
           <div className="relative">
             <Input
               label="Current Password"
-              type={showCurrent ? 'text' : 'password'}
+              type="password"
               placeholder="Enter current password"
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
+              className="[&::-ms-reveal]:hidden [&::-ms-clear]:hidden"
+              passwordToggleTabIndex={0}
             />
-            <button
-              type="button"
-              onClick={() => setShowCurrent(!showCurrent)}
-              className="absolute right-3 top-8 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
-              tabIndex={-1}
-            >
-              {showCurrent ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="relative">
               <Input
                 label="New Password"
-                type={showNew ? 'text' : 'password'}
+                type="password"
                 placeholder="At least 8 characters"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
+                className="[&::-ms-reveal]:hidden [&::-ms-clear]:hidden"
+                passwordToggleTabIndex={0}
               />
-              <button
-                type="button"
-                onClick={() => setShowNew(!showNew)}
-                className="absolute right-3 top-8 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
-                tabIndex={-1}
-              >
-                {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
             </div>
 
             <div>
               <Input
                 label="Confirm New Password"
-                type={showNew ? 'text' : 'password'}
+                type="password"
                 placeholder="Re-enter new password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
+                className="[&::-ms-reveal]:hidden [&::-ms-clear]:hidden"
+                passwordToggleTabIndex={0}
               />
             </div>
           </div>

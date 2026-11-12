@@ -46,6 +46,7 @@ import { useAuthStore } from '../store/auth'
 import { KpiCard } from '../components/dashboard/KpiCard'
 import { confirmAction, showToast } from '../lib/feedback'
 import { routes } from '../lib/routes'
+import { formatINR } from '../lib/currency'
 import { AdminSkillTopicsPanel } from './admin/AdminSkillTopicsPanel'
 
 // --- 1. Admin Dashboard ---
@@ -640,7 +641,7 @@ export function AdminUsersPage() {
       )}
 
       {/* Filter Bar */}
-      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-900 sm:flex-row">
+      <div className="glass-strong flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-900 sm:flex-row">
         <SearchBox
           ariaLabel="Search users by email"
           value={search}
@@ -661,7 +662,7 @@ export function AdminUsersPage() {
       ) : filtered.length === 0 ? (
         <EmptyState title="No matching users found" description="Adjust your filters to see more results." />
       ) : (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xs dark:border-slate-800 dark:bg-slate-900">
+        <div className="glass-strong overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xs dark:border-slate-800 dark:bg-slate-900">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1120px] table-fixed text-left text-xs">
               <colgroup>
@@ -1199,7 +1200,7 @@ export function AdminModerationPage() {
                     <span>{job.company_name || `Company #${job.company_id}`}</span>
                   </div>
                   <p className="text-xs text-slate-500">
-                    {job.industry} • {job.location} • ${job.stipend}/mo •{' '}
+                    {job.industry} • {job.location} • {job.stipend == null ? 'Unpaid' : `${formatINR(job.stipend)}/mo`} •{' '}
                     {job.duration_months} mo • {job.work_mode}
                   </p>
                   <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-md border border-slate-100 mt-2 leading-relaxed">
@@ -1447,7 +1448,7 @@ export function AdminCompaniesPage() {
   return (
     <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
       <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Company Directory</h1><p className="mt-1 text-xs text-slate-500">Review verification status and posting activity.</p></div><Link to={routes.admin}><Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>Dashboard</Button></Link></div>
-      {loading ? <TableSkeleton /> : companies.length === 0 ? <EmptyState title="No companies found" description="Registered companies will appear here." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Company</th><th className="p-3">Industry</th><th className="p-3">Verification</th><th className="p-3">Postings</th><th className="p-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map((company) => <tr key={company.id}><td className="p-3 font-semibold text-slate-800"><Link className="hover:text-indigo-600" to={routes.adminCompanyPostings(company.user_id)}>{company.company_name}</Link></td><td className="p-3 text-slate-600">{company.industry}</td><td className="p-3"><Badge status={company.verification_status}>{company.verification_status}</Badge></td><td className="p-3 text-slate-600">{company.posting_count}</td><td className="p-3 text-right"><div className="flex justify-end gap-2">{company.verification_status !== 'VERIFIED' && <Button size="sm" variant="primary" isLoading={actionId === company.user_id} disabled={actionId !== null && actionId !== company.user_id} onClick={() => void verify(company.user_id, 'VERIFIED')} leftIcon={<CheckCircle2 className="h-3.5 w-3.5" />}>Verify</Button>}{company.verification_status !== 'REJECTED' && <Button size="sm" variant="outline" className="text-rose-600" isLoading={actionId === company.user_id} disabled={actionId !== null && actionId !== company.user_id} onClick={() => void verify(company.user_id, 'REJECTED')} leftIcon={<XCircle className="h-3.5 w-3.5" />}>Reject</Button>}</div></td></tr>)}</tbody></table></div>}
+      {loading ? <TableSkeleton /> : companies.length === 0 ? <EmptyState title="No companies found" description="Registered companies will appear here." /> : <div className="glass-strong overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Company</th><th className="p-3">Industry</th><th className="p-3">Verification</th><th className="p-3">Postings</th><th className="p-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map((company) => <tr key={company.id}><td className="p-3 font-semibold text-slate-800"><Link className="hover:text-indigo-600" to={routes.adminCompanyPostings(company.user_id)}>{company.company_name}</Link></td><td className="p-3 text-slate-600">{company.industry}</td><td className="p-3"><Badge status={company.verification_status}>{company.verification_status}</Badge></td><td className="p-3 text-slate-600">{company.posting_count}</td><td className="p-3 text-right"><div className="flex justify-end gap-2">{company.verification_status !== 'VERIFIED' && <Button size="sm" variant="primary" isLoading={actionId === company.user_id} disabled={actionId !== null && actionId !== company.user_id} onClick={() => void verify(company.user_id, 'VERIFIED')} leftIcon={<CheckCircle2 className="h-3.5 w-3.5" />}>Verify</Button>}{company.verification_status !== 'REJECTED' && <Button size="sm" variant="outline" className="text-rose-600" isLoading={actionId === company.user_id} disabled={actionId !== null && actionId !== company.user_id} onClick={() => void verify(company.user_id, 'REJECTED')} leftIcon={<XCircle className="h-3.5 w-3.5" />}>Reject</Button>}</div></td></tr>)}</tbody></table></div>}
     </div>
   )
 }
@@ -1540,7 +1541,7 @@ export function AdminAuditLogsPage() {
   return (
     <div className="max-w-7xl mx-auto w-full space-y-6 px-4 py-8 sm:px-6 lg:px-8">
       <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-900">Audit Logs</h1><p className="mt-1 text-xs text-slate-500">Search administrative actions and inspect their metadata.</p></div><Link to={routes.admin}><Button variant="outline" size="sm" leftIcon={<LayoutDashboard className="h-3.5 w-3.5" />}>Dashboard</Button></Link></div>
-      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:flex-wrap sm:items-center"> <input value={actor} onChange={(event) => { setPage(1); setActor(event.target.value) }} placeholder="Actor email" className="h-10 min-w-0 flex-[1.5] rounded-lg border border-slate-300 px-3 text-sm" />
+      <div className="glass-strong flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:flex-wrap sm:items-center"> <input value={actor} onChange={(event) => { setPage(1); setActor(event.target.value) }} placeholder="Actor email" className="glass-input h-10 min-w-0 flex-[1.5] rounded-lg border border-slate-300 px-3 text-sm" />
         <DropdownSelect className="min-w-0 flex-1" aria-label="Filter audit logs by action" value={action} onChange={(value) => { setPage(1); setAction(value) }} options={[
           { label: 'All actions', value: '' },
           { label: 'User suspended', value: 'user_suspended' },
@@ -1572,9 +1573,9 @@ export function AdminAuditLogsPage() {
           className="h-10 min-w-0 flex-1"
         />
 
-        <label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-slate-500">From<input type="date" value={dateFrom} onChange={(event) => { setPage(1); setDateFrom(event.target.value) }} className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm text-slate-700" />
-        </label><label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-slate-500">To<input type="date" value={dateTo} onChange={(event) => { setPage(1); setDateTo(event.target.value) }} className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm text-slate-700" /></label></div>
-      {logs.length === 0 ? <EmptyState icon={ClipboardList} title="No audit events" description="No actions match the current filters." /> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Actor</th><th className="p-3">Action</th><th className="p-3">Target</th><th className="p-3">Timestamp</th><th className="p-3" /></tr></thead><tbody className="divide-y divide-slate-100">{logs.map((log) => {
+        <label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-slate-500">From<input type="date" value={dateFrom} onChange={(event) => { setPage(1); setDateFrom(event.target.value) }} className="glass-input h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm text-slate-700" />
+        </label><label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-slate-500">To<input type="date" value={dateTo} onChange={(event) => { setPage(1); setDateTo(event.target.value) }} className="glass-input h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm text-slate-700" /></label></div>
+      {logs.length === 0 ? <EmptyState icon={ClipboardList} title="No audit events" description="No actions match the current filters." /> : <div className="glass-strong overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-xs"><thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr><th className="p-3">Actor</th><th className="p-3">Action</th><th className="p-3">Target</th><th className="p-3">Timestamp</th><th className="p-3" /></tr></thead><tbody className="divide-y divide-slate-100">{logs.map((log) => {
         const typeLabel = targetLabel(log.target_type)
         const isDeleted = String(log.target_label || '').startsWith('Deleted ')
         const resolvedTarget = log.target_label
@@ -1634,7 +1635,7 @@ type AdminPageNotice = {
 
 type AdminPageNoticeInput = Omit<AdminPageNotice, 'id'>
 
-const SKILL_FORM_FIELD_CLASS = 'h-10 w-full rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500 disabled:cursor-not-allowed disabled:opacity-60'
+const SKILL_FORM_FIELD_CLASS = 'glass-input h-10 w-full rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500 disabled:cursor-not-allowed disabled:opacity-60'
 
 const EMPTY_SKILL_QUESTION = {
   topic: '',
@@ -2313,7 +2314,7 @@ export function AdminSkillAssessmentsPage() {
               <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">Review legacy admin-entered answers. No key is changed unless you choose “Fix key.”</p>
             </div>
           </div>
-          <div className="overflow-x-auto rounded-lg border border-amber-200 dark:border-amber-900">
+          <div className="glass-strong overflow-x-auto rounded-lg border border-amber-200 dark:border-amber-900">
             <table className="w-full min-w-[760px] text-left text-sm">
               <thead className="bg-white/70 text-xs uppercase text-slate-600 dark:bg-slate-900/70 dark:text-slate-300">
                 <tr><th className="p-3">Question</th><th className="p-3">Numbered options</th><th className="p-3">Review answer key</th></tr>
@@ -2547,7 +2548,7 @@ export function AdminSkillAssessmentsPage() {
         ) : visibleQuestions.length === 0 ? (
           <EmptyState icon={Award} title="No questions found" description={`Add a question to ${selectedTopic || 'this'} topic.`} />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+          <div className="glass-strong overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
             <table className="w-full min-w-[760px] text-left text-xs">
               <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800 dark:text-slate-300"><tr><th className="p-3">Topic / prompt</th><th className="p-3">Options</th><th className="p-3">Type / difficulty</th><th className="p-3">State</th><th className="p-3 text-right">Actions</th></tr></thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">

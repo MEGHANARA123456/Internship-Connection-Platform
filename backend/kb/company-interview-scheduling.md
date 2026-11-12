@@ -13,10 +13,18 @@ links:
     route: "/interviews"
 ---
 ## Set up the interview
-Open Applicants at `/company/applicants` or Hiring Pipeline at `/company/pipeline`, find the candidate, and choose Schedule interview from the candidate's Actions menu. This action is available when the candidate is shortlisted or already at Interview Scheduled, so use the allowed stage shown for that candidate. Set a future Date & Time (or choose a Quick Recommended Slot), select a 30, 45, or 60 minute duration, and choose Video Call, Phone Call, or In Person. Add optional Instructions / Notes for Candidate, then submit Schedule Interview. To change an existing meeting, use the reschedule flow for that interview.
+To schedule an interview, choose Schedule interview from an eligible candidate's Actions menu.
+1. Open Applicants at `/company/applicants` or Hiring Pipeline at `/company/pipeline` and find the candidate.
+2. Choose Schedule interview when the candidate is shortlisted or already at Interview Scheduled.
+3. Set a future date and time or choose a Quick Recommended Slot; select a 30, 45, or 60 minute duration and an interview format.
+4. Add optional candidate instructions and submit. Use the interview's reschedule action to change an existing meeting.
 
 ## Meeting links and notices
-For an external meeting link, enter a valid http(s) meeting link using an http:// or https:// URL. Leave the link blank to use the InternSphere video room for an in-app video interview. The student receives an in-app notification and email after scheduling. Upcoming interviews can be reviewed at `/interviews?tab=upcoming`; the legacy company interview route `/company/interviews` redirects there.
+To use a meeting link, enter a valid `http://` or `https://` URL, or leave it blank for the InternSphere video room.
+1. Choose Video Call, Phone Call, or In Person.
+2. Enter an external meeting link for an external video call, or leave it blank to use the in-app video room.
+3. Submit the schedule; the student receives an in-app notification and email.
+4. Review upcoming interviews at `/interviews?tab=upcoming`; `/company/interviews` redirects there.
 
 ## Reminders
 InternSphere sends the student in-app interview reminders approximately 24 hours and 1 hour before a scheduled interview. Keep the date, time, format, and meeting details current so the student has the right information.

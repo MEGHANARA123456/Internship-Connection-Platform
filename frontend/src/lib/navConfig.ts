@@ -21,7 +21,13 @@ import {
 import { routes } from './routes'
 
 export type NavigationRole = 'STUDENT' | 'COMPANY' | 'ADMIN' | 'GUEST'
-export type NavigationCountSource = 'invites_new' | 'application_updates' | 'saved' | 'notifications'
+export type NavigationCountSource =
+  | 'invites_new'
+  | 'application_updates'
+  | 'saved'
+  | 'notifications'
+  | 'new_applicants'
+  | 'upcoming_interviews'
 
 export interface NavigationItem {
   id: string
@@ -58,11 +64,11 @@ export const navigationConfig: Record<NavigationRole, { topBar: NavigationItem[]
       { id: 'company-profile', label: 'Company Profile', route: routes.companyProfile, icon: User },
       { id: 'company-jobs', label: 'My Internships', route: routes.companyJobs(), icon: Briefcase },
       { id: 'post-internship', label: 'Post Internship', route: routes.newCompanyInternship, icon: PlusCircle },
-      { id: 'company-applicants', label: 'Applicants', route: routes.companyApplicants(), icon: Users },
+      { id: 'company-applicants', label: 'Applicants', route: routes.companyApplicants(), icon: Users, countSource: 'new_applicants' },
       { id: 'company-pipeline', label: 'Hiring Pipeline', route: routes.companyPipeline, icon: BarChart3 },
-      { id: 'company-interviews', label: 'Interviews', route: routes.interviews({ tab: 'upcoming' }), icon: Calendar },
+      { id: 'company-interviews', label: 'Interviews', route: routes.interviews({ tab: 'upcoming' }), icon: Calendar, countSource: 'upcoming_interviews' },
       { id: 'company-shortlisted', label: 'Shortlisted', route: routes.companyShortlisted, icon: CheckCircle2 },
-      { id: 'company-notifications', label: 'Notifications', route: routes.notifications, icon: Bell },
+      { id: 'company-notifications', label: 'Notifications', route: routes.notifications, icon: Bell, countSource: 'notifications' },
       { id: 'company-analytics', label: 'Analytics', route: routes.companyAnalytics, icon: BarChart3 },
       { id: 'company-settings', label: 'Settings', route: routes.companySettings, icon: Lock },
       { id: 'company-sign-out', label: 'Sign out', icon: LogOut, action: 'sign-out' },

@@ -92,7 +92,7 @@ export function ChartLegend({
               id={overflowId}
               role="dialog"
               aria-label="More chart legend entries"
-              className="basis-full rounded-lg border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900"
+              className="glass-strong basis-full rounded-lg border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900"
             >
               <div className="flex flex-wrap gap-x-4 gap-y-2">
                 {items.slice(6).map((item) => {

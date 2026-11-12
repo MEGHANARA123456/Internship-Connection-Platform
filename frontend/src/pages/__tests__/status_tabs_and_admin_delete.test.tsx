@@ -272,14 +272,14 @@ describe('ApplicationsPage status menu and pagination', () => {
 })
 
 describe('ApplicationTimelinePage', () => {
-  it('renders the ordered timeline, interview actions, and secure Gmail link', async () => {
+  it('opens email in the private mailbox and keeps Gmail as a separate action', async () => {
     vi.mocked(api.get).mockImplementation(async (path) => {
       if (path === '/applications/77/timeline') return {
         data: {
           summary: { id: 77, status: 'INTERVIEW_SCHEDULED', title: 'Software Intern', company_name: 'Example Company', applied_at: '2026-06-01T12:00:00Z' },
           steps: [
             { key: 'APPLIED', label: 'Applied', state: 'done', timestamp: '2026-06-01T12:00:00Z' },
-            { key: 'INTERVIEW_SCHEDULED', label: 'Interview scheduled', state: 'current', timestamp: '2026-06-04T12:00:00Z', interview: { date: '2026-06-10', time: '12:00', type: 'VIDEO', link: 'https://meet.example.com/room' }, emails: [{ id: 1, gmail_url: 'https://mail.google.com/mail/?authuser=a%40gmail.com#search/rfc822msgid%3Aabc' }] },
+            { key: 'INTERVIEW_SCHEDULED', label: 'Interview scheduled', state: 'current', timestamp: '2026-06-04T12:00:00Z', interview: { date: '2026-06-10', time: '12:00', type: 'VIDEO', link: 'https://meet.example.com/room' }, emails: [{ id: 1, gmail_url: 'https://mail.google.com/mail/?authuser=a%40gmail.com#search/%22IS-1%22%20in%3Aanywhere' }] },
           ],
         },
       } as never
@@ -298,8 +298,9 @@ describe('ApplicationTimelinePage', () => {
     expect(screen.getByText('Applied')).toBeInTheDocument()
     expect(screen.getByText('Interview scheduled')).toBeInTheDocument()
     expect(screen.getByText('Interview details')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'View Email' })).toHaveAttribute('rel', 'noopener noreferrer')
-    expect(screen.getByRole('link', { name: 'View Email' })).toHaveAttribute('target', '_blank')
+    expect(screen.getByRole('link', { name: 'View Email' })).toHaveAttribute('href', '/notifications?email_id=1')
+    expect(screen.getByRole('link', { name: 'Open in Gmail' })).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(screen.getByRole('link', { name: 'Open in Gmail' })).toHaveAttribute('target', '_blank')
     expect(screen.queryByText(/sign in to the recipient Gmail account/i)).not.toBeInTheDocument()
   })
 
@@ -422,7 +423,7 @@ describe('InterviewsPage status tabs and pagination', () => {
   })
 
   describe('Email actions', () => {
-    it('opens private email content in-app and offers Gmail as a secondary action', async () => {
+    it('shows mailbox emails without a View Email button and preserves the Gmail action', async () => {
       useAuthStore.setState({
         session: {
           accessToken: 'student-access',
@@ -449,7 +450,6 @@ describe('InterviewsPage status tabs and pagination', () => {
         if (path === '/me/emails') {
           return { data: [
             { id: 1, subject: 'Interview update', to: 'student@gmail.com', from: 'recruiter@example.com', created_at: '2026-06-01T12:00:00Z', gmail_url: 'https://mail.google.com/mail/?authuser=student%40gmail.com#search/id', body: 'Invite' },
-            { id: 2, subject: 'Demo update', to: 'student@gmail.com', from: 'noreply@internship.local', created_at: '2026-06-01T11:00:00Z', gmail_url: null, body: 'Demo' },
           ] } as never
         }
         if (path === '/emails/1') {
@@ -470,19 +470,43 @@ describe('InterviewsPage status tabs and pagination', () => {
       })
 
       render(<MemoryRouter><NotificationsPage /></MemoryRouter>)
-      fireEvent.click(await screen.findByRole('button', { name: 'View Email' }))
-      expect(await screen.findByText('Your interview is scheduled.')).toBeInTheDocument()
-      expect(screen.getByText('From:')).toBeInTheDocument()
-      expect(screen.getByText('To:')).toBeInTheDocument()
-      expect(screen.getByText('Subject:')).toBeInTheDocument()
-      fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }))
-
       fireEvent.click(screen.getByRole('button', { name: /My Direct Emails/ }))
-      fireEvent.click(await screen.findByRole('button', { name: 'View Email' }))
-      expect(await screen.findByText('Your interview is scheduled.')).toBeInTheDocument()
+      expect(await screen.findByText('Interview update')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /View email:/i })).not.toBeInTheDocument()
       const gmailLink = screen.getByRole('link', { name: 'Open in Gmail' })
       expect(gmailLink).toHaveAttribute('href', expect.stringContaining('mail.google.com'))
       expect(gmailLink).toHaveAttribute('rel', 'noopener noreferrer')
+      expect(api.get).not.toHaveBeenCalledWith('/emails/1')
+    })
+
+    it('opens the requested private email from an application timeline link', async () => {
+      vi.mocked(api.get).mockImplementation(async (path) => {
+        if (path === '/notifications' || path === '/me/emails') return { data: [] } as never
+        if (path === '/emails/1') {
+          return {
+            data: {
+              id: 1,
+              from: 'recruiter@example.com',
+              to: 'student@example.com',
+              subject: 'Interview update',
+              created_at: '2026-06-01T12:00:00Z',
+              body: 'Your interview is scheduled.',
+              html: null,
+              gmail_url: null,
+            },
+          } as never
+        }
+        return { data: [] } as never
+      })
+
+      render(
+        <MemoryRouter initialEntries={['/notifications?email_id=1']}>
+          <NotificationsPage />
+        </MemoryRouter>,
+      )
+
+      expect(await screen.findByText('Your interview is scheduled.')).toBeInTheDocument()
+      expect(screen.getAllByText('Interview update').length).toBeGreaterThan(0)
       expect(api.get).toHaveBeenCalledWith('/emails/1')
     })
   })

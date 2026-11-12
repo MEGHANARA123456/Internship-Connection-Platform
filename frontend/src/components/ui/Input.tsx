@@ -6,10 +6,11 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
   label?: string
   error?: string
   helperText?: string
+  passwordToggleTabIndex?: number
 }
 
 export const Input = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, type = 'text', label, error, helperText, id, ...props }, ref) => {
+  ({ className, type = 'text', label, error, helperText, id, passwordToggleTabIndex = -1, ...props }, ref) => {
     const inputId = id || props.name || Math.random().toString(36).substring(2, 9)
     const [showPassword, setShowPassword] = useState(false)
     const isPassword = type === 'password'
@@ -29,10 +30,10 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
             type={effectiveType}
             ref={ref}
             className={cn(
-              'flex h-10 w-full rounded-lg border bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 transition-all',
+              'glass-input flex h-10 w-full rounded-lg border bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 transition-all',
               isPassword && 'pr-10',
               error
-                ? 'border-rose-400 focus-visible:ring-rose-400 bg-rose-50/20'
+                ? 'glass-input-error border-rose-400 focus-visible:ring-rose-400 bg-rose-50/20'
                 : 'border-slate-300 dark:border-slate-700 focus-visible:ring-indigo-500 focus-visible:border-indigo-500 hover:border-slate-400',
               'disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500',
               className
@@ -46,7 +47,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors p-1 rounded-md focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
               aria-label={showPassword ? 'Hide password' : 'Show password'}
               title={showPassword ? 'Hide password' : 'Show password'}
-              tabIndex={-1}
+              tabIndex={passwordToggleTabIndex}
             >
               {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
@@ -60,4 +61,3 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
 )
 
 Input.displayName = 'Input'
-

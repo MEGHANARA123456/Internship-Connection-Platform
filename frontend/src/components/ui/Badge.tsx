@@ -57,7 +57,7 @@ export function Badge({ className, variant, status, children, ...props }: BadgeP
   return (
     <span
       className={cn(
-        'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border capitalize whitespace-nowrap',
+        'glass-badge inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border capitalize whitespace-nowrap',
         variantStyles[resolvedVariant],
         className
       )}

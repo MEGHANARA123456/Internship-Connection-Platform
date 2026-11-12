@@ -581,7 +581,7 @@ export function UnifiedAnalyticsCard({
                 <span>{rangeLabel}</span><ChevronDown className="h-3.5 w-3.5" />
               </button>
               {showRangeMenu && (
-                <div role="menu" aria-label="Analytics time range" className="absolute right-0 top-full z-30 mt-1 w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                <div role="menu" aria-label="Analytics time range" className="glass-strong absolute right-0 top-full z-30 mt-1 w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900">
                   {RANGE_OPTIONS.map((option) => (
                     <button key={option.value} type="button" role="menuitemradio" aria-checked={range === option.value} onKeyDown={(event) => handleMenuKeyDown(event, setShowRangeMenu, rangeTriggerRef)} onClick={() => { setRange(option.value); setShowRangeMenu(false) }} className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-slate-200 dark:hover:bg-slate-800">
                       {option.label}{range === option.value && <Check className="h-3.5 w-3.5" />}
@@ -603,7 +603,7 @@ export function UnifiedAnalyticsCard({
                   <ChevronDown className="h-3.5 w-3.5" />
                 </button>
                 {showInternshipMenu && (
-                  <div role="menu" aria-label="Filter analytics by internship" className="absolute right-0 top-full z-30 mt-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                  <div role="menu" aria-label="Filter analytics by internship" className="glass-strong absolute right-0 top-full z-30 mt-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900">
                     <button type="button" role="menuitemradio" aria-checked={internshipId === null} onClick={() => { setInternshipId(null); setShowInternshipMenu(false) }} className="w-full rounded-md px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">All internships</button>
                     {(data?.internships ?? []).map((internship) => (
                       <button key={internship.id} type="button" role="menuitemradio" aria-checked={internshipId === internship.id} onClick={() => { setInternshipId(internship.id); setShowInternshipMenu(false) }} className="w-full truncate rounded-md px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">
@@ -627,7 +627,7 @@ export function UnifiedAnalyticsCard({
                 <ChevronDown className="h-3.5 w-3.5" />
               </button>
               {showFocusMenu && (
-                <div role="menu" aria-label="Analytics chart focus" className="absolute right-0 top-full z-30 mt-1 w-48 rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                <div role="menu" aria-label="Analytics chart focus" className="glass-strong absolute right-0 top-full z-30 mt-1 w-48 rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900">
                   {menuOptions.map((option) => (
                     <button key={option.value} type="button" role="menuitemradio" aria-checked={focus === option.value} onKeyDown={(event) => handleMenuKeyDown(event, setShowFocusMenu, focusTriggerRef)} onClick={() => { setFocus(option.value); setShowFocusMenu(false) }} className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-slate-200 dark:hover:bg-slate-800">
                       {option.label}{focus === option.value && <Check className="h-3.5 w-3.5" />}
