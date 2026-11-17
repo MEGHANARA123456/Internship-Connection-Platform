@@ -20,6 +20,9 @@ CHATBOT_ENV_NAMES = (
     "CHATBOT_PROVIDER",
     "CHATBOT_BASE_URL",
     "CHATBOT_API_KEY",
+    "CHATBOT_FALLBACK_BASE_URL",
+    "CHATBOT_FALLBACK_API_KEY",
+    "CHATBOT_FALLBACK_MODEL",
     "ANTHROPIC_API_KEY",
     "CHATBOT_MODEL",
     "CHATBOT_ROUTER_MODEL",
@@ -79,6 +82,9 @@ class ChatbotConfig:
     base_url: str = ""
     api_key: str = field(default="", repr=False)
     model: str = ""
+    fallback_base_url: str = ""
+    fallback_api_key: str = field(default="", repr=False)
+    fallback_model: str = ""
     router_model: str = ""
     max_tokens: int = 600
     temperature: float = 0.1
@@ -126,13 +132,18 @@ def load_config() -> ChatbotConfig:
         return setting(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
     provider = setting("CHATBOT_PROVIDER", "anthropic").strip().lower()
-    base_url = setting("CHATBOT_BASE_URL", "").strip().rstrip("/")
-    if base_url.lower().endswith("/v1"):
-        base_url = base_url[:-3].rstrip("/")
-        logger.warning(
-            "chatbot_base_url_version_suffix_removed",
-            extra={"chatbot_meta": {"reason": "duplicate_v1_path"}},
-        )
+    def base_url_setting(name: str) -> str:
+        """Normalize an OpenAI-compatible endpoint without duplicating its version path."""
+        base_url_value = setting(name, "").strip().rstrip("/")
+        if base_url_value.lower().endswith("/v1"):
+            base_url_value = base_url_value[:-3].rstrip("/")
+            logger.warning(
+                "chatbot_base_url_version_suffix_removed",
+                extra={"chatbot_meta": {"setting": name, "reason": "duplicate_v1_path"}},
+            )
+        return base_url_value
+
+    base_url = base_url_setting("CHATBOT_BASE_URL")
     config = ChatbotConfig(
         enabled=setting("CHATBOT_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
         mode=setting("CHATBOT_MODE", "retrieval").strip().lower(),
@@ -143,6 +154,9 @@ def load_config() -> ChatbotConfig:
             "",
         ).strip(),
         model=setting("CHATBOT_MODEL", "claude-haiku-5-5").strip(),
+        fallback_base_url=base_url_setting("CHATBOT_FALLBACK_BASE_URL"),
+        fallback_api_key=setting("CHATBOT_FALLBACK_API_KEY", "").strip(),
+        fallback_model=setting("CHATBOT_FALLBACK_MODEL", "").strip(),
         router_model=setting(
             "CHATBOT_ROUTER_MODEL",
             setting("CHATBOT_MODEL", "claude-haiku-5-5"),
@@ -206,3 +220,25 @@ def provider_configured(config: ChatbotConfig) -> bool:
         and config.model
         and (config.api_key or local_provider)
     )
+
+
+def fallback_provider_configured(config: ChatbotConfig) -> bool:
+    """Report whether all required settings for the optional compatible fallback exist."""
+    parsed_url = urlsplit(config.fallback_base_url)
+    local_provider = parsed_url.hostname in {"localhost", "127.0.0.1", "::1"}
+    return bool(
+        parsed_url.scheme in {"http", "https"}
+        and parsed_url.hostname
+        and config.fallback_model
+        and (config.fallback_api_key or local_provider)
+    )
+
+
+def provider_name(config: ChatbotConfig) -> str:
+    """Return a safe provider label for admin status without exposing credentials."""
+    if config.provider == "anthropic":
+        return "anthropic"
+    hostname = urlsplit(config.base_url).hostname
+    if hostname and hostname.endswith(".groq.com"):
+        return "groq"
+    return hostname or config.provider

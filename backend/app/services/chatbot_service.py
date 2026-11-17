@@ -6,14 +6,18 @@ import math
 import re
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..chatbot.audit_summary import summarize_audit_actions
-from ..chatbot.chatbot_config import ChatbotConfig, load_config
+from ..chatbot.chatbot_config import (
+    ChatbotConfig,
+    fallback_provider_configured,
+    load_config,
+)
 from ..chatbot.guardrails import (
     _output_safety_failure,
     contains_markup,
@@ -28,6 +32,7 @@ from ..chatbot.providers.base import (
     ChatbotRouterProvider,
     Passage,
     ProviderPayload,
+    ProviderResult,
 )
 from ..chatbot.provider_budget import ProviderBudget
 from ..chatbot.providers.llm_http import ProviderRateLimitError
@@ -147,6 +152,15 @@ class ChatResult:
     needs_clarification: str | None = None
     provider_fallback_reason: str | None = None
     provider_retry_after: int | None = None
+
+
+class ProviderBudgetExceeded(RuntimeError):
+    """A provider-specific budget or cooldown prevented an outbound request."""
+
+    def __init__(self, reason: str, retry_after: int | None):
+        super().__init__("Chatbot provider budget is unavailable.")
+        self.reason = reason
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
@@ -298,6 +312,8 @@ def _curated_source(answer: CuratedAnswer, query: str, retriever: BM25Retriever)
 
 def _truncate_answer(text: str) -> str:
     """Keep complete sentences or list items up to the configured word limit, stopping at the first overflow."""
+    if text == NO_EVIDENCE_ANSWER:
+        return text
     accepted: list[str] = []
     word_count = 0
     for line in text.splitlines():
@@ -1035,6 +1051,7 @@ class ChatbotService:
         config: ChatbotConfig | None = None,
         retriever: BM25Retriever | None = None,
         provider: AnswerProvider | None = None,
+        fallback_provider: AnswerProvider | None = None,
         now=time.monotonic,
     ):
         """Configure retrieval and answer providers, accepting injected dependencies for deterministic use."""
@@ -1045,6 +1062,19 @@ class ChatbotService:
             create_answer_provider(self.config)
             if self.config.mode == "llm"
             else RetrievalOnlyProvider()
+        )
+        fallback_config = replace(
+            self.config,
+            provider="openai-compatible",
+            base_url=self.config.fallback_base_url,
+            api_key=self.config.fallback_api_key,
+            model=self.config.fallback_model,
+            router_model=self.config.fallback_model,
+        )
+        self.fallback_provider = fallback_provider or (
+            create_answer_provider(fallback_config)
+            if self.config.mode == "llm" and fallback_provider_configured(self.config)
+            else None
         )
         self.vector_available = self.config.uses_vector
         self._now = now
@@ -1057,6 +1087,17 @@ class ChatbotService:
             requests_per_minute=self.config.requests_per_minute,
             requests_per_day=self.config.requests_per_day,
             now=now,
+        )
+        self.fallback_provider_budget = (
+            ProviderBudget(
+                tokens_per_minute=self.config.tokens_per_minute,
+                tokens_per_day=self.config.tokens_per_day,
+                requests_per_minute=self.config.requests_per_minute,
+                requests_per_day=self.config.requests_per_day,
+                now=now,
+            )
+            if self.fallback_provider is not None
+            else None
         )
 
     async def classify_intent_hint(self, message: str, role: str) -> str | None:
@@ -1533,7 +1574,7 @@ class ChatbotService:
         str | None,
         int | None,
     ]:
-        """Request a redacted provider answer and validate its length, citations, and routes, falling back to retrieved text."""
+        """Try providers in order, preserving validation and falling back to retrieved text."""
         payload = ProviderPayload(
             question=redact(message),
             history=tuple((turn_role, redact(content)) for turn_role, content in history),
@@ -1548,41 +1589,48 @@ class ChatbotService:
             + sum(len(passage.title) + len(passage.text) for passage in passages)
         )
         estimated_prompt_tokens = max(1, math.ceil(prompt_characters / 4 * 1.25))
-        reservation_id, retry_after = self.provider_budget.reserve(
-            budget_key,
-            estimated_prompt_tokens + self.config.max_tokens + 1500,
-            2,
-        )
-        if reservation_id is None:
-            reason = (
-                "provider_rate_limited"
-                if self.provider_budget.snapshot()["provider_cooldown_seconds"]
-                else "provider_budget_exceeded"
+
+        async def request_from_provider(
+            provider: AnswerProvider,
+            budget: ProviderBudget,
+            provider_key: str,
+        ) -> ProviderResult:
+            reservation_id, retry_after = budget.reserve(
+                budget_key,
+                estimated_prompt_tokens + self.config.max_tokens + 1500,
+                4,
             )
-            self.last_provider_fallback_reason = reason
-            logger.warning(
-                "chatbot_provider_fallback reason=%s retry_after=%s",
-                reason,
-                retry_after,
-                extra={
-                    "chatbot_meta": {
-                        "reason": reason,
-                        "retry_after": retry_after,
-                    }
-                },
-            )
-            return (
-                _truncate_answer(_render_retrieval_answer(passages)) or NO_EVIDENCE_ANSWER,
-                _sources_for(passages, role),
-                _links_for(passages, role),
-                True,
-                None,
-                reason,
-                retry_after,
-            )
-        try:
-            result = await self.provider.rewrite(payload)
-            self.provider_budget.settle(
+            if reservation_id is None:
+                reason = (
+                    "provider_rate_limited"
+                    if budget.snapshot()["provider_cooldown_seconds"]
+                    else "provider_budget_exceeded"
+                )
+                raise ProviderBudgetExceeded(reason, retry_after)
+            try:
+                result = await provider.rewrite(payload)
+                if not isinstance(result, ProviderResult):
+                    raise ValueError("Provider response has an invalid result type.")
+            except (
+                OSError,
+                RuntimeError,
+                TimeoutError,
+                ValueError,
+                TypeError,
+                AttributeError,
+            ):
+                budget.settle(
+                    reservation_id,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                    retries=0,
+                    usage_reported=False,
+                )
+                self.metrics["provider_requests"] += 1
+                self.metrics[f"{provider_key}_provider_requests"] += 1
+                raise
+            budget.settle(
                 reservation_id,
                 prompt_tokens=result.prompt_tokens,
                 completion_tokens=result.completion_tokens,
@@ -1591,11 +1639,22 @@ class ChatbotService:
                 usage_reported=result.usage_reported,
             )
             self.metrics["provider_requests"] += result.retries + 1
+            self.metrics[f"{provider_key}_provider_requests"] += result.retries + 1
             self.metrics["provider_retries"] += result.retries
             self.metrics["prompt_tokens_total"] += result.prompt_tokens
             self.metrics["completion_tokens_total"] += result.completion_tokens
             self.metrics["total_tokens"] += result.total_tokens
             self.metrics["provider_usage_unreported"] += int(not result.usage_reported)
+            return result
+
+        def validate_result(
+            result: ProviderResult,
+        ) -> tuple[
+            str,
+            tuple[tuple[str, str, str], ...],
+            tuple[tuple[str, str], ...],
+            str | None,
+        ]:
             clarification = (
                 result.needs_clarification.strip()
                 if isinstance(result.needs_clarification, str)
@@ -1612,9 +1671,9 @@ class ChatbotService:
                     )
                 ):
                     raise ValueError("Provider clarification failed chatbot validation.")
-                return clarification, (), (), False, clarification, None, None
+                return clarification, (), (), clarification
             if not result.answerable or result.confidence < self.config.rag_min_score:
-                return NO_EVIDENCE_ANSWER, (), (("Help docs", "/#faq"),), False, None, None, None
+                return NO_EVIDENCE_ANSWER, (), (("Help docs", "/#faq"),), None
             if (
                 not result.answer.strip()
                 or (passages and not result.sources)
@@ -1643,43 +1702,78 @@ class ChatbotService:
                     )
                 )
             )
-            return result.answer.strip(), sources, _links_for(passages, role), False, None, None, None
+            return result.answer.strip(), sources, _links_for(passages, role), None
+
+        primary_reason: str
+        primary_retry_after: int | None = None
+        try:
+            answer, sources, links, clarification = validate_result(
+                await request_from_provider(self.provider, self.provider_budget, "primary")
+            )
+            self.last_provider_fallback_reason = None
+            return answer, sources, links, False, clarification, None, None
         except ProviderRateLimitError as error:
             self.provider_budget.note_rate_limit(error.retry_after)
-            self.last_provider_fallback_reason = "provider_rate_limited"
+            primary_reason = "provider_rate_limited"
+            primary_retry_after = error.retry_after
             logger.warning(
                 "chatbot_provider_rate_limited retry_after=%d",
                 error.retry_after,
                 extra={"chatbot_meta": {"retry_after": error.retry_after}},
             )
-            fallback_answer = _truncate_answer(_render_retrieval_answer(passages))
-            return (
-                fallback_answer or NO_EVIDENCE_ANSWER,
-                _sources_for(passages, role),
-                _links_for(passages, role),
-                True,
-                None,
-                "provider_rate_limited",
-                error.retry_after,
-            )
-        except (OSError, RuntimeError, TimeoutError, ValueError):
-            self.last_provider_fallback_reason = "provider_unavailable"
+        except ProviderBudgetExceeded as error:
+            primary_reason = error.reason
+            primary_retry_after = error.retry_after
+        except (OSError, RuntimeError, TimeoutError, ValueError, TypeError, AttributeError):
+            primary_reason = "provider_unavailable"
             logger.warning(
                 "chatbot_provider_fallback reason=provider_unavailable",
                 extra={"chatbot_meta": {"reason": "provider_unavailable"}},
             )
-            fallback_answer = _render_retrieval_answer(passages)
-            fallback_answer = _truncate_answer(fallback_answer)
-            if fallback_answer:
-                answer = fallback_answer
-            else:
-                answer = NO_EVIDENCE_ANSWER
-            return (
-                answer,
-                _sources_for(passages, role),
-                _links_for(passages, role),
-                True,
-                None,
-                "provider_unavailable",
-                None,
+
+        fallback_retry_after: int | None = None
+        if self.fallback_provider is not None and self.fallback_provider_budget is not None:
+            self.metrics["provider_fallback_attempts"] += 1
+            try:
+                answer, sources, links, clarification = validate_result(
+                    await request_from_provider(
+                        self.fallback_provider,
+                        self.fallback_provider_budget,
+                        "fallback",
+                    )
+                )
+                self.metrics["provider_fallback_successes"] += 1
+                self.last_provider_fallback_reason = primary_reason
+                return answer, sources, links, False, clarification, primary_reason, None
+            except ProviderRateLimitError as error:
+                self.fallback_provider_budget.note_rate_limit(error.retry_after)
+                fallback_retry_after = error.retry_after
+            except ProviderBudgetExceeded as error:
+                fallback_retry_after = error.retry_after
+            except (OSError, RuntimeError, TimeoutError, ValueError, TypeError, AttributeError):
+                pass
+            self.metrics["provider_fallback_failures"] += 1
+            reason = "provider_fallback_failed"
+            logger.warning(
+                "chatbot_provider_fallback_failed",
+                extra={"chatbot_meta": {"reason": reason}},
             )
+            retry_after = max(
+                (value for value in (primary_retry_after, fallback_retry_after) if value),
+                default=None,
+            )
+        else:
+            reason = primary_reason
+            retry_after = primary_retry_after
+
+        self.last_provider_fallback_reason = reason
+        fallback_answer = _truncate_answer(_render_retrieval_answer(passages))
+        return (
+            fallback_answer or NO_EVIDENCE_ANSWER,
+            _sources_for(passages, role),
+            _links_for(passages, role),
+            True,
+            None,
+            reason,
+            retry_after,
+        )

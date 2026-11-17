@@ -2,8 +2,8 @@
 id: company-applicant-review
 title: View applicants for a company internship
 audience: [company]
-keywords: [who applied, list of applicants, people who applied to an internship, review applicants, applicant profile, candidate profile, uploaded resume, review applications, shortlist a candidate, verified skill badges]
-example_questions: [Who has applied to my internship?, Where do I see the people who applied?, How do I review applicants?, Where do I open an applicant profile and resume?, How do I find applicants for one posting?, How can I review verified skill badges?]
+keywords: [who applied, list of applicants, people who applied to an internship, review applicants, applicant profile, candidate profile, uploaded resume, review applications, shortlist a candidate, verified skill badges, decline applicant, turn down candidate, reject candidate, reject applicant, Actions menu]
+example_questions: [Who has applied to my internship?, Where do I see the people who applied?, How do I review applicants?, Where do I open an applicant profile and resume?, How do I find applicants for one posting?, How can I review verified skill badges?, How do I decline or reject an applicant?]
 links:
   - label: "Applicants"
     route: "/company/applicants"
@@ -25,7 +25,7 @@ To review a candidate's profile and uploaded resume, use the candidate card in A
 3. Review only applicants to postings owned by your company.
 
 ## Reject an applicant
-Open the candidate's Actions menu in Applicants or Hiring Pipeline, choose Reject, and confirm. The student is notified.
+To decline or reject an applicant, open the candidate's **Actions** menu in **Applicants** or **Hiring Pipeline**, choose **Reject**, and confirm **Reject applicant**. The student is notified.
 
 ## Review candidate skills
 Candidate cards show listed skills, the match percentage when available, and verified skill badges.
@@ -44,6 +44,8 @@ To shortlist a candidate, use the allowed action on an applicant in Under Review
 - Where do I review applicants to my company's postings?
 - How can I review verified skill badges?
 - Where do I open an applicant profile and resume?
+- How can I turn down or reject a candidate?
+- Where is the Reject action for an applicant?
 
 ## Search terms and example questions
 Keywords: who applied, list of applicants, people who applied to an internship, find candidates, company applicants, internship applicant list, review applicants, review applications, shortlist a candidate, applicant profile, resume, candidate search, verified skill badges, applicant badges.

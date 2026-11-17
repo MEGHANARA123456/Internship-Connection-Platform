@@ -14,7 +14,7 @@ INJECTION_REPLY = "I can’t follow instructions to ignore my safety rules or re
 SECRET_REPLY = "Please don’t share passwords, verification codes, tokens, or personal information here. I can’t process that message."
 ABUSE_REPLY = "I can’t help with harming anyone. If someone is in immediate danger, contact local emergency services."
 PERSONAL_DATA_EXPORT_REPLY = (
-    "I can't list user emails in chat. Open Platform Users to view accounts."
+    "I can’t list or export user data in chat. Open Platform Users to view accounts."
 )
 
 _CREDENTIAL_VALUE_REQUEST = re.compile(

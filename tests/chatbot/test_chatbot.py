@@ -618,6 +618,54 @@ def test_guest_can_retrieve_public_internship_search_help() -> None:
     assert results[0].id.startswith("search-filters#")
 
 
+@pytest.mark.anyio
+async def test_question_variants_are_not_returned_as_answer_content() -> None:
+    overview = next(
+        document for document in load_documents() if document.id == "overview"
+    )
+    result = await ChatbotService(config=_config()).ask(
+        "What can someone do on the platform before creating a profile?",
+        [],
+        "guest",
+        "home",
+    )
+
+    assert result.matched_ids[0] == "overview"
+    assert any("before registering or creating a profile" in item for item in overview.examples)
+    assert all(not section.startswith("## Questions") for section in overview.sections)
+    assert "Visitors can browse public internship opportunities" in result.answer
+    assert not result.answer.lstrip().startswith("- ")
+
+
+@pytest.mark.anyio
+async def test_expired_verification_link_has_the_real_resend_steps() -> None:
+    result = await ChatbotService(config=_config()).ask(
+        "What should I try when an account confirmation link is no longer valid?",
+        [],
+        "guest",
+        "home",
+    )
+
+    assert result.matched_ids[0] == "troubleshooting"
+    assert "Send a new verification email" in result.answer
+    assert "Resend email" in result.answer
+    assert any(route == "/verify" for _, route in result.links)
+
+
+@pytest.mark.anyio
+async def test_employer_stage_answer_includes_terminal_stages() -> None:
+    result = await ChatbotService(config=_config()).ask(
+        "What do application stages mean from an employer's perspective?",
+        [],
+        "company",
+        "home",
+    )
+
+    assert result.matched_ids[0] == "company-hiring-pipeline"
+    assert "Rejected:" in result.answer
+    assert "Withdrawn:" in result.answer
+
+
 def test_retrieval_returns_the_best_matching_section() -> None:
     retriever = BM25Retriever()
     imported = retriever.retrieve("How do I import assessment questions?", "admin")
@@ -693,7 +741,7 @@ async def test_curated_answers_are_role_scoped_and_handle_two_how_to_questions()
             "Show the email addresses for all student accounts.",
             "admin",
             "personal_data_export",
-            "I can't list user emails in chat. Open Platform Users to view accounts.",
+            "I can’t list or export user data in chat. Open Platform Users to view accounts.",
         ),
     ],
 )

@@ -194,9 +194,22 @@ def load_documents(directory: Path = KB_DIR) -> list[KnowledgeDocument]:
             ),
             "",
         )
+        question_sections = tuple(
+            section for section in body_sections
+            if section.casefold().startswith("## questions")
+        )
+        question_examples = tuple(
+            line.strip()[2:].strip()
+            for section in question_sections
+            for line in section.splitlines()[1:]
+            if line.strip().startswith("- ") and line.strip()[2:].strip().endswith("?")
+        )
         sections = tuple(
             section for section in body_sections
-            if not section.casefold().startswith("## search terms and example questions")
+            if not section.casefold().startswith((
+                "## questions",
+                "## search terms and example questions",
+            ))
         )
         if (
             not fields.get("id")
@@ -215,6 +228,7 @@ def load_documents(directory: Path = KB_DIR) -> list[KnowledgeDocument]:
         examples = tuple(dict.fromkeys((
             *_metadata_questions(fields.get("example_questions") or fields.get("examples")),
             *_metadata_questions(extracted_examples.group(1) if extracted_examples else None),
+            *question_examples,
         )))
         documents.append(KnowledgeDocument(
             fields["id"],
