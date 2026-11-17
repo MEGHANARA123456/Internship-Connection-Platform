@@ -16,7 +16,7 @@ class KBChunk(Base):
             "audience IN ('student', 'company', 'admin', 'all')",
             name="kb_chunks_audience_check",
         ),
-        CheckConstraint("token_count >= 0", name="kb_chunks_token_count_check"),
+        CheckConstraint("word_count >= 0", name="kb_chunks_word_count_check"),
         UniqueConstraint("source_path", "content_hash", name="uq_kb_chunks_source_hash"),
         Index(
             "ix_kb_chunks_audience",
@@ -48,7 +48,7 @@ class KBChunk(Base):
     route_hint: Mapped[str] = mapped_column(String(500), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(384), nullable=False)
-    token_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    word_count: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -1,10 +1,12 @@
 """Chatbot-only configuration. This module deliberately does not import app settings."""
 
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from io import StringIO
 import logging
 import os
 from pathlib import Path
+import re
 from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
@@ -30,13 +32,18 @@ CHATBOT_ENV_NAMES = (
     "CHATBOT_USER_PER_MINUTE",
     "CHATBOT_USER_PER_DAY",
     "CHATBOT_GUEST_PER_MINUTE",
+    "CHATBOT_TOKENS_PER_MINUTE",
+    "CHATBOT_TOKENS_PER_DAY",
+    "CHATBOT_REQUESTS_PER_MINUTE",
+    "CHATBOT_REQUESTS_PER_DAY",
+    "CHATBOT_CHUNK_WORDS",
+    "CHATBOT_CHUNK_OVERLAP",
     "RAG_ENABLED",
     "CHATBOT_VECTOR_ENABLED",
     "EMBEDDING_MODEL",
     "EMBEDDING_DIM",
     "RAG_TOP_K",
     "RAG_MIN_SCORE",
-    "RERANK_ENABLED",
     "KB_PATH",
 )
 DEFAULT_KB_PATH = Path(__file__).resolve().parents[2] / "kb"
@@ -47,10 +54,20 @@ def _chatbot_dotenv() -> dict[str, str | None]:
     env_file = Path(".env")
     if not env_file.is_file():
         return {}
-    chatbot_lines = [
-        line for line in env_file.read_text(encoding="utf-8").splitlines()
-        if line.lstrip().startswith(CHATBOT_ENV_NAMES)
-    ]
+    chatbot_lines = []
+    counts: Counter[str] = Counter()
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"\s*([A-Z][A-Z0-9_]*)\s*=", line)
+        if match and match.group(1) in CHATBOT_ENV_NAMES:
+            counts[match.group(1)] += 1
+            chatbot_lines.append(line)
+    duplicates = sorted(name for name, count in counts.items() if count > 1)
+    if duplicates:
+        logger.warning(
+            "chatbot_duplicate_environment_keys keys=%s",
+            ", ".join(duplicates),
+            extra={"chatbot_meta": {"keys": duplicates}},
+        )
     return dotenv_values(stream=StringIO("\n".join(chatbot_lines)))
 
 
@@ -72,13 +89,19 @@ class ChatbotConfig:
     user_per_minute: int = 20
     user_per_day: int = 200
     guest_per_minute: int = 5
+    tokens_per_minute: int = 7500
+    tokens_per_day: int = 190000
+    requests_per_minute: int = 30
+    requests_per_day: int = 1000
+    chunk_words: int = 400
+    chunk_overlap: int = 50
     rag_enabled: bool = False
     vector_enabled: bool | None = None
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dim: int = 384
     rag_top_k: int = 5
     rag_min_score: float = 0.55
-    rerank_enabled: bool = False
+    fallback_reason: str | None = None
     kb_path: Path = DEFAULT_KB_PATH
 
     @property
@@ -103,11 +126,18 @@ def load_config() -> ChatbotConfig:
         return setting(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
     provider = setting("CHATBOT_PROVIDER", "anthropic").strip().lower()
+    base_url = setting("CHATBOT_BASE_URL", "").strip().rstrip("/")
+    if base_url.lower().endswith("/v1"):
+        base_url = base_url[:-3].rstrip("/")
+        logger.warning(
+            "chatbot_base_url_version_suffix_removed",
+            extra={"chatbot_meta": {"reason": "duplicate_v1_path"}},
+        )
     config = ChatbotConfig(
         enabled=setting("CHATBOT_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
         mode=setting("CHATBOT_MODE", "retrieval").strip().lower(),
         provider=provider,
-        base_url=setting("CHATBOT_BASE_URL", "").strip().rstrip("/"),
+        base_url=base_url,
         api_key=setting(
             "ANTHROPIC_API_KEY" if provider == "anthropic" else "CHATBOT_API_KEY",
             "",
@@ -126,6 +156,12 @@ def load_config() -> ChatbotConfig:
         user_per_minute=max(1, int(setting("CHATBOT_USER_PER_MINUTE", "20"))),
         user_per_day=max(1, int(setting("CHATBOT_USER_PER_DAY", "200"))),
         guest_per_minute=max(1, int(setting("CHATBOT_GUEST_PER_MINUTE", "5"))),
+        tokens_per_minute=max(1, int(setting("CHATBOT_TOKENS_PER_MINUTE", "7500"))),
+        tokens_per_day=max(1, int(setting("CHATBOT_TOKENS_PER_DAY", "190000"))),
+        requests_per_minute=max(1, int(setting("CHATBOT_REQUESTS_PER_MINUTE", "30"))),
+        requests_per_day=max(1, int(setting("CHATBOT_REQUESTS_PER_DAY", "1000"))),
+        chunk_words=max(1, int(setting("CHATBOT_CHUNK_WORDS", "400"))),
+        chunk_overlap=max(0, int(setting("CHATBOT_CHUNK_OVERLAP", "50"))),
         rag_enabled=boolean_setting(
             "CHATBOT_VECTOR_ENABLED",
             boolean_setting("RAG_ENABLED", False),
@@ -138,7 +174,6 @@ def load_config() -> ChatbotConfig:
         embedding_dim=max(1, int(setting("EMBEDDING_DIM", "384"))),
         rag_top_k=max(1, min(5, int(setting("RAG_TOP_K", "5")))),
         rag_min_score=max(0.0, min(1.0, float(setting("RAG_MIN_SCORE", "0.55")))),
-        rerank_enabled=boolean_setting("RERANK_ENABLED", False),
         kb_path=Path(setting("KB_PATH", str(DEFAULT_KB_PATH))).expanduser(),
     )
     if config.mode not in {"retrieval", "llm"}:
@@ -147,9 +182,15 @@ def load_config() -> ChatbotConfig:
         raise ValueError("CHATBOT_PROVIDER must be 'anthropic' or 'openai-compatible'.")
     if config.mode == "llm" and not provider_configured(config):
         logger.warning(
-            "CHATBOT_MODE=llm requested without provider configuration; falling back to retrieval mode."
+            "CHATBOT_MODE=llm requested without provider configuration "
+            "(provider_not_configured); falling back to retrieval mode.",
+            extra={"chatbot_meta": {"reason": "provider_not_configured"}},
         )
-        config = replace(config, mode="retrieval")
+        config = replace(
+            config,
+            mode="retrieval",
+            fallback_reason="provider_not_configured",
+        )
     return config
 
 

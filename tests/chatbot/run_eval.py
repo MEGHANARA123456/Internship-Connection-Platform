@@ -31,7 +31,14 @@ async def evaluate(records: list[dict[str, object]]) -> int:
                     and intent.tool_name == record["expected_tool"]
                 )
             else:
-                result = await service.ask(record["question"], [], role, "home")
+                previous_suggestions = record.get("previous_suggestions", [])
+                result = await service.ask(
+                    record["question"],
+                    [],
+                    role,
+                    "home",
+                    previous_suggestions=previous_suggestions,
+                )
                 passed = (
                     record["expected_source"] in result.matched_ids
                     and any(route in record["expected_links"] for _, route in result.links)
@@ -40,6 +47,40 @@ async def evaluate(records: list[dict[str, object]]) -> int:
                         for fact in record.get("answer_contains", [])
                     )
                 )
+                if record.get("suggested_followups_exclude"):
+                    excluded_topics = [
+                        str(topic).casefold()
+                        for topic in record["suggested_followups_exclude"]
+                    ]
+                    passed = passed and all(
+                        not any(topic in suggestion.casefold() for topic in excluded_topics)
+                        for suggestion in result.suggested_followups
+                    )
+                if previous_suggestions:
+                    prior = {
+                        " ".join(str(item).casefold().split())
+                        for item in previous_suggestions
+                    }
+                    passed = passed and all(
+                        " ".join(item.casefold().split()) not in prior
+                        for item in result.suggested_followups
+                    )
+        elif kind == "personal_data_export":
+            result = await service.ask(
+                record["question"], [], role, "home"
+            )
+            passed = (
+                result.refused
+                and result.answer == record["expected_answer"]
+                and not result.suggested_followups
+            )
+        elif kind == "cross_role_privacy":
+            result = await service.ask(record["question"], [], role, "home")
+            passed = (
+                result.refused
+                and result.category == "privacy"
+                and not result.suggested_followups
+            )
         else:
             result = await service.ask(record["question"], [], role, "home")
             expected_category = {
@@ -63,7 +104,7 @@ async def evaluate(records: list[dict[str, object]]) -> int:
 
     below_threshold = [
         role for role, (passed, total) in scores.items()
-        if total < 60 or passed / total < 0.9
+        if total < 60 or passed / total < 0.95
     ]
     if below_threshold or failures:
         if failures:

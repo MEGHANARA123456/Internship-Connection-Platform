@@ -38,12 +38,13 @@ from app.services.interview_display import (
     get_interview_state,
 )
 from fastapi import HTTPException
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 TOOL_ROLES = {
     "student_applications": UserRole.STUDENT,
     "student_application_counts": UserRole.STUDENT,
+    "student_account_summary": UserRole.STUDENT,
     "student_interviews": UserRole.STUDENT,
     "student_notifications": UserRole.STUDENT,
     "student_profile_completeness": UserRole.STUDENT,
@@ -61,12 +62,14 @@ TOOL_ROLES = {
     "company_interviews": UserRole.COMPANY,
     "company_unread_messages": UserRole.COMPANY,
     "company_verification_status": UserRole.COMPANY,
+    "company_account_summary": UserRole.COMPANY,
     "admin_audit_events": UserRole.ADMIN,
     "admin_pending_approvals": UserRole.ADMIN,
     "admin_verification_counts": UserRole.ADMIN,
     "admin_analytics": UserRole.ADMIN,
     "admin_skill_assessment_stats": UserRole.ADMIN,
     "admin_open_reports": UserRole.ADMIN,
+    "admin_platform_summary": UserRole.ADMIN,
     "admin_company_counts": UserRole.ADMIN,
     "admin_student_counts": UserRole.ADMIN,
     "admin_posting_counts": UserRole.ADMIN,
@@ -93,10 +96,22 @@ class ToolResult:
     links: tuple[tuple[str, str], ...] = ()
 
 
-def _validated_args(name: str, args: dict[str, Any]) -> int | None:
-    """Reject unsupported inputs and return a valid optional company internship ID."""
-    if set(args) - {"internship_id"}:
+def _validated_args(name: str, args: dict[str, Any]) -> int | str | None:
+    """Validate the bounded status or company-internship arguments for read tools."""
+    allowed = {"status"} if name == "student_application_counts" else {"internship_id"}
+    if set(args) - allowed:
         raise HTTPException(status_code=422, detail="Unsupported tool arguments.")
+    if name == "student_application_counts":
+        value = args.get("status")
+        allowed_statuses = {
+            "APPLIED", "UNDER_REVIEW", "SHORTLISTED", "INTERVIEW_SCHEDULED",
+            "OFFER", "REJECTED", "WITHDRAWN",
+        }
+        if value is None:
+            return None
+        if not isinstance(value, str) or value not in allowed_statuses:
+            raise HTTPException(status_code=422, detail="Invalid application status.")
+        return value
     if name not in {"company_applicants", "company_shortlisted", "company_internships"}:
         if args:
             raise HTTPException(status_code=422, detail="This tool does not accept arguments.")
@@ -107,6 +122,18 @@ def _validated_args(name: str, args: dict[str, Any]) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 2_147_483_647:
         raise HTTPException(status_code=422, detail="Invalid internship identifier.")
     return value
+
+
+def _count_phrase(count: int, singular: str, plural: str | None = None) -> str:
+    """Format a count without zero-valued noise and with the correct noun form."""
+    if count <= 0:
+        return ""
+    return f"{count} {singular if count == 1 else plural or singular + 's'}"
+
+
+def _short_words(value: str, limit: int = 7) -> str:
+    words = value.split()
+    return value if len(words) <= limit else " ".join(words[:limit])
 
 
 def _when(value) -> str:
@@ -121,7 +148,7 @@ def _when(value) -> str:
 
 
 async def _student_applications(db: AsyncSession, user: User) -> ToolResult:
-    """Return a status breakdown for only the authenticated student's applications."""
+    """Return a status breakdown and latest postings for only the authenticated student."""
     rows = (await db.execute(
         select(Application.status, func.count(Application.id))
         .where(Application.student_id == user.id)
@@ -146,20 +173,83 @@ async def _student_applications(db: AsyncSession, user: User) -> ToolResult:
     other_count = sum(count for status, count in counts.items() if status not in known_statuses)
     if other_count:
         grouped_counts["Other"] = other_count
-    answer = (
-        f"You have {total} applications: "
-        + ", ".join(
-            f"{grouped_counts[label]} {label.casefold()}"
-            for label in ("Applied", "Under review", "Shortlisted", "Interview", "Offer", "Rejected")
-        )
-        + "."
+    if not total:
+        return ToolResult("student_applications", "You have no applications.", "/applications")
+    status_labels = {
+        "Applied": ("applied", "applied"),
+        "Under review": ("under review", "under review"),
+        "Shortlisted": ("shortlisted", "shortlisted"),
+        "Interview": ("interview", "interviews"),
+        "Offer": ("offer", "offers"),
+        "Rejected": ("rejected", "rejected"),
+        "Withdrawn": ("withdrawn", "withdrawn"),
+        "Other": ("other", "other"),
+    }
+    status_summary = ", ".join(
+        _count_phrase(grouped_counts[label], *status_labels[label])
+        for label in grouped_counts
+        if grouped_counts[label]
     )
+    latest_rows = (await db.execute(
+        select(Application.status, Internship.title, CompanyProfile.company_name)
+        .join(Internship, Internship.id == Application.internship_id)
+        .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
+        .where(Application.student_id == user.id)
+        .order_by(Application.created_at.desc(), Application.id.desc())
+        .limit(5)
+    )).all()
+    latest = "; ".join(
+        f"{_short_words(title, 6)} at {_short_words(company_name or 'Company', 4)}: "
+        f"{str(status).replace('_', ' ').title()}"
+        for status, title, company_name in latest_rows
+    )
+    answer = (
+        f"You have {total} {_count_phrase(total, 'application', 'applications').split(' ', 1)[1]} "
+        f"({status_summary}). Latest: {latest}."
+    )
+    if total > len(latest_rows):
+        answer += f" +{total - len(latest_rows)} more."
     return ToolResult("student_applications", answer, "/applications")
 
 
-async def _student_application_counts(db: AsyncSession, user: User) -> ToolResult:
-    result = await _student_applications(db, user)
-    return ToolResult("student_application_counts", result.answer, result.route)
+async def _student_application_counts(
+    db: AsyncSession,
+    user: User,
+    status: str | None,
+) -> ToolResult:
+    if status is None:
+        result = await _student_applications(db, user)
+        return ToolResult("student_application_counts", result.answer, result.route)
+    status_groups = {
+        "APPLIED": ("APPLIED",),
+        "UNDER_REVIEW": ("UNDER_REVIEW",),
+        "SHORTLISTED": ("SHORTLISTED",),
+        "INTERVIEW_SCHEDULED": ("INTERVIEW_SCHEDULED",),
+        "OFFER": ("SELECTED", "ACCEPTED"),
+        "REJECTED": ("REJECTED",),
+        "WITHDRAWN": ("WITHDRAWN",),
+    }
+    count = int(await db.scalar(
+        select(func.count(Application.id)).where(
+            Application.student_id == user.id,
+            Application.status.in_(status_groups[status]),
+        )
+    ) or 0)
+    display = {
+        "APPLIED": ("applied application", "applied applications"),
+        "UNDER_REVIEW": ("application under review", "applications under review"),
+        "SHORTLISTED": ("shortlisted application", "shortlisted applications"),
+        "INTERVIEW_SCHEDULED": ("scheduled interview", "scheduled interviews"),
+        "OFFER": ("offer", "offers"),
+        "REJECTED": ("rejected application", "rejected applications"),
+        "WITHDRAWN": ("withdrawn application", "withdrawn applications"),
+    }[status]
+    answer = (
+        f"You have no {display[1]}."
+        if not count
+        else f"You have {_count_phrase(count, *display)}."
+    )
+    return ToolResult("student_application_counts", answer, "/applications")
 
 
 async def _student_interviews(db: AsyncSession, user: User) -> ToolResult:
@@ -214,8 +304,74 @@ async def _student_notifications(db: AsyncSession, user: User) -> ToolResult:
             Notification.read_at.is_(None),
         )
     ) or 0)
-    answer = f"You have {total} notification(s), including {unread} unread."
+    answer = (
+        "You have no notifications."
+        if total == 0
+        else f"You have {_count_phrase(total, 'notification')}."
+    )
+    if unread:
+        answer = (
+            "You have no notifications."
+            if total == 0
+            else f"You have {_count_phrase(total, 'notification')}, "
+            f"including {_count_phrase(unread, 'unread notification')}."
+        )
     return ToolResult("student_notifications", answer, "/notifications")
+
+
+async def _student_account_summary(db: AsyncSession, user: User) -> ToolResult:
+    rows = (await db.execute(
+        select(Application.status, func.count(Application.id))
+        .where(Application.student_id == user.id)
+        .group_by(Application.status)
+    )).all()
+    counts = {str(status).upper(): int(count) for status, count in rows}
+    total = sum(counts.values())
+
+    if total == 1:
+        status_order = (
+            ("APPLIED", ("applied application", "applied applications")),
+            ("UNDER_REVIEW", ("application under review", "applications under review")),
+            ("SHORTLISTED", ("shortlisted application", "shortlisted applications")),
+            ("INTERVIEW_SCHEDULED", ("scheduled interview", "scheduled interviews")),
+            ("SELECTED", ("selected application", "selected applications")),
+            ("ACCEPTED", ("accepted offer", "accepted offers")),
+            ("REJECTED", ("rejected application", "rejected applications")),
+            ("WITHDRAWN", ("withdrawn application", "withdrawn applications")),
+        )
+        for status, display in status_order:
+            if counts.get(status, 0) == 1:
+                application_summary = f"You have {_count_phrase(1, *display)}."
+                break
+        else:
+            application_summary = "You have 1 application."
+    else:
+        applications = await _student_applications(db, user)
+        application_summary = applications.answer.split(" Latest:", 1)[0].rstrip(".")
+
+    interviews = await _student_interviews(db, user)
+    if interviews.answer.startswith("You have no upcoming interviews"):
+        interview_summary = "Upcoming interviews: none"
+    else:
+        interview_summary = interviews.answer.replace("Your next interviews:", "Upcoming interviews:", 1).rstrip(".")
+    unread = int(await db.scalar(
+        select(func.count(Notification.id)).where(
+            Notification.user_id == user.id,
+            Notification.read_at.is_(None),
+        )
+    ) or 0)
+    notification_summary = (
+        "No unread notifications."
+        if unread == 0
+        else f"{_count_phrase(unread, 'unread notification')}."
+    )
+    application_summary = application_summary.rstrip(".")
+    return ToolResult(
+        "student_account_summary",
+        f"{application_summary}. {interview_summary}. {notification_summary}",
+        "/applications",
+        (("Interviews", "/interviews"),),
+    )
 
 
 async def _student_unread_messages(db: AsyncSession, user: User) -> ToolResult:
@@ -231,7 +387,9 @@ async def _student_unread_messages(db: AsyncSession, user: User) -> ToolResult:
     ) or 0)
     return ToolResult(
         "student_unread_messages",
-        f"You have {count} unread message(s).",
+        "You have no unread messages."
+        if count == 0
+        else f"You have {_count_phrase(count, 'unread message')}.",
         "/messages",
     )
 
@@ -267,20 +425,43 @@ async def _student_profile(db: AsyncSession, user: User) -> ToolResult:
 
 async def _student_saved_internships(db: AsyncSession, user: User) -> ToolResult:
     """List this student's recently saved internships and provide detail links."""
-    total = int(await db.scalar(
-        select(func.count(SavedInternship.id)).where(SavedInternship.student_id == user.id)
-    ) or 0)
+    open_role = and_(
+        Internship.status == "PUBLISHED",
+        Internship.deadline >= date.today(),
+        CompanyProfile.verification_status == "VERIFIED",
+        or_(Application.id.is_(None), Application.status == "WITHDRAWN"),
+    )
+    active_application = and_(Application.id.is_not(None), Application.status != "WITHDRAWN")
+    total, open_count, applied_count = (
+        await db.execute(
+            select(
+                func.count(SavedInternship.id),
+                func.sum(case((open_role, 1), else_=0)),
+                func.sum(case((active_application, 1), else_=0)),
+            )
+            .select_from(SavedInternship)
+            .join(Internship, Internship.id == SavedInternship.internship_id)
+            .outerjoin(
+                Application,
+                (Application.internship_id == Internship.id)
+                & (Application.student_id == user.id),
+            )
+            .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
+            .where(SavedInternship.student_id == user.id)
+        )
+    ).one()
+    total = int(total or 0)
+    open_count = int(open_count or 0)
+    applied_count = int(applied_count or 0)
     rows = (await db.execute(
         select(Internship.title, Internship.id, CompanyProfile.company_name)
         .join(SavedInternship, SavedInternship.internship_id == Internship.id)
         .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
-        .where(
-            SavedInternship.student_id == user.id,
-        )
+        .where(SavedInternship.student_id == user.id)
         .order_by(SavedInternship.created_at.desc(), SavedInternship.id.desc())
         .limit(MAX_ROWS)
     )).all()
-    answer = f"You have {total} saved internship(s)."
+    answer = f"{total} saved roles ({open_count} open, {applied_count} applied)."
     if rows:
         answer += " Recently saved: " + " ".join(
             f"{title} at {company or 'company name unavailable'}."
@@ -420,21 +601,21 @@ async def _student_skills_improvement(db: AsyncSession, user: User) -> ToolResul
         .where(SkillBadge.student_id == user.id, SkillBadge.expires_at > now)
         .order_by(SkillBadge.expires_at.desc(), SkillBadge.id.desc())
     )).all())
-    skills_text = ", ".join(dict.fromkeys(skills)) if skills else "No profile skills are listed yet"
-    badges_text = ", ".join(badge.title for badge in verified_badges[:3]) or "none currently valid"
-    needs_attention = []
-    if failed_topics:
-        needs_attention.append("failed: " + ", ".join(failed_topics[:3]))
-    if expired_topics:
-        needs_attention.append("expired: " + ", ".join(expired_topics[:3]))
-    if untaken_topics:
-        needs_attention.append("not taken: " + ", ".join(untaken_topics[:3]))
-    improvement_text = "; ".join(needs_attention) or "no failed, expired, or untaken ready topics"
-    next_topics = ", ".join(name for _, name in weak_topics[:3]) or "none"
-    answer = (
-        f"Your profile skills: {skills_text}. Verified badges: {badges_text}. "
-        f"Needs attention: {improvement_text}. Suggested topics to take next: {next_topics}."
-    )
+    unique_skills = list(dict.fromkeys(skills))
+    skills_text = ", ".join(_short_words(skill, 3) for skill in unique_skills[:6])
+    remaining_skills = len(unique_skills) - min(len(unique_skills), 6)
+    if not skills_text:
+        skills_text = "none listed"
+    if remaining_skills:
+        skills_text += f" (+{remaining_skills} more)"
+    badges_text = ", ".join(_short_words(badge.title, 3) for badge in verified_badges[:2])
+    if not badges_text:
+        badges_text = "none yet"
+    next_topics = ", ".join(
+        _short_words(name.split(" (", 1)[0], 5)
+        for _, name in weak_topics[:3]
+    ) or "none identified"
+    answer = f"Skills: {skills_text}. Verified badges: {badges_text}. Next to improve: {next_topics}."
     return ToolResult("student_skills_improvement", answer, "/profile/student")
 
 
@@ -460,44 +641,42 @@ async def _student_skill_retake(db: AsyncSession, user: User) -> ToolResult:
         weekly_retry = _utc_datetime(weekly_attempts[-1].started_at) + RETENTION_WINDOW
     topics = list((await db.execute(
         select(SkillTopic.slug, SkillTopic.name, SkillTopic.archived_at)
+        .where(SkillTopic.archived_at.is_(None))
         .order_by(SkillTopic.name, SkillTopic.slug)
     )).all())
     names = {slug: name for slug, name, _ in topics}
-    archived = {slug for slug, _, archived_at in topics if archived_at is not None}
     latest_by_topic: dict[str, SkillAttempt] = {}
     for attempt in attempts:
         latest_by_topic.setdefault(attempt.topic, attempt)
 
-    answer = (
-        f"Rule: retake after {int(ASSESSMENT_RETAKE_COOLDOWN.total_seconds() // 3600)} hours "
-        f"from that topic's previous attempt; at most {ASSESSMENT_ATTEMPT_LIMIT} attempts "
-        f"in {RETENTION_WINDOW.days} days."
+    blocked = []
+    for topic, name, _ in topics:
+        latest = latest_by_topic.get(topic)
+        eligible_at = (
+            _utc_datetime(latest.started_at) + ASSESSMENT_RETAKE_COOLDOWN
+            if latest is not None
+            else now
+        )
+        if weekly_retry is not None:
+            eligible_at = max(eligible_at, weekly_retry)
+        if eligible_at > now:
+            remaining = eligible_at - now
+            hours = max(1, int((remaining.total_seconds() + 3599) // 3600))
+            blocked.append((name, hours))
+    rule = (
+        f"You can retake a topic 24 hours after your last attempt starts, with at most "
+        f"{ASSESSMENT_ATTEMPT_LIMIT} attempts in any {RETENTION_WINDOW.days} days."
     )
-    eligible_topics = sorted(set(names) | set(latest_by_topic))
-    if not eligible_topics:
-        answer += " You can start an available assessment now."
+    if not blocked:
+        answer = f"{rule} Right now you can take all available topics."
     else:
-        statuses = []
-        for topic in eligible_topics:
-            label = names.get(topic, topic)
-            if topic in archived:
-                statuses.append(f"{label}: archived")
-                continue
-            latest = latest_by_topic.get(topic)
-            eligible_at = (
-                _utc_datetime(latest.started_at) + ASSESSMENT_RETAKE_COOLDOWN
-                if latest is not None
-                else now
-            )
-            if weekly_retry is not None:
-                eligible_at = max(eligible_at, weekly_retry)
-            status = (
-                f"eligible {eligible_at.strftime('%b %d at %H:%M UTC')}"
-                if eligible_at > now
-                else "eligible now"
-            )
-            statuses.append(f"{label}: {status}")
-        answer += " " + "; ".join(statuses) + "."
+        locked = ", ".join(
+            f"{_short_words(name, 5)} ({hours}h left)"
+            for name, hours in blocked[:3]
+        )
+        if len(blocked) > 3:
+            locked += f", +{len(blocked) - 3} more"
+        answer = f"{rule} Blocked: {locked}."
     return ToolResult("student_skill_retake", answer, "/skills/history")
 
 
@@ -650,40 +829,53 @@ async def _company_applicants(
     """Count applicants by status for this company's own postings without exposing candidate details."""
     metrics = await get_company_metrics(db, user.id, internship_id)
     if shortlisted:
-        answer = f"You have {metrics['shortlisted']} shortlisted candidate(s)."
+        count = int(metrics["shortlisted"])
+        answer = "You have no shortlisted candidates." if not count else (
+            f"You have {_count_phrase(count, 'shortlisted candidate')}."
+        )
     else:
         status_counts = metrics["status_counts"]
         statuses = (
-            ("Applied", ("APPLIED",)),
-            ("Under review", ("UNDER_REVIEW",)),
-            ("Shortlisted", ("SHORTLISTED",)),
-            ("Interview", ("INTERVIEW_SCHEDULED",)),
-            ("Offer", ("SELECTED", "ACCEPTED")),
-            ("Rejected", ("REJECTED",)),
+            ("Applied", ("APPLIED",), "applied"),
+            ("Under review", ("UNDER_REVIEW",), "under review"),
+            ("Shortlisted", ("SHORTLISTED",), "shortlisted"),
+            ("Interview", ("INTERVIEW_SCHEDULED",), "interviews"),
+            ("Offer", ("SELECTED", "ACCEPTED"), "offers"),
+            ("Rejected", ("REJECTED",), "rejected"),
         )
         breakdown = ", ".join(
-            f"{label}: {sum(status_counts.get(status, 0) for status in group)}"
-            for label, group in statuses
+            _count_phrase(
+                sum(status_counts.get(status, 0) for status in group),
+                label.casefold(),
+                plural,
+            )
+            for label, group, plural in statuses
+            if sum(status_counts.get(status, 0) for status in group)
         )
+        total_applicants = int(metrics["total_applicants"])
         answer = (
-            f"You have {metrics['total_applicants']} applicants across your company's postings. "
-            f"{breakdown}."
+            "You have no applicants."
+            if total_applicants == 0
+            else f"You have {_count_phrase(total_applicants, 'applicant')}."
         )
-        postings = metrics["applications_by_role"]
+        if breakdown:
+            answer += f" Statuses: {breakdown}."
+        postings = sorted(
+            (
+                posting for posting in metrics["applications_by_role"]
+                if int(posting["applications"]) > 0
+            ),
+            key=lambda posting: (-int(posting["applications"]), int(posting["id"])),
+        )
         if internship_id is not None:
             postings = [posting for posting in postings if posting["id"] == internship_id]
         if postings:
-            posting_summaries = []
-            for posting in postings[:3]:
-                posting_statuses = ", ".join(
-                    f"{status.replace('_', ' ').title()} {count}"
-                    for status, count in sorted(posting["status_counts"].items())
-                ) or "no applications"
-                posting_summaries.append(
-                    f"{posting['title']}: {posting['applications']} applicants "
-                    f"({posting_statuses})."
-                )
-            answer += " By posting: " + " ".join(posting_summaries)
+            posting_summaries = [
+                f"{_short_words(posting['title'], 4)} "
+                f"({_count_phrase(int(posting['applications']), 'applicant')})"
+                for posting in postings[:3]
+            ]
+            answer += " Top postings: " + "; ".join(posting_summaries) + "."
         if len(postings) > 3:
             answer += f" +{len(postings) - 3} more postings."
     return ToolResult(
@@ -750,7 +942,9 @@ async def _company_unread_messages(db: AsyncSession, user: User) -> ToolResult:
     ) or 0)
     return ToolResult(
         "company_unread_messages",
-        f"You have {count} unread message(s).",
+        "You have no unread messages."
+        if count == 0
+        else f"You have {_count_phrase(count, 'unread message')}.",
         "/messages",
     )
 
@@ -769,91 +963,54 @@ async def _company_verification_status(db: AsyncSession, user: User) -> ToolResu
     return ToolResult("company_verification_status", answer, "/company/settings")
 
 
-async def _admin_audit(db: AsyncSession, user: User) -> ToolResult:
-    """Prioritize meaningful changes, group read-only views, and identify admins without numeric labels."""
-    events = (await db.execute(
-        select(
-            AuditLog,
-            User.role,
+async def _company_account_summary(db: AsyncSession, user: User) -> ToolResult:
+    metrics = await get_company_metrics(db, user.id)
+    unread_notifications = int(await db.scalar(
+        select(func.count(Notification.id)).where(
+            Notification.user_id == user.id,
+            Notification.read_at.is_(None),
         )
-        .outerjoin(User, AuditLog.actor_id == User.id)
-        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
-        .limit(100)
-    )).all()
-    if not events:
-        return ToolResult(
-            "admin_audit_events",
-            "There are no recent audit events to summarize.",
-            "/admin/audit-logs",
-        )
-
-    priority_actions = {
-        "posting_approved", "posting_rejected", "company_verified", "company_rejected",
-        "user_suspended", "user_reinstated", "admin_created",
-    }
-    grouped_events: dict[tuple[str, str], list[datetime]] = {}
-    view_counts: dict[str, int] = {}
-    for row in events:
-        log, role = row
-        action = log.action.casefold()
-        if any(term in action for term in ("view", "read", "list", "opened")):
-            area = "skill topic data" if "skill" in action or "topic" in action else (
-                "audit data" if "audit" in action else "admin data"
-            )
-            view_counts[area] = view_counts.get(area, 0) + 1
-            continue
-        role_name = role.value.title() if role is not None else "User"
-        actor = "System" if log.actor_id is None else role_name
-        target = (log.target_type or "").replace("_", " ") or "platform changes"
-        action_text = audit_action_label(log.action).lower()
-        created_at = log.created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-        age = datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)
-        if age < timedelta(minutes=1):
-            relative = "just now"
-        elif age < timedelta(hours=1):
-            relative = f"{int(age.total_seconds() // 60)} minutes ago"
-        elif age < timedelta(days=1):
-            relative = f"{int(age.total_seconds() // 3600)} hours ago"
-        else:
-            relative = f"{age.days} days ago"
-        key = (f"{actor} {action_text}", target)
-        grouped_events.setdefault(key, []).append(created_at)
-    state_events = []
-    for (action, target), timestamps in grouped_events.items():
-        latest = max(timestamps)
-        age = datetime.now(timezone.utc) - latest.astimezone(timezone.utc)
-        if age < timedelta(minutes=1):
-            relative = "just now"
-        elif age < timedelta(hours=1):
-            relative = f"{int(age.total_seconds() // 60)} minutes ago"
-        elif age < timedelta(days=1):
-            relative = f"{int(age.total_seconds() // 3600)} hours ago"
-        else:
-            relative = f"{age.days} days ago"
-        count = len(timestamps)
-        count_text = f" ({count} times)" if count > 1 else ""
-        state_events.append((
-            0 if any(token in action.casefold() for token in priority_actions) else 1,
-            latest,
-            f"{action} for {target}{count_text} ({relative}).",
-        ))
-    state_events.sort(key=lambda item: (item[0], -item[1].timestamp()))
-    lines = [item[2] for item in state_events[:5]]
-    lines.extend(
-        f"{count} views of {area}."
-        for area, count in sorted(view_counts.items(), key=lambda item: item[1], reverse=True)
+    ) or 0)
+    verification = await db.scalar(
+        select(CompanyProfile.verification_status)
+        .where(CompanyProfile.user_id == user.id)
     )
+    details = (
+        _count_phrase(int(metrics["active_roles"]), "active posting"),
+        _count_phrase(int(metrics["new_applications_this_week"]), "new applicant"),
+        _count_phrase(int(metrics["interviews_scheduled"]), "interview scheduled"),
+        _count_phrase(unread_notifications, "unread notification"),
+    )
+    summary = ", ".join(item for item in details if item)
+    status_text = str(verification or "not submitted").replace("_", " ").lower()
     answer = (
-        "Recent audit events: " + " ".join(lines[:5])
-        if lines
-        else "There are no recent audit changes to summarize."
+        f"Your account: {summary + '; ' if summary else ''}"
+        f"verification status is {status_text}."
     )
-    remaining = max(0, len(state_events) + len(view_counts) - 5)
-    if remaining:
-        answer += f" +{remaining} more."
-    return ToolResult("admin_audit_events", answer, "/admin/audit-logs")
+    return ToolResult(
+        "company_account_summary",
+        answer,
+        "/company",
+        (("Applicants", "/company/applicants"),),
+    )
+
+
+async def _admin_audit(db: AsyncSession, user: User) -> ToolResult:
+    """Aggregate tracked actions from the last seven days without personal details."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    rows = (await db.execute(
+        select(AuditLog.action, func.count(AuditLog.id))
+        .where(AuditLog.created_at >= cutoff)
+        .group_by(AuditLog.action)
+    )).all()
+    actions = [action for action, count in rows for _ in range(int(count))]
+    from app.chatbot.audit_summary import summarize_audit_actions
+
+    return ToolResult(
+        "admin_audit_events",
+        summarize_audit_actions(actions),
+        "/admin/audit-logs",
+    )
 
 
 async def _admin_pending(db: AsyncSession) -> ToolResult:
@@ -1141,9 +1298,13 @@ async def _public_open_internships_count(db: AsyncSession) -> ToolResult:
             CompanyProfile.verification_status == "VERIFIED"
         )
     ) or 0)
+    summary = ", ".join(filter(None, (
+        _count_phrase(postings, "current internship"),
+        _count_phrase(companies, "verified company"),
+    )))
     return ToolResult(
         "public_open_internships_count",
-        f"There are {postings} current internships and {companies} verified companies.",
+        f"There are {summary}." if summary else "There are no current internships or verified companies.",
         "/opportunities",
     )
 
@@ -1159,6 +1320,45 @@ async def _admin_open_reports(db: AsyncSession) -> ToolResult:
     )
 
 
+async def _admin_platform_summary(db: AsyncSession) -> ToolResult:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    pending_verifications = int(await db.scalar(
+        select(func.count(CompanyProfile.id)).where(
+            CompanyProfile.verification_status == "PENDING"
+        )
+    ) or 0)
+    pending_postings = int(await db.scalar(
+        select(func.count(Internship.id)).where(Internship.status == "PENDING_APPROVAL")
+    ) or 0)
+    open_reports = int(await db.scalar(
+        select(func.count(Report.id)).where(Report.status.in_(("OPEN", "INVESTIGATING")))
+    ) or 0)
+    new_users = int(await db.scalar(
+        select(func.count(User.id)).where(User.created_at >= cutoff)
+    ) or 0)
+    details = list(filter(None, (
+        _count_phrase(pending_verifications, "pending company verification"),
+        _count_phrase(pending_postings, "pending posting"),
+        _count_phrase(open_reports, "open report/dispute", "open reports/disputes"),
+    )))
+    if new_users:
+        details.append(f"{_count_phrase(new_users, 'new user')} in the last 7 days")
+    answer = (
+        f"Platform summary: {', '.join(details)}."
+        if details
+        else "No pending verifications, postings, reports, or new users in the last 7 days."
+    )
+    return ToolResult(
+        "admin_platform_summary",
+        answer,
+        "/admin",
+        (
+            ("Company Verifications", "/admin/verifications"),
+            ("Jobs Queue", "/admin/moderation"),
+        ),
+    )
+
+
 async def _admin_skill_assessment_stats(db: AsyncSession) -> ToolResult:
     """Summarize assessment attempts, pass rates, pool readiness, and archived topics."""
     active_topics = list((await db.scalars(
@@ -1167,7 +1367,6 @@ async def _admin_skill_assessment_stats(db: AsyncSession) -> ToolResult:
         .order_by(SkillTopic.name.asc(), SkillTopic.slug.asc())
     )).all())
     active_topic_count = len(active_topics)
-    topics = active_topics[:MAX_ROWS]
     archived_count = int(await db.scalar(
         select(func.count(SkillTopic.slug)).where(SkillTopic.archived_at.is_not(None))
     ) or 0)
@@ -1199,27 +1398,35 @@ async def _admin_skill_assessment_stats(db: AsyncSession) -> ToolResult:
         )
         for topic in active_topics
     )
-    not_ready_count = active_topic_count - ready_count
-    lines = []
-    for topic in topics:
-        total, completed, passed = attempts_by_topic.get(topic.slug, (0, 0, 0))
-        counts = question_counts.get(topic.slug, {})
-        ready = all(counts.get(level, 0) >= needed for level, needed in (
-            ("EASY", 4), ("MEDIUM", 4), ("HARD", 2),
-        ))
-        pass_rate = round(100 * passed / completed) if completed else 0
-        lines.append(
-            f"{topic.name}: {total} attempts, {completed} completed, "
-            f"{pass_rate}% pass rate, {'Ready' if ready else 'Needs questions'}."
+    if active_topic_count == ready_count:
+        topic_summary = f"{active_topic_count} active topics (all ready)"
+    else:
+        topic_summary = (
+            f"{active_topic_count} active topics, {ready_count} ready, "
+            f"{active_topic_count - ready_count} not ready"
         )
-    answer = (
-        f"There are {active_topic_count} active assessment topics ({ready_count} ready, "
-        f"{not_ready_count} not ready) and {archived_count} archived. "
-        + (" ".join(lines) if lines else "No assessment topics are configured.")
+    details = [topic_summary]
+    if archived_count:
+        details.append(_count_phrase(archived_count, "archived topic"))
+    most_attempted = sorted(
+        (
+            (attempts_by_topic.get(topic.slug, (0, 0, 0))[0], topic.name)
+            for topic in active_topics
+        ),
+        key=lambda item: (-item[0], item[1]),
     )
-    if active_topic_count > len(topics):
-        answer += f" +{active_topic_count - len(topics)} more topics."
-    return ToolResult("admin_skill_assessment_stats", answer, "/admin/skill-assessments")
+    if most_attempted and most_attempted[0][0]:
+        details.append(
+            f"Most attempts: {_short_words(most_attempted[0][1], 6)} "
+            f"({most_attempted[0][0]})"
+        )
+    answer = ". ".join(details) + "."
+    return ToolResult(
+        "admin_skill_assessment_stats",
+        answer,
+        "/admin/skill-assessments",
+        (("Skill Assessments", "/admin/skill-assessments"),),
+    )
 
 
 async def execute_read_tool(
@@ -1237,11 +1444,18 @@ async def execute_read_tool(
         raise HTTPException(status_code=401, detail="Sign in to view your account data.")
     if expected_role is not None and user is not None and user.role != expected_role:
         raise HTTPException(status_code=403, detail="This live-data request is not available for your role.")
-    internship_id = _validated_args(name, args)
+    validated_arg = _validated_args(name, args)
+    internship_id = validated_arg if isinstance(validated_arg, int) else None
+    application_status = validated_arg if isinstance(validated_arg, str) else None
     # Keep tool dispatch explicit so the allowlist above and its role mapping stay auditable.
     actions = {
         "student_applications": lambda: _student_applications(db, user),
-        "student_application_counts": lambda: _student_application_counts(db, user),
+        "student_application_counts": lambda: _student_application_counts(
+            db,
+            user,
+            application_status,
+        ),
+        "student_account_summary": lambda: _student_account_summary(db, user),
         "student_interviews": lambda: _student_interviews(db, user),
         "student_notifications": lambda: _student_notifications(db, user),
         "student_unread_messages": lambda: _student_unread_messages(db, user),
@@ -1259,6 +1473,7 @@ async def execute_read_tool(
         "company_interviews": lambda: _company_interviews(db, user),
         "company_unread_messages": lambda: _company_unread_messages(db, user),
         "company_verification_status": lambda: _company_verification_status(db, user),
+        "company_account_summary": lambda: _company_account_summary(db, user),
         "admin_audit_events": lambda: _admin_audit(db, user),
         "admin_pending_approvals": lambda: _admin_pending(db),
         "admin_verification_counts": lambda: _admin_verification_counts(db),
@@ -1276,6 +1491,7 @@ async def execute_read_tool(
         "public_open_internships_count": lambda: _public_open_internships_count(db),
         "admin_skill_assessment_stats": lambda: _admin_skill_assessment_stats(db),
         "admin_open_reports": lambda: _admin_open_reports(db),
+        "admin_platform_summary": lambda: _admin_platform_summary(db),
     }
     # A slow database/tool call should not hold the chatbot request open indefinitely.
     return await asyncio.wait_for(actions[name](), timeout=TOOL_TIMEOUT_SECONDS)

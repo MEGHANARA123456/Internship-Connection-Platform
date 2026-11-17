@@ -144,8 +144,7 @@ def _request_json(url: str, *, payload: dict | None = None, token: str | None = 
             status = response.status
             body = response.read().decode("utf-8")
     except HTTPError as error:
-        status = error.code
-        body = error.read().decode("utf-8", errors="replace")
+        return error.code, {}, (time.monotonic() - started) * 1000
     except (URLError, TimeoutError) as error:
         return 0, {"detail": type(error).__name__}, (time.monotonic() - started) * 1000
     try:
@@ -199,7 +198,7 @@ def _run_role(base: str, role: str, token: str, delay: float) -> list[tuple[str,
             for source in sources # type: ignore
             if isinstance(source, dict) and source.get("id")
         )
-        category = str(body.get("category", body.get("detail", "request_error")))
+        category = str(body.get("category", "request_error"))
         passed = status == 200
         reason = ""
         if passed and item.expected == "source":

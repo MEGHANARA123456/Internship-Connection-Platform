@@ -32,6 +32,11 @@ class ProviderResult:
     sources: tuple[str, ...]
     confidence: float = 0.0
     needs_clarification: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    retries: int = 0
+    usage_reported: bool = False
 
 
 class AnswerProvider(Protocol):

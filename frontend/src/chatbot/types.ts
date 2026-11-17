@@ -13,6 +13,8 @@ export interface ChatMessage {
   suggestedFollowups?: string[]
   noEvidence?: boolean
   needsClarification?: string | null
+  providerFallbackReason?: string | null
+  providerRetryAfter?: number | null
   summary?: PersonalSummary
 }
 
@@ -31,6 +33,8 @@ export interface ChatResponse {
   category: string
   refused: boolean
   needs_clarification: string | null
+  provider_fallback_reason?: string | null
+  provider_retry_after?: number | null
 }
 
 export type ChatPage =
@@ -75,6 +79,7 @@ export interface ChatbotStatus {
   retrieval: 'bm25' | 'hybrid'
   provider_ok: boolean
   provider_configured: boolean
+  fallback_reason?: string | null
   rag_enabled: boolean
   indexed_chunk_count: number
   last_indexed_at: string | null

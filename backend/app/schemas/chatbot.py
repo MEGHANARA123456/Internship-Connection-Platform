@@ -62,7 +62,7 @@ class ChatAskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     message: str = Field(min_length=1, max_length=500)
     history: list[ChatTurn] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
-    previous_suggestions: list[str] = Field(default_factory=list, max_length=3)
+    previous_suggestions: list[str] = Field(default_factory=list, max_length=9)
     page: ChatPage = ChatPage.home
 
     @field_validator("message", mode="before")
@@ -80,7 +80,7 @@ class ChatAskRequest(BaseModel):
             item.strip()[:200]
             for item in value
             if isinstance(item, str) and item.strip()
-        ][-3:]
+        ][-9:]
 
     @field_validator("history", mode="before")
     @classmethod
@@ -139,6 +139,8 @@ class ChatAskResponse(BaseModel):
     category: str
     refused: bool
     needs_clarification: str | None = None
+    provider_fallback_reason: str | None = None
+    provider_retry_after: int | None = None
 
 
 class ChatFeedbackRequest(BaseModel):

@@ -43,6 +43,12 @@ function isChatResponse(value: unknown): value is ChatResponse {
     && typeof value.refused === 'boolean'
     && 'needs_clarification' in value
     && (typeof value.needs_clarification === 'string' || value.needs_clarification === null)
+    && (!('provider_fallback_reason' in value)
+      || typeof value.provider_fallback_reason === 'string'
+      || value.provider_fallback_reason === null)
+    && (!('provider_retry_after' in value)
+      || typeof value.provider_retry_after === 'number'
+      || value.provider_retry_after === null)
 }
 
 function isChatbotStatus(value: unknown): value is ChatbotStatus {
@@ -58,6 +64,9 @@ function isChatbotStatus(value: unknown): value is ChatbotStatus {
     && typeof value.provider_ok === 'boolean'
     && 'provider_configured' in value
     && typeof value.provider_configured === 'boolean'
+    && (!('fallback_reason' in value)
+      || typeof value.fallback_reason === 'string'
+      || value.fallback_reason === null)
     && 'rag_enabled' in value
     && typeof value.rag_enabled === 'boolean'
     && 'indexed_chunk_count' in value
@@ -103,7 +112,7 @@ export async function askChatbot(
 ): Promise<ChatResponse> {
   const send = (turns: ChatTurn[]) => api.post<ChatResponse>(
     '/chatbot/ask',
-    { message: message.slice(0, MAX_CHAT_MESSAGE_CHARS), history: turns, page, previous_suggestions: previousSuggestions.slice(-3) },
+    { message: message.slice(0, MAX_CHAT_MESSAGE_CHARS), history: turns, page, previous_suggestions: previousSuggestions.slice(-9) },
     { timeout: 10_000 },
   )
   let response: Awaited<ReturnType<typeof send>>

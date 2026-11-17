@@ -9,6 +9,7 @@ from .guardrails import (
     INJECTION_REPLY,
     OUT_OF_SCOPE_PATTERNS,
     OUT_OF_SCOPE_REPLY,
+    PERSONAL_DATA_EXPORT_REPLY,
     SECRET_REPLY,
     detect_abuse,
     detect_account_specific,
@@ -16,6 +17,8 @@ from .guardrails import (
     detect_injection,
     is_chatbot_capability_question,
     is_role_capability_question,
+    requests_credential_value,
+    requests_personal_data_export,
     suggests_self_harm,
 )
 from .providers.base import Passage
@@ -75,13 +78,15 @@ def decide_scope(
     role: str = "guest",
 ) -> ScopeDecision:
     """Classify safety, role, account-specific, and knowledge-match scope in precedence order."""
-    if contains_secret(text):
+    if contains_secret(text) or requests_credential_value(text):
         return ScopeDecision("credential", False, True, "credential_detected")
     if detect_abuse(text):
         reason = "self_harm_request" if suggests_self_harm(text) else "abusive_request"
         return ScopeDecision("abuse", False, True, reason)
     if detect_injection(text):
         return ScopeDecision("injection", False, True, "prompt_injection")
+    if requests_personal_data_export(text):
+        return ScopeDecision("personal_data_export", False, True, "personal_data_export")
     if detect_cross_account_request(text):
         return ScopeDecision("privacy", False, True, "cross_account_request")
     if (
@@ -112,6 +117,8 @@ def fixed_reply(decision: ScopeDecision, role: str = "guest") -> str:
         return SECRET_REPLY
     if decision.category == "injection":
         return INJECTION_REPLY
+    if decision.category == "personal_data_export":
+        return PERSONAL_DATA_EXPORT_REPLY
     if decision.category == "abuse":
         if decision.refusal_reason == "self_harm_request":
             return (

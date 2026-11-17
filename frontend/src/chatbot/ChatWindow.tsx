@@ -24,6 +24,7 @@ interface ChatWindowProps {
   retrieval?: 'bm25' | 'hybrid'
   ragEnabled?: boolean
   indexedChunkCount?: number
+  fallbackReason?: string | null
   online: boolean
   statusDisabled: boolean
   statusError: boolean
@@ -37,7 +38,7 @@ interface ChatWindowProps {
   onClose: () => void
 }
 
-export function ChatWindow({ messages, typing, error, role, page, mode, retrieval, ragEnabled, indexedChunkCount, online, statusDisabled, statusError, statusChecking, summaryLoading, onSend, onSummary, onRetry, onFeedback, onClear, onClose }: ChatWindowProps) {
+export function ChatWindow({ messages, typing, error, role, page, mode, retrieval, ragEnabled, indexedChunkCount, fallbackReason, online, statusDisabled, statusError, statusChecking, summaryLoading, onSend, onSummary, onRetry, onFeedback, onClear, onClose }: ChatWindowProps) {
   const session = useAuthStore((state) => state.session)
   const [draft, setDraft] = useState('')
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -129,6 +130,7 @@ export function ChatWindow({ messages, typing, error, role, page, mode, retrieva
         Please don’t share passwords or personal data. Chats are kept only in this page session.
       </p>
       {statusDisabled && <p role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-100">The help assistant is disabled by the backend. Set <code className="font-semibold">CHATBOT_ENABLED=true</code> in the backend environment and restart the backend to enable it.</p>}
+      {fallbackReason && <p role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-100">The language model is unavailable ({fallbackReason}). Help-document answers remain available.</p>}
       {ragEnabled && indexedChunkCount === 0 && <p role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-100">The searchable knowledge index is empty. Documentation answers may be limited until an administrator reindexes the help content.</p>}
       {statusError && <p role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-100">Chat connection could not be checked. You can still try sending a message.</p>}
       {!online && <p role="status" className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-900 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-100">You are offline. Reconnect to send messages.</p>}
@@ -189,7 +191,7 @@ export function ChatWindow({ messages, typing, error, role, page, mode, retrieva
             onKeyDown={handleInputKeyDown}
             placeholder="Ask about using InternSphere…"
             disabled={typing || !online || statusDisabled}
-            className="glass-input max-h-[120px] min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:focus:ring-indigo-900"
+            className="glass-input [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-h-[120px] min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:focus:ring-indigo-900"
           />
           <button type="submit" disabled={!draft.trim() || typing || !online || statusDisabled} aria-label="Send question" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"><ArrowUp className="h-4 w-4" /></button>
         </div>

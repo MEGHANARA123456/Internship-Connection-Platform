@@ -2,20 +2,25 @@
 
 import json
 import logging
+import math
 import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..chatbot.audit_summary import summarize_audit_actions
 from ..chatbot.chatbot_config import ChatbotConfig, load_config
 from ..chatbot.guardrails import (
     _output_safety_failure,
+    contains_markup,
+    credential_question_guidance,
     is_role_capability_question,
     output_is_safe,
+    requests_credential_value,
 )
 from ..chatbot.providers import create_answer_provider
 from ..chatbot.providers.base import (
@@ -24,6 +29,8 @@ from ..chatbot.providers.base import (
     Passage,
     ProviderPayload,
 )
+from ..chatbot.provider_budget import ProviderBudget
+from ..chatbot.providers.llm_http import ProviderRateLimitError
 from ..chatbot.providers.retrieval_only import RetrievalOnlyProvider
 from ..chatbot.rag.retriever import HybridRetriever
 from ..chatbot.redaction import contains_secret, redact
@@ -36,7 +43,7 @@ from ..chatbot.scope import (
     is_how_to_question,
 )
 from ..models import ChatbotLowConfidenceLog
-from .audit import AuditEventSummary, audit_action_label
+from .audit import AuditEventSummary
 
 logger = logging.getLogger("internsphere.chatbot")
 PAGE_ROUTES = {
@@ -83,8 +90,8 @@ GUIDANCE = {
     "notifications": "Open Notifications & Mailbox to review your alerts.",
     "account": "Open your account settings to review your InternSphere account information.",
 }
-WORD_LIMIT = 120
-NO_EVIDENCE_ANSWER = "I don't have sufficient data to answer this question."
+WORD_LIMIT = 60
+NO_EVIDENCE_ANSWER = "I don't have this in the help guide yet"
 CURATED_ANSWERS_PATH = Path(__file__).resolve().parents[2] / "kb" / "curated_answers.yaml"
 CURATED_IGNORED_TOKENS = QUERY_STOPWORDS | {
     "help", "please", "page", "platform", "internsphere", "want", "need", "get",
@@ -138,6 +145,8 @@ class ChatResult:
     matched_ids: tuple[str, ...]
     refusal_reason: str | None
     needs_clarification: str | None = None
+    provider_fallback_reason: str | None = None
+    provider_retry_after: int | None = None
 
 
 @dataclass(frozen=True)
@@ -195,6 +204,10 @@ def _curated_tokens(text: str) -> set[str]:
 
 
 def _curated_match_score(query: str, example: str) -> float:
+    normalized_query = " ".join(re.findall(r"[a-z0-9]+", query.casefold()))
+    normalized_example = " ".join(re.findall(r"[a-z0-9]+", example.casefold()))
+    if normalized_query == normalized_example:
+        return 1.0
     query_tokens = _curated_tokens(query)
     example_tokens = _curated_tokens(example)
     if not query_tokens or not example_tokens:
@@ -211,11 +224,7 @@ def _match_curated_question(
     """Match one or two distinct help questions to unambiguous role-visible answers."""
     parts = [
         part.strip(" ,;")
-        for part in re.split(
-            r"\?\s*|\s*;\s*|\s+\band\s+(?=(?:what|how|where|when|who|why|can|do|is|are)\b)",
-            message,
-            flags=re.IGNORECASE,
-        )
+        for part in re.split(r"\?\s*", message)
         if part.strip(" ,;")
     ]
     if not parts:
@@ -244,6 +253,29 @@ def _match_curated_question(
         if answer not in selected:
             selected.append(answer)
     return tuple(selected)
+
+
+def _retrieval_has_clear_match(
+    query: str,
+    passages: list[Passage],
+    retriever: BM25Retriever,
+    minimum_score: float,
+) -> bool:
+    """Require a decisive top passage with lexical overlap in its heading or metadata."""
+    if not passages or passages[0].score < minimum_score:
+        return False
+    if len(passages) > 1 and passages[0].score - passages[1].score < 0.08:
+        return False
+    document_id = passages[0].doc_id or passages[0].id.split("#", 1)[0]
+    document = next(
+        (item for item in getattr(retriever, "documents", ()) if item.id == document_id),
+        None,
+    )
+    heading = passages[0].text.splitlines()[0].removeprefix("## ") if passages[0].text else ""
+    evidence_terms = _curated_tokens(heading)
+    if document is not None:
+        evidence_terms.update(_curated_tokens(" ".join((*document.keywords, *document.examples))))
+    return bool(_curated_tokens(query) & evidence_terms)
 
 
 def _curated_source(answer: CuratedAnswer, query: str, retriever: BM25Retriever) -> tuple[str, str]:
@@ -320,6 +352,8 @@ def _closest_supported_questions(
     query: str,
     role: str,
     page: str,
+    curated_answers: tuple[CuratedAnswer, ...] = (),
+    previous_suggestions: list[str] | None = None,
 ) -> tuple[str, ...]:
     """Return up to three role-visible, example questions nearest to the current message."""
     fallback = {
@@ -344,6 +378,31 @@ def _closest_supported_questions(
             "How does InternSphere work?",
         ),
     }
+    def question_key(value: str) -> str:
+        return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+    excluded = {question_key(item) for item in previous_suggestions or []}
+    if contains_markup(query) or len(query) > 300:
+        return tuple(
+            question for question in fallback[role]
+            if question_key(question) not in excluded
+        )[:3]
+    from ..chatbot.orchestrator import classify_intent
+
+    def is_supported(question: str) -> bool:
+        if _match_curated_question(question, role, curated_answers):
+            return True
+        if classify_intent(question, role).tool_name is not None:
+            return True
+        candidates = retriever.retrieve(
+            question,
+            role,
+            top_k=2,
+            minimum_score=0.5,
+            page_route=PAGE_ROUTES.get(page),
+        )
+        return _retrieval_has_clear_match(question, candidates, retriever, 0.5)
+
     passages = retriever.retrieve(
         query,
         role,
@@ -367,14 +426,22 @@ def _closest_supported_questions(
             (example.strip() for example in document.examples if example.strip()),
             "",
         )
-        if question and question.casefold() not in {item.casefold() for item in questions}:
+        if (
+            question
+            and is_supported(question)
+            and question_key(question) not in excluded
+            and question.casefold() not in {item.casefold() for item in questions}
+        ):
             questions.append(question)
         if len(questions) == 3:
             break
     for question in fallback[role]:
         if len(questions) == 3:
             break
-        if question.casefold() not in {item.casefold() for item in questions}:
+        if (
+            question_key(question) not in excluded
+            and question.casefold() not in {item.casefold() for item in questions}
+        ):
             questions.append(question)
     return tuple(questions)
 
@@ -546,8 +613,11 @@ def _suggested_followups(
     previous_suggestions: list[str],
     matched_examples: tuple[str, ...] = (),
     matched_intent: str | None = None,
+    curated_answers: tuple[CuratedAnswer, ...] = (),
+    retriever: BM25Retriever | None = None,
 ) -> tuple[str, ...]:
     """Offer answerable questions related to the page/topic without repeating recent content."""
+    retriever = retriever or BM25Retriever()
     text = message.casefold()
     topic = source_ids[0] if source_ids else ""
     suggestions: tuple[str, ...]
@@ -795,21 +865,57 @@ def _suggested_followups(
         ),
     }
     if matched_intent == "public_open_internships_count":
-        suggestions = (
-            (
+        if role == "guest":
+            suggestions = (
                 "How do I search internships?",
                 "How does InternSphere work?",
                 "How do I register as a student?",
             )
-            if role == "guest"
-            else (
+        elif role == "admin":
+            suggestions = (
+                "How do I review pending postings?",
+                "Show company verification counts.",
+                "Are there any open reports?",
+            )
+        elif role == "company":
+            suggestions = (
+                "How do I create an internship posting?",
+                "How do I review applicants?",
+                "How do I verify my company?",
+            )
+        else:
+            suggestions = (
                 "How do I search internships by skills and location?",
                 "How do I apply for an internship?",
                 "Where can I see my applications?",
             )
-        )
     elif matched_intent in intent_suggestions:
         suggestions = intent_suggestions[matched_intent]
+    intent_sources = {
+        "student_applications": ("application-statuses-timeline", "applying"),
+        "student_application_counts": ("application-statuses-timeline", "applying"),
+        "student_account_summary": ("application-statuses-timeline", "interviews", "notifications-mailbox"),
+        "student_skill_retake": ("skill-assessments",),
+        "student_skill_gap": ("assessment-badges", "skill-assessments", "profile-resume"),
+        "company_applicants": ("company-applicant-review", "company-hiring-pipeline"),
+        "company_shortlisted": ("company-applicant-review", "company-hiring-pipeline"),
+        "company_pipeline": ("company-hiring-pipeline",),
+        "company_internships": ("company-posting-closing",),
+        "company_account_summary": ("company-posting-closing", "company-applicant-review", "company-verification"),
+        "admin_skill_assessment_stats": ("admin-skill-assessments",),
+        "admin_platform_summary": ("admin-moderation", "admin-company-verification", "admin-analytics-reports"),
+        "admin_audit_events": ("admin-analytics-reports",),
+    }
+    if matched_intent in intent_sources:
+        related_sources = set(intent_sources[matched_intent])
+        related_questions = tuple(
+            question
+            for answer in curated_answers
+            if answer.audience == role and answer.source in related_sources
+            for question in answer.questions
+        )
+        if related_questions:
+            suggestions = related_questions
     topic_suggestions = {
         "internship-verification-and-moderation": (
             "What does a verified company badge mean?",
@@ -849,16 +955,60 @@ def _suggested_followups(
     }
     if source_ids and source_ids[0] in topic_suggestions:
         suggestions = topic_suggestions[source_ids[0]]
-    if matched_examples:
+    if source_ids:
+        related_questions = tuple(
+            question
+            for answer in curated_answers
+            if answer.audience == role and answer.source in source_ids
+            for question in answer.questions
+        )
+        suggestions = (*related_questions, *matched_examples, *suggestions)
+    elif matched_examples:
         suggestions = (*matched_examples, *suggestions)
 
-    excluded = {message.casefold().strip()}
-    excluded.update(content.casefold().strip() for _, content in history)
-    excluded.update(item.casefold().strip() for item in previous_suggestions)
+    def question_key(value: str) -> str:
+        return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+    asked_questions = tuple(
+        part.strip()
+        for part in re.split(r"\?\s*", message)
+        if part.strip()
+    )[:2]
+    excluded = {question_key(message)}
+    excluded.update(question_key(part) for part in asked_questions)
+    excluded.update(question_key(content) for _, content in history)
+    excluded.update(question_key(item) for item in previous_suggestions)
     selected = []
     for candidate in suggestions:
-        normalized = candidate.casefold().strip()
-        if normalized not in excluded and normalized not in {item.casefold() for item in selected}:
+        normalized = question_key(candidate)
+        if candidate.count("?") != 1 or normalized in excluded:
+            continue
+        if role == "admin" and re.search(
+            r"\bmy\s+applications?\b|\bapplications?\b.{0,30}\b(?:do|can|should)\s+i\s+(?:have|see|check)\b",
+            candidate,
+            re.I,
+        ):
+            continue
+        if any(_curated_match_score(candidate, part) >= 0.8 for part in asked_questions):
+            continue
+        supported = bool(_match_curated_question(candidate, role, curated_answers))
+        if not supported:
+            from ..chatbot.orchestrator import classify_intent
+
+            supported = classify_intent(candidate, role).tool_name is not None
+        if not supported:
+            passages = retriever.retrieve(
+                candidate,
+                role,
+                top_k=2,
+                minimum_score=0.5,
+                page_route=PAGE_ROUTES.get(page),
+            )
+            supported = _retrieval_has_clear_match(candidate, passages, retriever, 0.5)
+        if (
+            supported
+            and normalized not in {question_key(item) for item in selected}
+        ):
             selected.append(candidate)
         if len(selected) == 3:
             break
@@ -866,52 +1016,16 @@ def _suggested_followups(
 
 
 def _admin_audit_summary(events: list[AuditEventSummary]) -> str:
-    """Render recent audit summaries with UTC timestamps and truncate the combined text to the chatbot limit."""
-    if not events:
-        return "There are no recent audit events to summarize."
-
-    action_verbs = {
-        "company_rejected": "rejected",
-        "company_verified": "verified",
-        "posting_approved": "approved",
-        "posting_removed": "removed",
-        "posting_rejected": "rejected",
-        "user_reinstated": "unblocked",
-        "user_suspended": "blocked",
-    }
-    target_names = {
-        "company": "company",
-        "internship": "internship",
-        "posting": "posting",
-        "report": "report",
-        "user": "user",
-    }
-    summaries = []
-    for event in events:
-        actor_role = (event.actor_role or "").upper()
-        actor_label = {
-            "ADMIN": "Admin",
-            "COMPANY": "Company",
-            "STUDENT": "Student",
-        }.get(actor_role, "User")
-        actor = f"{actor_label} #{event.actor_id}" if event.actor_id is not None else "System"
-        target_type = (event.target_type or "").lower()
-        target = (
-            f"{target_names.get(target_type, 'platform item')} #{event.target_id}"
-            if event.target_id is not None
-            else "platform settings"
-        )
-        verb = action_verbs.get(event.action.lower())
-        action = verb if verb else f"recorded {audit_action_label(event.action).lower()}"
-        timestamp = event.created_at
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
-        else:
-            timestamp = timestamp.astimezone(timezone.utc)
-        summaries.append(
-            f"{actor} {action} {target} on {timestamp.strftime('%b %d, %Y at %H:%M UTC')}."
-        )
-    return _truncate_answer("Recent audit events: " + " ".join(summaries))
+    """Summarize only tracked actions from the last seven days without personal details."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    recent = [
+        event.action
+        for event in events
+        if (event.created_at.replace(tzinfo=timezone.utc)
+            if event.created_at.tzinfo is None
+            else event.created_at.astimezone(timezone.utc)) >= cutoff
+    ]
+    return summarize_audit_actions(recent)
 
 
 class ChatbotService:
@@ -936,6 +1050,14 @@ class ChatbotService:
         self._now = now
         self._requests: dict[str, deque[float]] = defaultdict(deque)
         self.metrics: dict[str, int] = defaultdict(int)
+        self.last_provider_fallback_reason: str | None = self.config.fallback_reason
+        self.provider_budget = ProviderBudget(
+            tokens_per_minute=self.config.tokens_per_minute,
+            tokens_per_day=self.config.tokens_per_day,
+            requests_per_minute=self.config.requests_per_minute,
+            requests_per_day=self.config.requests_per_day,
+            now=now,
+        )
 
     async def classify_intent_hint(self, message: str, role: str) -> str | None:
         """Ask a router provider for a redacted intent hint, returning ``None`` if routing is unavailable."""
@@ -986,15 +1108,29 @@ class ChatbotService:
         live_links: tuple[tuple[str, str], ...] = (),
         previous_suggestions: list[str] | None = None,
         matched_intent: str | None = None,
+        budget_key: str = "anonymous",
     ) -> ChatResult:
         """Retrieve and scope help/live context, construct a safe role-aware answer, and attach allowed sources and links."""
         started = time.monotonic()
         normalized_message = " ".join(message.split())
         role_name = role.lower() if role.lower() in {"student", "company", "admin"} else "guest"
         retrieval_role = "guest" if role_name == "guest" else role_name
-        secret_in_request = contains_secret(normalized_message) or any(
+        secret_in_request = (
+            contains_secret(normalized_message)
+            or requests_credential_value(normalized_message)
+            or any(
+                contains_secret(content) or requests_credential_value(content)
+                for _, content in history
+            )
+        )
+        has_secret_value = contains_secret(normalized_message) or any(
             contains_secret(content) for _, content in history
         )
+        noisy_message = contains_markup(normalized_message) or len(normalized_message) > 300
+        if secret_in_request or noisy_message:
+            live_answer = None
+            live_route = None
+            live_links = ()
         score_threshold = (
             self.config.rag_min_score
             if self.config.uses_vector and self.vector_available and db
@@ -1008,11 +1144,13 @@ class ChatbotService:
                 live_answer is None
                 and not preflight.account_specific
                 and not is_role_capability_question(normalized_message)
+                and not noisy_message
+                and not secret_in_request
             )
             else ()
         )
         passages: list[Passage] = []
-        if not secret_in_request and (
+        if not secret_in_request and not noisy_message and (
             not preflight.refused
             or preflight.refusal_reason == "no_product_intent_or_knowledge_match"
         ) and include_docs:
@@ -1050,6 +1188,13 @@ class ChatbotService:
                     minimum_score=self.config.min_score,
                     page_route=PAGE_ROUTES.get(page),
                 )
+            if not _retrieval_has_clear_match(
+                retrieval_query,
+                passages,
+                self.retriever,
+                score_threshold,
+            ):
+                passages = []
         decision = decide_scope(normalized_message, passages, score_threshold, role_name)
         if secret_in_request:
             decision = ScopeDecision("credential", False, True, "credential_detected")
@@ -1083,15 +1228,40 @@ class ChatbotService:
         answer_path = "retrieval"
         low_confidence = False
         needs_clarification: str | None = None
+        provider_fallback_reason: str | None = None
+        provider_retry_after: int | None = None
         if decision.refused:
             low_confidence = decision.refusal_reason == "no_product_intent_or_knowledge_match"
-            answer = _no_evidence_reply() if low_confidence else fixed_reply(decision, role_name)
+            credential_guidance = (
+                credential_question_guidance(normalized_message)
+                if (
+                    decision.category == "credential"
+                    and not has_secret_value
+                    and not noisy_message
+                )
+                else None
+            )
+            answer = (
+                _no_evidence_reply()
+                if low_confidence
+                else credential_guidance or fixed_reply(decision, role_name)
+            )
             answer_path = "fallback" if low_confidence else "refusal"
             if low_confidence:
                 source_type = "none"
-                links = (("Help docs", "/#faq"),)
+                links = () if noisy_message else (("Help docs", "/#faq"),)
         elif curated_matches:
-            answer = _truncate_answer("\n\n".join(item.answer for item in curated_matches))
+            if len(curated_matches) > 1:
+                answer_labels = {
+                    "company-reject-applicant": "Reject",
+                    "company-candidate-skills": "Skills",
+                }
+                answer = " ".join(
+                    f"{index}. {answer_labels.get(item.id, 'Answer')}: {item.answer.strip()}"
+                    for index, item in enumerate(curated_matches, start=1)
+                )
+            else:
+                answer = _truncate_answer(curated_matches[0].answer)
             links = tuple(
                 (item.label, item.route)
                 for item in curated_matches
@@ -1168,24 +1338,33 @@ class ChatbotService:
         elif not passages:
             answer = _no_evidence_reply()
             source_type = "none"
-            links = (("Help docs", "/#faq"),)
+            links = () if noisy_message else (("Help docs", "/#faq"),)
             low_confidence = True
             answer_path = "fallback"
         elif self.config.mode == "llm":
-            answer, sources, links, provider_fallback, needs_clarification = await self._answer_with_provider(
+            (
+                answer,
+                sources,
+                links,
+                provider_fallback,
+                needs_clarification,
+                provider_fallback_reason,
+                provider_retry_after,
+            ) = await self._answer_with_provider(
                 normalized_message,
                 [],
                 role_name,
                 page,
                 passages,
+                budget_key,
             )
-            answer_path = "fallback" if provider_fallback else "model"
+            answer_path = "fallback" if provider_fallback else "llm"
             if needs_clarification:
                 source_type = "none"
             elif answer == NO_EVIDENCE_ANSWER:
                 low_confidence = True
                 source_type = "none"
-                links = (("Help docs", "/#faq"),)
+                links = ()
                 if db is not None:
                     db.add(ChatbotLowConfidenceLog(
                         role=role_name,
@@ -1203,7 +1382,8 @@ class ChatbotService:
         allowed_routes.update(
             route for _, route in live_links if _is_allowed_live_route(route, role_name)
         )
-        answer = _truncate_answer(answer)
+        if decision.category != "personal_data_export":
+            answer = _truncate_answer(answer)
         if not output_is_safe(answer, allowed_routes):
             safety_failure = _output_safety_failure(answer, allowed_routes)
             safe_live_answer = _truncate_answer(live_answer or "")
@@ -1261,12 +1441,14 @@ class ChatbotService:
             answer = _no_evidence_reply()
             sources = ()
             source_type = "none"
-            links = (("Help docs", "/#faq"),)
+            links = ()
             low_confidence = True
             answer_path = "fallback"
         elapsed_ms = round((time.monotonic() - started) * 1000)
         category = "low_confidence" if low_confidence else decision.category
-        self.metrics["answered" if answer_path not in {"fallback", "refusal"} else answer_path] += 1
+        self.metrics[answer_path] += 1
+        if answer_path not in {"fallback", "refusal"}:
+            self.metrics["answered"] += 1
         refused = decision.refused and not low_confidence
         if refused:
             self.metrics["refused"] += 1
@@ -1290,11 +1472,14 @@ class ChatbotService:
             suggested_followups=(
                 ()
                 if needs_clarification
+                or decision.category in {"personal_data_export", "privacy", "admin_only"}
                 else _closest_supported_questions(
                     self.retriever,
                     normalized_message,
                     role_name,
                     page,
+                    self.curated_answers,
+                    previous_suggestions,
                 )
                 if low_confidence
                 else _suggested_followups(
@@ -1312,6 +1497,8 @@ class ChatbotService:
                         for example in document.examples
                     ),
                     matched_intent,
+                    self.curated_answers,
+                    self.retriever,
                 )
             ),
             category=category,
@@ -1325,6 +1512,8 @@ class ChatbotService:
             ))),
             refusal_reason=decision.refusal_reason,
             needs_clarification=needs_clarification,
+            provider_fallback_reason=provider_fallback_reason,
+            provider_retry_after=provider_retry_after,
         )
 
     async def _answer_with_provider(
@@ -1334,12 +1523,15 @@ class ChatbotService:
         role: str,
         page: str,
         passages: list[Passage],
+        budget_key: str = "anonymous",
     ) -> tuple[
         str,
         tuple[tuple[str, str, str], ...],
         tuple[tuple[str, str], ...],
         bool,
         str | None,
+        str | None,
+        int | None,
     ]:
         """Request a redacted provider answer and validate its length, citations, and routes, falling back to retrieved text."""
         payload = ProviderPayload(
@@ -1350,8 +1542,60 @@ class ChatbotService:
             passages=tuple(passages),
         )
         allowed_ids = {passage.id for passage in passages}
+        prompt_characters = (
+            len(message)
+            + len("\n".join(content for _, content in history))
+            + sum(len(passage.title) + len(passage.text) for passage in passages)
+        )
+        estimated_prompt_tokens = max(1, math.ceil(prompt_characters / 4 * 1.25))
+        reservation_id, retry_after = self.provider_budget.reserve(
+            budget_key,
+            estimated_prompt_tokens + self.config.max_tokens + 1500,
+            2,
+        )
+        if reservation_id is None:
+            reason = (
+                "provider_rate_limited"
+                if self.provider_budget.snapshot()["provider_cooldown_seconds"]
+                else "provider_budget_exceeded"
+            )
+            self.last_provider_fallback_reason = reason
+            logger.warning(
+                "chatbot_provider_fallback reason=%s retry_after=%s",
+                reason,
+                retry_after,
+                extra={
+                    "chatbot_meta": {
+                        "reason": reason,
+                        "retry_after": retry_after,
+                    }
+                },
+            )
+            return (
+                _truncate_answer(_render_retrieval_answer(passages)) or NO_EVIDENCE_ANSWER,
+                _sources_for(passages, role),
+                _links_for(passages, role),
+                True,
+                None,
+                reason,
+                retry_after,
+            )
         try:
             result = await self.provider.rewrite(payload)
+            self.provider_budget.settle(
+                reservation_id,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                total_tokens=result.total_tokens,
+                retries=result.retries,
+                usage_reported=result.usage_reported,
+            )
+            self.metrics["provider_requests"] += result.retries + 1
+            self.metrics["provider_retries"] += result.retries
+            self.metrics["prompt_tokens_total"] += result.prompt_tokens
+            self.metrics["completion_tokens_total"] += result.completion_tokens
+            self.metrics["total_tokens"] += result.total_tokens
+            self.metrics["provider_usage_unreported"] += int(not result.usage_reported)
             clarification = (
                 result.needs_clarification.strip()
                 if isinstance(result.needs_clarification, str)
@@ -1368,9 +1612,9 @@ class ChatbotService:
                     )
                 ):
                     raise ValueError("Provider clarification failed chatbot validation.")
-                return clarification, (), (), False, clarification
+                return clarification, (), (), False, clarification, None, None
             if not result.answerable or result.confidence < self.config.rag_min_score:
-                return NO_EVIDENCE_ANSWER, (), (("Help docs", "/#faq"),), False, None
+                return NO_EVIDENCE_ANSWER, (), (("Help docs", "/#faq"),), False, None, None, None
             if (
                 not result.answer.strip()
                 or (passages and not result.sources)
@@ -1399,26 +1643,43 @@ class ChatbotService:
                     )
                 )
             )
-            return result.answer.strip(), sources, _links_for(passages, role), False, None
+            return result.answer.strip(), sources, _links_for(passages, role), False, None, None, None
+        except ProviderRateLimitError as error:
+            self.provider_budget.note_rate_limit(error.retry_after)
+            self.last_provider_fallback_reason = "provider_rate_limited"
+            logger.warning(
+                "chatbot_provider_rate_limited retry_after=%d",
+                error.retry_after,
+                extra={"chatbot_meta": {"retry_after": error.retry_after}},
+            )
+            fallback_answer = _truncate_answer(_render_retrieval_answer(passages))
+            return (
+                fallback_answer or NO_EVIDENCE_ANSWER,
+                _sources_for(passages, role),
+                _links_for(passages, role),
+                True,
+                None,
+                "provider_rate_limited",
+                error.retry_after,
+            )
         except (OSError, RuntimeError, TimeoutError, ValueError):
+            self.last_provider_fallback_reason = "provider_unavailable"
+            logger.warning(
+                "chatbot_provider_fallback reason=provider_unavailable",
+                extra={"chatbot_meta": {"reason": "provider_unavailable"}},
+            )
             fallback_answer = _render_retrieval_answer(passages)
             fallback_answer = _truncate_answer(fallback_answer)
             if fallback_answer:
                 answer = fallback_answer
             else:
-                questions = _closest_supported_questions(
-                    self.retriever,
-                    payload.question,
-                    role,
-                    page,
-                )
-                answer = "I'm not sure about that yet. I can help with:\n" + "\n".join(
-                    f"- {question}" for question in questions[:3]
-                )
+                answer = NO_EVIDENCE_ANSWER
             return (
                 answer,
                 _sources_for(passages, role),
                 _links_for(passages, role),
                 True,
+                None,
+                "provider_unavailable",
                 None,
             )

@@ -45,6 +45,18 @@ from app.models import Application, CompanyProfile, Internship, StudentProfile, 
         ("my active postings", "company", "live_data", "company_internships"),
         ("How do I schedule an interview?", "company", "rag_help", None),
         ("How do I verify a company?", "admin", "rag_help", None),
+        ("Why can't I apply for an internship?", "student", "rag_help", None),
+        ("Where can I see my applied internships?", "student", "live_data", "student_applications"),
+        ("What is happening in my account?", "student", "live_data", "student_account_summary"),
+        ("What's going on in my account?", "company", "live_data", "company_account_summary"),
+        ("How do I change it?", "company", "rag_help", None),
+        ("List my applications", "admin", "rag_help", None),
+        ("How many are shortlisted?", "student", "live_data", "student_application_counts"),
+        ("Any interviews coming up?", "student", "live_data", "student_interviews"),
+        ("How many current internships are there?", "guest", "live_data", "public_open_internships_count"),
+        ("Show current internships from verified companies.", "guest", "live_data", "public_open_internships_count"),
+        ("Audit summary", "admin", "live_data", "admin_audit_events"),
+        ("What is happening on the platform?", "admin", "live_data", "admin_platform_summary"),
         ("How many applicants do I have?", "company", "live_data", "company_applicants"),
         ("How many interviews are scheduled for my company?", "company", "live_data", "company_interviews"),
         ("What's the weather?", "student", "out_of_scope", None),
@@ -54,6 +66,27 @@ def test_role_aware_intent_routes(message: str, role: str, category: str, tool: 
     intent = classify_intent(message, role)
     assert intent.category == category
     assert intent.tool_name == tool
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Show current internships from verified companies.",
+        "List available internships right now.",
+        "What open internship roles are on the platform?",
+        "Are there live opportunities from verified employers?",
+        "Show open opportunities today.",
+        "Are any internships open for applications?",
+        "List published and available internship roles.",
+        "How many internships can guests view?",
+        "Count live internship opportunities.",
+    ],
+)
+def test_public_open_internship_paraphrases_route_to_public_tool(question: str) -> None:
+    intent = classify_intent(question, "guest")
+
+    assert intent.category == "live_data"
+    assert intent.tool_name == "public_open_internships_count"
 
 
 def test_cross_account_request_is_refused_before_tool_selection() -> None:
@@ -202,7 +235,7 @@ async def test_live_admin_and_public_counts_use_dashboard_rules() -> None:
         assert f"{dashboard_live_postings} current internships" in public.answer
         assert student_public.answer == public.answer
         assert dashboard_live_postings == 2
-        assert "1 verified companies" in public.answer
+        assert "1 verified company" in public.answer
         assert "v***@example.test" in registrations.answer
         assert "active-student@example.test" not in registrations.answer
         assert "suspended-student@example.test" not in registrations.answer
@@ -460,10 +493,7 @@ async def test_live_tool_executes_read_only_query_without_writing() -> None:
             raise AssertionError("Chatbot tools must not commit database records.")
 
     result = await execute_read_tool("student_applications", {}, student, ReadOnlyDb())
-    assert result.answer == (
-        "You have 0 applications: 0 applied, 0 under review, 0 shortlisted, "
-        "0 interview, 0 offer, 0 rejected."
-    )
+    assert result.answer == "You have no applications."
 
 
 @pytest.mark.anyio
@@ -550,10 +580,11 @@ async def test_student_application_count_tool_uses_own_database_rows() -> None:
         result = await execute_read_tool("student_application_counts", {}, student, db)
 
     await engine.dispose()
-    assert result.answer == (
-        "You have 7 applications: 1 applied, 1 under review, 1 shortlisted, "
-        "1 interview, 2 offer, 1 rejected."
+    assert result.answer.startswith(
+        "You have 7 applications (1 applied, 1 under review, 1 shortlisted, "
+        "1 interview, 2 offers, 1 rejected). Latest:"
     )
+    assert "+2 more." in result.answer
     assert result.route == "/applications"
 
 
@@ -709,6 +740,397 @@ async def test_student_recommendations_exclude_own_applications_and_keep_best_ma
 
 
 @pytest.mark.anyio
+async def test_live_account_summaries_use_seeded_role_scoped_data() -> None:
+    from datetime import date, datetime, timedelta, timezone
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.models import Interview, Notification, Report
+    from app.models.base import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with sessions() as db:
+        company = User(email="company-summary@example.test", password_hash="unused", role=UserRole.COMPANY)
+        student = User(email="student-summary@example.test", password_hash="unused", role=UserRole.STUDENT)
+        admin = User(email="admin-summary@example.test", password_hash="unused", role=UserRole.ADMIN)
+        db.add_all((company, student, admin))
+        await db.flush()
+        db.add(CompanyProfile(
+            user_id=company.id,
+            company_name="Summary Co",
+            industry="Technology",
+            verification_status="PENDING",
+        ))
+        internship = Internship(
+            company_id=company.id,
+            title="Summary Engineering Internship",
+            description="Description",
+            location="Remote",
+            industry="Technology",
+            duration_months=3,
+            work_mode="REMOTE",
+            deadline=date.today() + timedelta(days=14),
+            status="PUBLISHED",
+        )
+        db.add(internship)
+        await db.flush()
+        application = Application(
+            internship_id=internship.id,
+            student_id=student.id,
+            status="SHORTLISTED",
+        )
+        db.add(application)
+        await db.flush()
+        db.add_all((
+            Interview(
+                application_id=application.id,
+                scheduled_by=company.id,
+                scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+                interview_type="VIDEO",
+                status="SCHEDULED",
+            ),
+            Notification(
+                user_id=company.id,
+                notification_type="APPLICATION",
+                title="New applicant",
+                body="A student applied.",
+            ),
+            Notification(
+                user_id=student.id,
+                notification_type="INTERVIEW",
+                title="Interview scheduled",
+                body="An interview is scheduled.",
+            ),
+            Report(
+                reporter_id=student.id,
+                reported_user_id=company.id,
+                internship_id=internship.id,
+                reason="Test report",
+                status="INVESTIGATING",
+            ),
+        ))
+        await db.commit()
+
+        company_summary = await execute_read_tool(
+            "company_account_summary", {}, company, db
+        )
+        applicants = await execute_read_tool("company_applicants", {}, company, db)
+        student_summary = await execute_read_tool(
+            "student_account_summary", {}, student, db
+        )
+        shortlisted = await execute_read_tool(
+            "student_application_counts", {"status": "SHORTLISTED"}, student, db
+        )
+        platform_summary = await execute_read_tool(
+            "admin_platform_summary", {}, admin, db
+        )
+
+    await engine.dispose()
+    assert "1 active posting" in company_summary.answer
+    assert "1 new applicant" in company_summary.answer
+    assert "1 interview scheduled" in company_summary.answer
+    assert "1 unread notification" in company_summary.answer
+    assert "verification status is pending" in company_summary.answer
+    assert "1 applicant" in applicants.answer
+    assert "Summary Engineering Internship" in applicants.answer
+    assert "1 shortlisted application" in student_summary.answer
+    assert "upcoming interviews:" in student_summary.answer.casefold()
+    assert "1 unread notification" in student_summary.answer
+    assert shortlisted.answer == "You have 1 shortlisted application."
+    assert "1 pending company verification" in platform_summary.answer
+    assert "1 open report/dispute" in platform_summary.answer
+    assert "new users in the last 7 days" in platform_summary.answer
+    assert "0 " not in " ".join(
+        (company_summary.answer, applicants.answer, student_summary.answer, platform_summary.answer)
+    )
+
+
+@pytest.mark.anyio
+async def test_company_applicant_status_counts_do_not_pluralize_adjectives(monkeypatch) -> None:
+    from app.chatbot.tools import read_only
+
+    async def metrics(*_args, **_kwargs):
+        return {
+            "shortlisted": 4,
+            "status_counts": {
+                "APPLIED": 2,
+                "UNDER_REVIEW": 1,
+                "SHORTLISTED": 4,
+                "INTERVIEW_SCHEDULED": 2,
+                "SELECTED": 1,
+                "REJECTED": 3,
+            },
+            "total_applicants": 13,
+            "applications_by_role": [],
+        }
+
+    monkeypatch.setattr(read_only, "get_company_metrics", metrics)
+    result = await read_only._company_applicants(
+        object(), SimpleNamespace(id=42, role=UserRole.COMPANY), None
+    )
+
+    assert result.answer == (
+        "You have 13 applicants. Statuses: 2 applied, 1 under review, "
+        "4 shortlisted, 2 interviews, 1 offer, 3 rejected."
+    )
+    assert not any(word in result.answer for word in ("applieds", "shortlisteds", "rejecteds"))
+
+
+@pytest.mark.anyio
+async def test_admin_audit_and_platform_summaries_use_distinct_live_tools(monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    import app.chatbot.router as chatbot_router
+    from app.api.v1.dependencies import get_current_user_optional
+    from app.chatbot.chatbot_config import ChatbotConfig
+    from app.core.database import get_db
+    from app.main import app
+    from app.models import AuditLog, CompanyProfile
+    from app.models.base import Base
+    from app.services.chatbot_service import ChatbotService
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    now = datetime.now(timezone.utc)
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with sessions() as db:
+        admin = User(
+            email="audit-admin@example.test",
+            password_hash="unused",
+            role=UserRole.ADMIN,
+            created_at=now - timedelta(days=30),
+        )
+        db.add(admin)
+        await db.flush()
+        company = User(
+            email="pending-company@example.test",
+            password_hash="unused",
+            role=UserRole.COMPANY,
+            created_at=now - timedelta(days=30),
+        )
+        db.add(company)
+        await db.flush()
+        db.add(CompanyProfile(
+            user_id=company.id,
+            company_name="Pending Company",
+            industry="Technology",
+            verification_status="PENDING",
+        ))
+        actions = (
+            ["posting_approved"] * 3
+            + ["company_verified"]
+            + ["admin_downloaded_company_document"] * 2
+            + ["skill_topic_restored"] * 6
+        )
+        db.add_all(
+            AuditLog(
+                actor_id=admin.id,
+                action=action,
+                target_type="record",
+                target_id=index,
+                created_at=now - timedelta(days=1),
+            )
+            for index, action in enumerate(actions, start=1)
+        )
+        await db.commit()
+
+        calls = []
+        original_execute = chatbot_router.execute_read_tool
+
+        async def track_tool(name, args, user, session):
+            calls.append(name)
+            return await original_execute(name, args, user, session)
+
+        monkeypatch.setattr(chatbot_router, "_service", ChatbotService(
+            config=ChatbotConfig(enabled=True, mode="retrieval")
+        ))
+        monkeypatch.setattr(chatbot_router, "execute_read_tool", track_tool)
+        app.dependency_overrides[get_current_user_optional] = lambda: admin
+        app.dependency_overrides[get_db] = lambda: db
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                audit_response = await client.post(
+                    "/api/v1/chatbot/ask",
+                    json={"message": "Explain recent audit events.", "page": "admin-audit-logs"},
+                )
+                platform_response = await client.post(
+                    "/api/v1/chatbot/ask",
+                    json={"message": "What is happening on the platform?", "page": "admin"},
+                )
+        finally:
+            app.dependency_overrides.pop(get_current_user_optional, None)
+            app.dependency_overrides.pop(get_db, None)
+
+    await engine.dispose()
+    assert audit_response.status_code == platform_response.status_code == 200
+    audit_answer = audit_response.json()["answer"]
+    assert audit_answer == (
+        "Last 7 days: 3 postings approved, 1 company verified, "
+        "2 company documents downloaded, 6 skill topics restored."
+    )
+    assert any(
+        link["route"] == "/admin/audit-logs"
+        for link in audit_response.json()["links"]
+    )
+    assert "audit-admin@example.test" not in audit_answer
+    assert "Admin admin" not in audit_answer
+    assert platform_response.json()["answer"] == (
+        "Platform summary: 1 pending company verification."
+    )
+    assert audit_answer != platform_response.json()["answer"]
+    assert calls == ["admin_audit_events", "admin_platform_summary"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("role", "questions"),
+    [
+        ("student", (
+            ("How do I apply for an internship?", "Apply"),
+            ("How do I enable 2FA?", "Enable Email 2FA"),
+            ("How do I contact a company?", "suggested hiring company"),
+            ("What if a company treats me unfairly?", "Report or Dispute"),
+            ("How do I withdraw an application?", "withdraw"),
+        )),
+        ("company", (
+            ("How do I create an internship posting?", "My Internships"),
+            ("How do I update an internship posting?", "choose Edit"),
+            ("How do I view applicants?", "Hiring Pipeline"),
+            ("How do I reject an applicant?", "Reject"),
+            ("How do I verify my company?", "business registration document"),
+        )),
+        ("admin", (
+            ("How do I review pending postings?", "Jobs Queue"),
+            ("How do I archive a skill topic?", "Archive"),
+            ("How do I restore an archived topic?", "Archived topics"),
+            ("How do I delete a student account?", "Delete permanently"),
+            ("How do I manage platform users?", "account-management actions"),
+        )),
+    ],
+)
+async def test_role_multi_turn_endpoint_answers_do_not_repeat(
+    role, questions, monkeypatch
+) -> None:
+    import app.chatbot.router as chatbot_router
+    from app.api.v1.dependencies import get_current_user_optional
+    from app.chatbot.chatbot_config import ChatbotConfig
+    from app.core.database import get_db
+    from app.main import app
+    from app.services.chatbot_service import ChatbotService
+    from httpx import ASGITransport, AsyncClient
+
+    user = User(
+        id={"student": 9401, "company": 9402, "admin": 9403}[role],
+        email=f"{role}-multi-turn@example.test",
+        password_hash="unused",
+        role=UserRole(role.upper()),
+    )
+    monkeypatch.setattr(
+        chatbot_router,
+        "_service",
+        ChatbotService(config=ChatbotConfig(enabled=True, mode="retrieval")),
+    )
+    app.dependency_overrides[get_current_user_optional] = lambda: user
+    app.dependency_overrides[get_db] = lambda: object()
+    history = []
+    answers = []
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            for question, expected in questions:
+                response = await client.post(
+                    "/api/v1/chatbot/ask",
+                    json={"message": question, "history": history, "page": "home"},
+                )
+                assert response.status_code == 200, response.text
+                answer = response.json()["answer"]
+                assert expected.casefold() in answer.casefold(), (role, question, answer)
+                assert answer != "I don't have this in the help guide yet"
+                assert answer not in answers, (role, question, answer)
+                answers.append(answer)
+                history.extend((
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content": answer},
+                ))
+    finally:
+        app.dependency_overrides.pop(get_current_user_optional, None)
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.mark.anyio
+async def test_student_endpoint_followup_and_interviews_selects_interview_tool(monkeypatch) -> None:
+    import app.chatbot.router as chatbot_router
+    from app.api.v1.dependencies import get_current_user_optional
+    from app.chatbot.chatbot_config import ChatbotConfig
+    from app.core.database import get_db
+    from app.main import app
+    from app.services.chatbot_service import ChatbotService
+    from httpx import ASGITransport, AsyncClient
+
+    student = User(
+        id=9404,
+        email="student-follow-up@example.test",
+        password_hash="unused",
+        role=UserRole.STUDENT,
+    )
+    calls = []
+
+    async def execute(name, _args, user, _db):
+        calls.append(name)
+        return ToolResult(name, f"Live result for {name}.", {
+            "student_application_counts": "/applications",
+            "student_interviews": "/interviews",
+        }[name])
+
+    monkeypatch.setattr(
+        chatbot_router,
+        "_service",
+        ChatbotService(config=ChatbotConfig(enabled=True, mode="retrieval")),
+    )
+    monkeypatch.setattr(chatbot_router, "execute_read_tool", execute)
+    app.dependency_overrides[get_current_user_optional] = lambda: student
+    app.dependency_overrides[get_db] = lambda: object()
+    history = []
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            first = await client.post(
+                "/api/v1/chatbot/ask",
+                json={"message": "How many applications do I have?", "history": history},
+            )
+            history.extend((
+                {"role": "user", "content": "How many applications do I have?"},
+                {"role": "assistant", "content": first.json()["answer"]},
+            ))
+            followup = await client.post(
+                "/api/v1/chatbot/ask",
+                json={"message": "and interviews?", "history": history},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user_optional, None)
+        app.dependency_overrides.pop(get_db, None)
+
+    assert first.status_code == followup.status_code == 200
+    assert followup.json()["answer"] == "Live result for student_interviews."
+    assert calls == ["student_application_counts", "student_interviews"]
+
+
+@pytest.mark.anyio
 async def test_student_skill_gap_lists_owned_skills_badges_and_weak_topics() -> None:
     from datetime import datetime, timedelta, timezone
 
@@ -761,9 +1183,7 @@ async def test_student_skill_gap_lists_owned_skills_badges_and_weak_topics() -> 
 
     assert "Python, React" in result.answer
     assert "Verified React Pro" in result.answer
-    assert "failed: Python & Backend Architecture" in result.answer
-    assert "expired: SQL & Database Design" in result.answer
-    assert "not taken: Data Structures & Algorithms" in result.answer
+    assert "Next to improve: Python & Backend Architecture, SQL & Database Design, Data Structures & Algorithms" in result.answer
     assert result.route == "/skills/history"
 
 
@@ -795,9 +1215,9 @@ async def test_student_skill_retake_uses_assessment_policy_and_topic_history() -
     result = await execute_read_tool("student_skill_retake", {}, student, RetakeDb())
 
     assert "24 hours" in result.answer
-    assert "3 attempts in 7 days" in result.answer
-    assert "Python & Backend Architecture: eligible " in result.answer
-    assert "React & Modern Frontend: eligible now" in result.answer
+    assert "3 attempts in any 7 days" in result.answer
+    assert "Blocked: Python & Backend Architecture (12h left)" in result.answer
+    assert "React & Modern Frontend" not in result.answer
     assert result.route == "/skills/history"
 
 

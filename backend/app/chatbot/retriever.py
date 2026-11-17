@@ -34,8 +34,8 @@ TOKEN_SYNONYMS: dict[str, tuple[str, ...]] = {
     "applicant": ("candidate",),
     "posting": ("internship", "role"),
     "internship": ("posting", "role"),
-    "archive": ("restore", "topic"),
-    "restore": ("archive", "topic"),
+    "archive": ("topic",),
+    "restore": ("topic",),
     "attend": ("take", "complete"),
     "taken": ("take", "complete"),
     "completed": ("complete", "take"),
@@ -156,6 +156,20 @@ def _metadata_list(value: str | None) -> tuple[str, ...]:
     )
 
 
+def _metadata_questions(value: str | None) -> tuple[str, ...]:
+    """Split example-question metadata only at question boundaries, not in the question text."""
+    if not value:
+        return ()
+    stripped = value.strip().strip("[]")
+    if "?" not in stripped:
+        return _metadata_list(value)
+    return tuple(
+        question.strip().strip("\"' ,;")
+        for question in re.split(r"(?<=\?)\s*,?\s*", stripped)
+        if question.strip().strip("\"' ,;")
+    )
+
+
 def load_documents(directory: Path = KB_DIR) -> list[KnowledgeDocument]:
     """Load Markdown documents with required metadata and split their bodies by level-two headings."""
     documents = []
@@ -199,8 +213,8 @@ def load_documents(directory: Path = KB_DIR) -> list[KnowledgeDocument]:
             *_metadata_list(extracted_keywords.group(1) if extracted_keywords else None),
         )))
         examples = tuple(dict.fromkeys((
-            *_metadata_list(fields.get("example_questions") or fields.get("examples")),
-            *_metadata_list(extracted_examples.group(1) if extracted_examples else None),
+            *_metadata_questions(fields.get("example_questions") or fields.get("examples")),
+            *_metadata_questions(extracted_examples.group(1) if extracted_examples else None),
         )))
         documents.append(KnowledgeDocument(
             fields["id"],

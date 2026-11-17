@@ -19,8 +19,6 @@ logger = logging.getLogger("internsphere.chatbot.rag")
 WORD_PATTERN = re.compile(r"\S+")
 HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.M)
 BATCH_SIZE = 32
-CHUNK_WORDS = 400
-CHUNK_OVERLAP = 50
 
 
 def _front_matter(raw: str) -> tuple[dict[str, str], tuple[str, ...], tuple[tuple[str, str], ...], str]:
@@ -93,12 +91,27 @@ def _heading_sections(body: str) -> list[tuple[str, str]]:
         end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
         section_text = body[match.end():end].strip()
         if section_text:
-            sections.append((match.group(2).strip(), section_text))
+            heading = match.group(2).strip()
+            if heading.casefold() == "questions" and sections:
+                previous_heading, previous_text = sections[-1]
+                sections[-1] = (
+                    previous_heading,
+                    f"{previous_text}\nQuestions:\n{section_text}",
+                )
+            else:
+                sections.append((heading, section_text))
     return sections
 
 
-def _chunks_for_file(path: Path, root: Path) -> list[dict[str, str | int]]:
+def _chunks_for_file(
+    path: Path,
+    root: Path,
+    chunk_words: int = 400,
+    chunk_overlap: int = 50,
+) -> list[dict[str, str | int]]:
     """Create overlapping word-bounded chunks with source metadata, hashes, and token counts."""
+    if chunk_words < 1 or not 0 <= chunk_overlap < chunk_words:
+        raise ValueError("Chunk overlap must be non-negative and smaller than chunk size.")
     values, audiences, links, body = _front_matter(path.read_text(encoding="utf-8"))
     chunks: list[dict[str, str | int]] = []
     source_path = path.relative_to(root).as_posix()
@@ -106,7 +119,7 @@ def _chunks_for_file(path: Path, root: Path) -> list[dict[str, str | int]]:
         words = WORD_PATTERN.findall(section_text)
         start = 0
         while start < len(words):
-            end = min(start + CHUNK_WORDS, len(words))
+            end = min(start + chunk_words, len(words))
             content = f"## {section}\n" + " ".join(words[start:end])
             for audience in audiences:
                 audience_links = tuple(
@@ -133,11 +146,11 @@ def _chunks_for_file(path: Path, root: Path) -> list[dict[str, str | int]]:
                     "audience": audience,
                     "route_hint": route_metadata,
                     "content_hash": sha256(normalized.encode("utf-8")).hexdigest(),
-                    "token_count": len(WORD_PATTERN.findall(content)),
+                    "word_count": len(WORD_PATTERN.findall(content)),
                 })
             if end == len(words):
                 break
-            start = end - CHUNK_OVERLAP
+            start = end - chunk_overlap
     return chunks
 
 
@@ -161,7 +174,10 @@ async def ingest_knowledge(config: ChatbotConfig | None = None) -> dict[str, int
     if not root.is_dir():
         raise FileNotFoundError(f"Knowledge directory does not exist: {root}")
     files = sorted(root.glob("*.md"))
-    file_chunks = [(path, _chunks_for_file(path, root)) for path in files]
+    file_chunks = [
+        (path, _chunks_for_file(path, root, settings.chunk_words, settings.chunk_overlap))
+        for path in files
+    ]
     all_paths = {path.relative_to(root).as_posix() for path in files}
     inserted_or_updated = 0
     unchanged = 0
@@ -198,10 +214,10 @@ async def ingest_knowledge(config: ChatbotConfig | None = None) -> dict[str, int
                             """
                             INSERT INTO kb_chunks (
                                 doc_id, source_path, title, section, content, audience,
-                                route_hint, content_hash, embedding, token_count
+                                route_hint, content_hash, embedding, word_count
                             ) VALUES (
                                 :doc_id, :source_path, :title, :section, :content, :audience,
-                                :route_hint, :content_hash, CAST(:embedding AS vector), :token_count
+                                :route_hint, :content_hash, CAST(:embedding AS vector), :word_count
                             )
                             ON CONFLICT (source_path, content_hash) DO UPDATE SET
                                 doc_id = EXCLUDED.doc_id,
@@ -211,7 +227,7 @@ async def ingest_knowledge(config: ChatbotConfig | None = None) -> dict[str, int
                                 audience = EXCLUDED.audience,
                                 route_hint = EXCLUDED.route_hint,
                                 embedding = EXCLUDED.embedding,
-                                token_count = EXCLUDED.token_count,
+                                word_count = EXCLUDED.word_count,
                                 updated_at = now()
                             """
                         ),

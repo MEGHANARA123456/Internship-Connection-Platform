@@ -82,6 +82,7 @@ export function ChatbotWidget() {
           retrieval={status?.retrieval}
           ragEnabled={status?.rag_enabled}
           indexedChunkCount={status?.indexed_chunk_count}
+          fallbackReason={status?.fallback_reason}
           online={chat.online}
           statusDisabled={statusDisabled}
           statusError={statusError}

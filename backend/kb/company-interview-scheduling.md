@@ -16,11 +16,11 @@ links:
 To schedule an interview, choose Schedule interview from an eligible candidate's Actions menu.
 1. Open Applicants at `/company/applicants` or Hiring Pipeline at `/company/pipeline` and find the candidate.
 2. Choose Schedule interview when the candidate is shortlisted or already at Interview Scheduled.
-3. Set a future date and time or choose a Quick Recommended Slot; select a 30, 45, or 60 minute duration and an interview format.
+3. Set a future date & time or choose a Quick Recommended Slot; select a 30, 45, or 60 minute duration and an interview format.
 4. Add optional candidate instructions and submit. Use the interview's reschedule action to change an existing meeting.
 
 ## Meeting links and notices
-To use a meeting link, enter a valid `http://` or `https://` URL, or leave it blank for the InternSphere video room.
+To use a meeting link, enter a valid HTTP(S) meeting link (`http://` or `https://` URL), or leave it blank for the InternSphere in-app video room.
 1. Choose Video Call, Phone Call, or In Person.
 2. Enter an external meeting link for an external video call, or leave it blank to use the in-app video room.
 3. Submit the schedule; the student receives an in-app notification and email.

@@ -102,6 +102,23 @@ describe('transient chatbot state', () => {
     expect(sessionStorage.getItem('chatbot_history')).toBeNull()
   })
 
+  it('passes suggestions from recent assistant turns to avoid repeating chips', async () => {
+    vi.mocked(askChatbot).mockResolvedValue(answer)
+    render(<MemoryRouter><Harness /></MemoryRouter>)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+    await screen.findByText(answer.answer)
+    fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+    await waitFor(() => expect(askChatbot).toHaveBeenCalledTimes(2))
+
+    expect(askChatbot).toHaveBeenLastCalledWith(
+      'How do I apply?',
+      expect.any(Array),
+      'home',
+      answer.suggested_followups,
+    )
+  })
+
   it('retries the failed question without duplicating it in conversation history', async () => {
     vi.mocked(askChatbot)
       .mockRejectedValueOnce(new Error('network failure'))

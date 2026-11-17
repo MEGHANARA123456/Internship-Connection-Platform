@@ -3,10 +3,25 @@
     {
       "id": "guest-overview",
       "audience": "guest",
-      "questions": ["How does InternSphere connect students and companies?", "What does InternSphere provide to companies?"],
+      "questions": ["How does InternSphere connect students and companies?", "What does InternSphere provide to companies?", "What is InternSphere for?", "What is the purpose of InternSphere?"],
       "answer": "InternSphere connects students with companies posting internships. Students can browse and apply, while companies manage postings and review applicants.",
       "source": "overview",
       "label": "Explore internships",
+      "route": "/opportunities"
+    },
+    {
+      "id": "guest-browse-internships",
+      "audience": "guest",
+      "questions": [
+        "Where can visitors browse internships?",
+        "Can visitors browse internship listings?",
+        "Where can guests find internship opportunities?",
+        "Can I browse internships without an account?",
+        "How do visitors see available internship listings?"
+      ],
+      "answer": "Visitors can browse internship listings on Opportunities without signing in.",
+      "source": "faq",
+      "label": "Browse Internships",
       "route": "/opportunities"
     },
     {
@@ -19,12 +34,30 @@
       "route": "/opportunities"
     },
     {
+      "id": "student-platform-purpose",
+      "audience": "student",
+      "questions": ["What is InternSphere for?", "What is the purpose of InternSphere?"],
+      "answer": "InternSphere connects students with companies posting internships. You can discover opportunities, apply, track applications, and coordinate interviews.",
+      "source": "overview",
+      "label": "Opportunities",
+      "route": "/opportunities"
+    },
+    {
       "id": "student-apply",
       "audience": "student",
       "questions": ["How do I apply for an internship?", "How can I submit an application?", "Where do I apply to a role?", "How do students apply to an internship posting?"],
       "answer": "Open an internship from Opportunities and choose Apply. Review the eligibility and application details first; submitted applications appear in Applications.",
       "source": "applying",
       "label": "Applications",
+      "route": "/opportunities"
+    },
+    {
+      "id": "student-apply-troubleshooting",
+      "audience": "student",
+      "questions": ["Why can't I apply for an internship?", "Why can't I apply to this internship?", "What stops me from applying for an internship?"],
+      "answer": "Common reasons: the deadline has passed, you already applied, the posting is closed, or your profile is incomplete. Open the internship to check its status and deadline.",
+      "source": "applying",
+      "label": "Opportunities",
       "route": "/opportunities"
     },
     {
@@ -91,6 +124,15 @@
       "route": "/skills/history"
     },
     {
+      "id": "student-assessment-report",
+      "audience": "student",
+      "questions": ["How do I download an assessment report?", "Where can I download a skill assessment PDF?"],
+      "answer": "Open Assessment History on your student Profile, select a completed attempt, and choose Download PDF on its report page.",
+      "source": "skill-assessments",
+      "label": "Assessment History",
+      "route": "/skills/history"
+    },
+    {
       "id": "student-retake",
       "audience": "student",
       "questions": ["When can I retake a skill assessment?", "How long do I wait before taking an assessment again?", "What is the assessment retry rule?"],
@@ -98,6 +140,15 @@
       "source": "skill-assessments",
       "label": "Skill history",
       "route": "/skills/history"
+    },
+    {
+      "id": "student-enable-2fa",
+      "audience": "student",
+      "questions": ["How do I enable 2FA?", "How do I turn on email two-factor authentication?", "How do I set up an authenticator app?"],
+      "answer": "Open Privacy & Security. Under Account security, use Security settings and choose Enable Email 2FA, then enter the emailed 6-digit code and select Confirm & Activate. Or choose Enable Authenticator, enter its code, and select Verify & Enable.",
+      "source": "login-mfa-password",
+      "label": "Privacy & Security",
+      "route": "/privacy-security"
     },
     {
       "id": "student-assessment-results",
@@ -127,6 +178,15 @@
       "route": "/messages"
     },
     {
+      "id": "student-contact-company",
+      "audience": "student",
+      "questions": ["How do I contact a company?", "How can I message a company about my application?", "Can I start a conversation with a company?"],
+      "answer": "Open Messages and choose Chat on a suggested hiring company for an open role, or contact a company you applied to. Companies can start conversations with students who applied to their postings.",
+      "source": "messaging",
+      "label": "Messages",
+      "route": "/messages"
+    },
+    {
       "id": "student-no-response",
       "audience": "student",
       "questions": ["What if a company never responds?", "How long should I wait before following up?", "How do I follow up about an application?"],
@@ -140,6 +200,15 @@
       "audience": "student",
       "questions": ["How do I report unfair treatment?", "Where can I report an internship problem?", "Can I dispute a concerning company request?"],
       "answer": "Use the Report or Dispute flow on the related posting or application and include relevant facts. Do not share passwords, one-time codes, or banking details.",
+      "source": "reporting-unfair-treatment",
+      "label": "Applications",
+      "route": "/applications"
+    },
+    {
+      "id": "student-unfair-treatment",
+      "audience": "student",
+      "questions": ["What if a company treats me unfairly?", "How do I report unfair treatment by a company?", "Where do I report a company that treated me unfairly?"],
+      "answer": "Open the related application or posting and use Report or Dispute. Include dates and what happened. Do not share passwords or codes.",
       "source": "reporting-unfair-treatment",
       "label": "Applications",
       "route": "/applications"
@@ -181,10 +250,19 @@
       "route": "/company/jobs"
     },
     {
+      "id": "company-platform-purpose",
+      "audience": "company",
+      "questions": ["What does InternSphere provide to companies?", "What is InternSphere for?", "What is the purpose of InternSphere?"],
+      "answer": "InternSphere helps companies publish internship opportunities, review applicants, manage hiring pipelines, and measure recruiting activity.",
+      "source": "overview",
+      "label": "Company dashboard",
+      "route": "/opportunities"
+    },
+    {
       "id": "company-edit-posting",
       "audience": "company",
-      "questions": ["How do I edit an internship posting?", "Where can I update a role description?", "How do I change posting details?"],
-      "answer": "Open My Internships and use the edit action for the relevant posting. Save the changes and check its status, since updates may require review before becoming visible.",
+      "questions": ["How do I edit an internship posting?", "How do I update an internship posting?", "How do I change an internship posting?", "Where can I update a role description?", "How do I change posting details?"],
+      "answer": "Open My Internships, select the posting, and choose Edit. Change the details and save.",
       "source": "company-posting-closing",
       "label": "My internships",
       "route": "/company/jobs"
@@ -210,8 +288,35 @@
     {
       "id": "company-applicants",
       "audience": "company",
-      "questions": ["How do I review applicants?", "Where can I see who applied?", "How do I find applicants for one posting?", "Where do I see the people who applied?", "How can I filter applicants by internship, skill, education, or status?"],
-      "answer": "Open Applicants and choose a posting. Use Filter by internship, candidate name, skills, education, or verified skill to narrow the list, then review the applicant’s status and profile.",
+      "questions": ["How do I review applicants?", "How do I view applicants?", "Where can I see applicants?", "Where can I see who applied?", "How do I find applicants for one posting?", "Where do I see the people who applied?", "How can I filter applicants by internship, skills, or education?"],
+      "answer": "Open Applicants to see everyone who applied to your postings. Filter by internship, skills, or education, or open Hiring Pipeline to see candidates by stage.",
+      "source": "company-applicant-review",
+      "label": "Applicants",
+      "route": "/company/applicants"
+    },
+    {
+      "id": "company-open-applicant-resume",
+      "audience": "company",
+      "questions": ["How do I open an applicant's resume?", "Where can I view a candidate's resume?", "How do I view an applicant profile?"],
+      "answer": "Open Applicants, select the candidate card, and choose View resume. The action is available when the applicant has uploaded a resume.",
+      "source": "company-applicant-review",
+      "label": "Applicants",
+      "route": "/company/applicants"
+    },
+    {
+      "id": "company-reject-applicant",
+      "audience": "company",
+      "questions": ["How do I reject an applicant?", "Where is the reject applicant action?", "How do I decline a candidate?"],
+      "answer": "In Applicants or Hiring Pipeline, open the candidate's Actions menu and choose Reject. Confirm the action; the student is notified.",
+      "source": "company-applicant-review",
+      "label": "Applicants",
+      "route": "/company/applicants"
+    },
+    {
+      "id": "company-candidate-skills",
+      "audience": "company",
+      "questions": ["How do I see candidate skills?", "Where can I see applicant skills?", "What does a candidate card show about skills?"],
+      "answer": "Each candidate card shows skills, the match percentage, and verified skill badges.",
       "source": "company-applicant-review",
       "label": "Applicants",
       "route": "/company/applicants"
@@ -256,9 +361,9 @@
       "id": "company-verification",
       "audience": "company",
       "questions": ["How do I verify my company?", "Where can I check company verification status?", "What if verification needs more information?"],
-      "answer": "Review your verification status in the company portal. If additional evidence is requested, submit it through the verification flow and wait for an administrator decision.",
+      "answer": "Open Company Settings or Company Profile and upload your business registration document. An administrator reviews it, then your status changes from Pending to Verified or Rejected.",
       "source": "company-verification",
-      "label": "Company settings",
+      "label": "Company Profile",
       "route": "/company/settings"
     },
     {
@@ -271,10 +376,19 @@
       "route": "/profile/company"
     },
     {
+      "id": "company-enable-2fa",
+      "audience": "company",
+      "questions": ["How do I enable 2FA?", "How do I enable MFA for my company account?", "How do I set up an authenticator app?"],
+      "answer": "Open Company Settings, then Security settings. Choose Enable Email 2FA, enter the emailed 6-digit code, and select Confirm & Activate. Or choose Enable Authenticator, enter its code, and select Verify & Enable.",
+      "source": "login-mfa-password",
+      "label": "Company Settings",
+      "route": "/company/settings"
+    },
+    {
       "id": "company-messages",
       "audience": "company",
       "questions": ["Where can I message applicants?", "How do I contact a candidate?", "How do company conversations work?"],
-      "answer": "Open Messages and use an available conversation associated with your recruiting activity. Do not share passwords, verification codes, or sensitive financial information.",
+      "answer": "Open Messages and choose Message on an applicant's card in Applicants. Students can also start conversations with suggested hiring companies for open roles. Do not share passwords or verification codes.",
       "source": "messaging",
       "label": "Messages",
       "route": "/messages"
@@ -316,13 +430,40 @@
       "route": "/admin/moderation"
     },
     {
+      "id": "admin-platform-purpose",
+      "audience": "admin",
+      "questions": ["What is InternSphere for?", "What is the purpose of InternSphere?"],
+      "answer": "InternSphere connects students looking for internships with companies recruiting interns. Administrators moderate postings, verify companies, manage accounts, and review platform activity.",
+      "source": "overview",
+      "label": "Admin dashboard",
+      "route": "/opportunities"
+    },
+    {
       "id": "admin-moderation",
       "audience": "admin",
-      "questions": ["How do I moderate an internship posting?", "What should I check before approving a listing?", "How do I reject a non-compliant posting?", "How can an administrator review moderation reports?", "How do I review moderation reports as an administrator?"],
+      "questions": ["How do I moderate an internship posting?", "What should I check before approving a listing?", "How do I reject a non-compliant posting?"],
       "answer": "In Jobs Queue, inspect the description, eligibility, location, skills, and deadline. Approve compliant postings or reject them with a concise reason; the decision is recorded for audit.",
       "source": "admin-moderation",
       "label": "Jobs Queue",
       "route": "/admin/moderation"
+    },
+    {
+      "id": "admin-moderation-reports",
+      "audience": "admin",
+      "questions": ["Where do I review moderation reports?", "How do I investigate a reported internship?", "Where can I find reports about platform content?", "How do I review reports about flagged content?", "Where do I find complaints about an internship listing?"],
+      "answer": "Open Reports at /admin/reports to review content or conduct reports. Move an open report to Investigating while you review it, then mark it Resolved and record the resolution. Jobs Queue is for pending internship postings.",
+      "source": "admin-moderation-reports",
+      "label": "Reports",
+      "route": "/admin/reports"
+    },
+    {
+      "id": "admin-suspend-account",
+      "audience": "admin",
+      "questions": ["How do I suspend a user account?", "Where is the Suspend button for an account?", "How can I disable a user's access?", "Where do I click to suspend an account?", "How do I turn off access for a user?"],
+      "answer": "Open Platform Users at /admin/users, find the account, and select Suspend on its row. Confirm the intended account first. The row then shows Suspended and the button changes to Reactivate.",
+      "source": "admin-account-suspension",
+      "label": "Platform Users",
+      "route": "/admin/users"
     },
     {
       "id": "admin-company-verification",
@@ -363,8 +504,17 @@
     {
       "id": "admin-archive-topic",
       "audience": "admin",
-      "questions": ["How do I archive or restore a skill topic?", "How do I restore an archived topic?", "Where are archived assessment topics?"],
-      "answer": "To archive a skill topic, open Skill Assessments, select it, and choose Archive; this hides it from new attempts but keeps its questions and history. To restore it, open Archived topics and choose Restore.",
+      "questions": ["How do I archive a skill topic?", "How do I archive an assessment topic?"],
+      "answer": "To archive a skill topic, open Skill Assessments, select it, and choose Archive. It is hidden from new attempts; questions and history are kept.",
+      "source": "admin-skill-assessments",
+      "label": "Skill Assessments",
+      "route": "/admin/skill-assessments"
+    },
+    {
+      "id": "admin-restore-topic",
+      "audience": "admin",
+      "questions": ["How do I restore an archived topic?", "Where are archived assessment topics?", "How do I restore an archived skill topic?"],
+      "answer": "Open Skill Assessments, choose Archived topics, and select Restore for the topic.",
       "source": "admin-skill-assessments",
       "label": "Skill Assessments",
       "route": "/admin/skill-assessments"
@@ -404,6 +554,33 @@
       "source": "admin-users",
       "label": "Users",
       "route": "/admin/users"
+    },
+    {
+      "id": "admin-enable-2fa",
+      "audience": "admin",
+      "questions": ["How do I enable 2FA?", "How do I enable MFA for my admin account?", "How do I set up an authenticator app?"],
+      "answer": "Open Privacy & Security. Under Account security, use Security settings and choose Enable Email 2FA, then enter the emailed 6-digit code and select Confirm & Activate. Or choose Enable Authenticator, enter its code, and select Verify & Enable.",
+      "source": "login-mfa-password",
+      "label": "Privacy & Security",
+      "route": "/privacy-security"
+    },
+    {
+      "id": "admin-delete-student",
+      "audience": "admin",
+      "questions": ["How do I delete a student account?", "How can I permanently delete a student's account?"],
+      "answer": "Open Platform Users, find the student, and choose Delete user. In the Permanently delete user dialog, enter a reason and type the exact email, then choose Delete permanently. Permanent deletion cannot be undone.",
+      "source": "admin-users",
+      "label": "Platform Users",
+      "route": "/admin/users"
+    },
+    {
+      "id": "admin-no-applications",
+      "audience": "admin",
+      "questions": ["List my applications", "Show my applications", "Where can I see my applications as an admin?"],
+      "answer": "Admin accounts don't have applications. Student applications can be reviewed under Students.",
+      "source": "admin-users",
+      "label": "Students",
+      "route": "/admin/students"
     },
     {
       "id": "admin-security",

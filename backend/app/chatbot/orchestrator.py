@@ -79,7 +79,7 @@ def _normalize_intent_text(message: str) -> str:
 class Intent:
     category: str
     tool_name: str | None = None
-    args: tuple[tuple[str, int], ...] = ()
+    args: tuple[tuple[str, int | str], ...] = ()
     refusal_reason: str | None = None
     needs_clarification: str | None = None
 
@@ -250,21 +250,20 @@ def _internship_id(message: str) -> int | None:
 
 
 def _requests_public_open_internships(text: str) -> bool:
-    """Recognize public inventory questions without matching a user's saved list."""
-    inventory = r"(?:internships?|opportunities|roles?|postings?)"
-    availability = r"(?:open|available|current|currently|live|published|active|browse|platform|guests?)"
-    return bool(re.search(
-        rf"\b(?:how many|count|number of)\b.{{0,35}}\b(?:open|available|current|currently|live|published|active)\b.{{0,15}}\b(?:open|available|current|currently|live|published|active)\b.{{0,20}}\b{inventory}\b"
-        rf"|\b(?:how many|count|number of)\b.{{0,35}}\b(?:open|available|current|currently|live|published|active)\b.{{0,20}}\b{inventory}\b"
-        rf"|\b(?:how many|count|number of)\b.{{0,45}}\b{inventory}\b.{{0,40}}\b{availability}\b"
-        rf"|\b(?:show|list|find)\b.{{0,30}}\b(?:open|available|current|live|published)\b.{{0,20}}\b{inventory}\b"
-        rf"|\b(?:what|which)\b.{{0,30}}\b(?:open|available|current|currently|live|published|active)\b.{{0,20}}\b{inventory}\b"
-        rf"|\b(?:open|available|current|currently|live|published|active)\b.{{0,30}}\b{inventory}\b"
-        rf"|\b{inventory}\b.{{0,45}}\b(?:open|available|current|live|published)\b"
-        rf"|\b(?:are there any|are any)\b.{{0,15}}\b(?:open|available|current|live)\b.{{0,20}}\b{inventory}\b"
-        rf"|\b(?:are there any|are any)\b.{{0,30}}\b{inventory}\b.{{0,25}}\b(?:open|available)\b",
-        text,
-    ))
+    """Recognize requests for current public internship inventory, not generic how-to help."""
+    inventory = r"\b(?:internships?|opportunities|roles?|postings?|positions?)\b"
+    availability = (
+        r"\b(?:current|currently|open|available|live|published|active|today|now)\b"
+        r"|\b(?:can|may)\s+(?:guests?|visitors?)\s+(?:view|see|browse)\b"
+    )
+    listing = (
+        r"\b(?:how many|count|number of|total|show|list|find|browse|any|are|what|which|give me)\b"
+    )
+    return bool(
+        re.search(inventory, text, re.IGNORECASE)
+        and re.search(availability, text, re.IGNORECASE)
+        and re.search(listing, text, re.IGNORECASE)
+    )
 
 
 def classify_intent(message: str, role: str) -> Intent:
@@ -279,10 +278,36 @@ def classify_intent(message: str, role: str) -> Intent:
         and any(pattern.search(message) for pattern in OUT_OF_SCOPE_PATTERNS)
     ):
         return Intent("out_of_scope", refusal_reason="outside_product_scope")
+    if normalized_role == "company" and re.fullmatch(
+        r"\s*(?:how do i|how can i)\s+(?:change|update|edit)\s+(?:it|that|this)\s*[?.!]*\s*",
+        message,
+        re.IGNORECASE,
+    ):
+        return Intent(
+            "rag_help",
+            needs_clarification="What would you like to change: a posting, an interview, or your company profile?",
+        )
+    if normalized_role == "admin" and re.search(
+        r"\b(?:list|show|where|how many|check)\b.{0,30}\bmy applications?\b"
+        r"|\bapplications?\b.{0,20}\b(?:mine|my own)\b",
+        message,
+        re.IGNORECASE,
+    ):
+        return Intent(
+            "rag_help",
+            needs_clarification="Admin accounts don't have applications. Student applications can be reviewed under Students.",
+        )
     if re.match(
         r"^\s*(?:how do i|how can i|where can i|where do i|can i)\b",
         message,
         re.IGNORECASE,
+    ) and not (
+        normalized_role == "student"
+        and re.search(
+            r"\bwhere (?:can i see|do i see|can i find)\b.{0,30}\bmy\b.{0,25}\bappl(?:ied|y) internships?\b",
+            message,
+            re.IGNORECASE,
+        )
     ):
         return Intent("rag_help")
 
@@ -304,7 +329,7 @@ def classify_intent(message: str, role: str) -> Intent:
         )
     if re.search(r"\b(audits?|admin(?:istrator)?[- ]actions?|admin[- ]events?)\b", text):
         requests_events = re.search(
-            r"\b(recent|latest|last|explain|summarize|show|what happened|who did)\b",
+            r"\b(recent|latest|last|explain|summarize|summary|show|what happened|who did)\b",
             text,
         )
         if requests_events:
@@ -312,7 +337,10 @@ def classify_intent(message: str, role: str) -> Intent:
                 return Intent("out_of_scope", refusal_reason="role_restricted")
             return Intent("live_data", "admin_audit_events")
 
-    def live_or_both(name: str, args: tuple[tuple[str, int], ...] = ()) -> Intent:
+    def live_or_both(
+        name: str,
+        args: tuple[tuple[str, int | str], ...] = (),
+    ) -> Intent:
         """Select live-data routing and include docs when the wording asks for explanation too."""
         combined = re.search(
             r"\b(and also|also explain|and explain|and how|and what|what does .* mean|along with)\b",
@@ -321,8 +349,46 @@ def classify_intent(message: str, role: str) -> Intent:
         return Intent("both" if combined else "live_data", name, args)
 
     if normalized_role == "student":
-        if re.search(r"\bfollow up\s+(?:(?:and|also)\s+)?interview\b", text):
+        if re.search(r"\bfollow up (?:and|also|what about|how about) interview\b", text):
             return live_or_both("student_interviews")
+        if re.search(
+            r"\b(?:what is happening|what s happening|what is going on|what s going on|"
+            r"account summary|account overview|my overview|my status)\b",
+            text,
+        ):
+            return live_or_both("student_account_summary")
+        status_terms = (
+            ("APPLIED", r"\b(?:applied|apply)\b"),
+            ("UNDER_REVIEW", r"\bunder review\b"),
+            ("SHORTLISTED", r"\bshortlisted?\b|\bshortlist\b"),
+            ("INTERVIEW_SCHEDULED", r"\binterviews?\b"),
+            ("OFFER", r"\boffers?\b|\bselected\b|\baccepted\b"),
+            ("REJECTED", r"\brejected\b"),
+            ("WITHDRAWN", r"\bwithdrawn\b"),
+        )
+        if re.search(
+            r"\b(?:any|what|which)\b.{0,30}\binterviews?\b.{0,30}"
+            r"\b(?:coming up|upcoming|scheduled)\b"
+            r"|\b(?:upcoming|scheduled)\b.{0,20}\binterviews?\b",
+            text,
+        ):
+            return live_or_both("student_interviews")
+        status_query = re.search(
+            r"\b(?:how many|count|number of|any)\b.{0,35}"
+            r"(?:applications?|are|do i have|have i got)?\s*"
+            r"(applied|apply|under review|shortlisted?|shortlist|interviews?|offers?|selected|accepted|rejected|withdrawn)\b"
+            r"|\b(applied|apply|under review|shortlisted?|shortlist|interviews?|offers?|selected|accepted|rejected|withdrawn)\b"
+            r".{0,25}\b(?:count|number of|applications?)\b",
+            text,
+        )
+        if status_query:
+            status_text = " ".join(part for part in status_query.groups() if part)
+            status = next(
+                (value for value, pattern in status_terms if re.search(pattern, status_text)),
+                None,
+            )
+            if status:
+                return live_or_both("student_application_counts", (("status", status),))
         if re.search(
             r"\b(retake|retry|take again)\b.{0,50}\b(skill )?assessments?\b"
             r"|\b(when|how soon|how long)\b.{0,40}\b(retake|retry|take again)\b",
@@ -344,7 +410,7 @@ def classify_intent(message: str, role: str) -> Intent:
             return live_or_both("student_skills_improvement")
         if re.search(
             r"\b(?:how many|count|number of)\b.{0,40}\bapplications?\b"
-            r"|\b(?:shortlisted|applied|under review|interview|offers?)\b.{0,35}"
+            r"|\b(?:shortlisted|applied|under review|interview|offers?|rejected|withdrawn)\b.{0,35}"
             r"\b(?:count|number of|applications?)\b"
             r"|\bany offers?\b",
             text,
@@ -376,6 +442,7 @@ def classify_intent(message: str, role: str) -> Intent:
             r"\b(what is|show|list|check|tell me|give me)\b.{0,40}\bmy\b.{0,50}"
             r"\b(application|applications|submission|status|timeline)\b"
             r"|\b(where can i see|where do i see|where are|where can i find)\b.{0,30}\bmy\b.{0,30}\bapplications?\b"
+            r"|\b(where can i see|where do i see|where can i find|list|show)\b.{0,35}\bmy\b.{0,25}\bappl(?:ied|y) internships?\b"
             r"|\bhow many\b.{0,40}\bapplications?\b.{0,30}\b(i have|i submitted|are|do i have)?\b"
             r"|\b(shortlist|interview|offer|rejected|applied|under review)\b.{0,35}"
             r"\b(count|number|status)?\b.{0,25}\bapplications?\b"
@@ -411,6 +478,12 @@ def classify_intent(message: str, role: str) -> Intent:
             return live_or_both("public_open_internships_count")
 
     if normalized_role == "company":
+        if re.search(
+            r"\b(?:what is happening|what s happening|what is going on|what s going on|"
+            r"account summary|account overview|my overview|my status)\b",
+            text,
+        ):
+            return live_or_both("company_account_summary")
         if re.search(
             r"\b(unread|new)\b.{0,25}\b(messages?|inbox)\b"
             r"|\bmessages?\b.{0,25}\b(unread|unread count)\b",
@@ -470,6 +543,12 @@ def classify_intent(message: str, role: str) -> Intent:
             return live_or_both("company_interviews")
 
     if normalized_role == "admin":
+        if re.search(
+            r"\b(?:what is happening|what s happening|what is going on|what s going on|"
+            r"platform summary|platform overview|my overview|account overview)\b",
+            text,
+        ):
+            return live_or_both("admin_platform_summary")
         if re.search(
             r"\b(today|today's|this day)\b.{0,35}\b(activity|signups?|applications?|audit|platform)\b"
             r"|\b(show|summari[sz]e)\b.{0,25}\b(today|today's)\b.{0,20}\b(platform )?activity\b",
@@ -605,7 +684,14 @@ def classify_intent(message: str, role: str) -> Intent:
 async def classify_intent_with_examples(message: str, role: str, model_name: str) -> Intent:
     """Use allow-listed semantic examples only when deterministic keyword routing is inconclusive."""
     intent = classify_intent(message, role)
-    if intent.category != "rag_help" or intent.needs_clarification or is_how_to_question(message):
+    if (
+        intent.category != "rag_help"
+        or intent.needs_clarification
+        or is_how_to_question(message)
+        or len(message) > 300
+        or "<" in message
+        or ">" in message
+    ):
         return intent
     examples = INTENT_EXAMPLES.get(role.lower(), {})
     if not examples:
@@ -620,7 +706,7 @@ async def classify_intent_with_examples(message: str, role: str, model_name: str
         logger.exception("chatbot_semantic_intent_fallback")
         return intent
     query_norm = math.sqrt(sum(value * value for value in query_vector))
-    best: tuple[float, str] | None = None
+    scores_by_tool: dict[str, float] = {}
     for candidate_role, tool_name, vector in candidates:
         if candidate_role != role.lower() or tool_name not in examples:
             continue
@@ -630,8 +716,16 @@ async def classify_intent_with_examples(message: str, role: str, model_name: str
         similarity = sum(left * right for left, right in zip(query_vector, vector)) / (
             query_norm * vector_norm
         )
-        if best is None or similarity > best[0]:
-            best = (similarity, tool_name)
-    if best is None or best[0] < 0.72:
+        scores_by_tool[tool_name] = max(scores_by_tool.get(tool_name, 0), similarity)
+    ranked = sorted(
+        ((score, tool_name) for tool_name, score in scores_by_tool.items()),
+        reverse=True,
+    )
+    if not ranked or ranked[0][0] < 0.72:
         return intent
-    return Intent("live_data", best[1])
+    if len(ranked) > 1 and ranked[0][0] - ranked[1][0] < 0.08:
+        return intent
+    tool_name = ranked[0][1]
+    if tool_name == "public_open_internships_count" and not _requests_public_open_internships(message):
+        return intent
+    return Intent("live_data", tool_name)

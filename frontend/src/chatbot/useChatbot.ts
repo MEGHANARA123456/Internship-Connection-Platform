@@ -122,8 +122,12 @@ export function useChatbot() {
     retryHistory.current = turnHistory
     if (appendUserMessage) setMessages((current) => [...current, newMessage('user', shortenedText)])
     try {
-      const previousSuggestions = [...priorMessages].reverse()
-        .find((message) => message.role === 'assistant')?.suggestedFollowups ?? []
+      const previousSuggestions = [...new Set(
+        priorMessages
+          .filter((message) => message.role === 'assistant')
+          .slice(-3)
+          .flatMap((message) => message.suggestedFollowups ?? []),
+      )].slice(-9)
       const result: ChatResponse = await askChatbot(
         shortenedText,
         turnHistory,
@@ -139,6 +143,8 @@ export function useChatbot() {
           noEvidence: !result.refused && result.category === 'low_confidence'
             && result.source_type === 'none' && result.sources.length === 0,
           needsClarification: result.needs_clarification,
+          providerFallbackReason: result.provider_fallback_reason,
+          providerRetryAfter: result.provider_retry_after,
         })])
         setPendingQuestion('')
         return true

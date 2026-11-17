@@ -6,14 +6,16 @@ import hmac
 import logging
 import secrets
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
-from uuid import uuid4
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
-from app.models import User, UserRole
+from app.models import ChatbotFeedback, ChatbotLowConfidenceLog, User, UserRole
 from .chatbot_config import load_config, provider_configured
 from .guardrails import is_role_capability_question
 from ..schemas.chatbot import ChatAskRequest, ChatAskResponse, ChatFeedbackRequest, ChatLink, ChatSource
@@ -26,15 +28,31 @@ from .redaction import contains_secret
 
 logger = logging.getLogger("internsphere.chatbot")
 router = APIRouter(prefix="/chatbot", tags=["chatbot"])
-_service = ChatbotService()
 _settings = load_config()
+_service = ChatbotService(config=_settings)
 _rate_limit_salt = secrets.token_bytes(32)
 _reindex_last_requested: dict[int, float] = {}
 _reindex_rate_limit_seconds = 60
 
 logger.info(
-    "chatbot startup: provider configured: %s",
-    "yes" if provider_configured(_settings) else "no",
+    "chatbot_startup mode=%s provider=%s model=%s base_host=%s retrieval=%s api_key_present=%s",
+    _settings.mode,
+    _settings.provider,
+    _settings.model,
+    urlsplit(_settings.base_url).hostname or "none",
+    "hybrid" if _service.vector_available else "bm25",
+    bool(_settings.api_key),
+    extra={
+        "chatbot_meta": {
+            "effective_mode": _settings.mode,
+            "provider": _settings.provider,
+            "model": _settings.model,
+            "base_host": urlsplit(_settings.base_url).hostname,
+            "retrieval": "hybrid" if _service.vector_available else "bm25",
+            "api_key_present": bool(_settings.api_key),
+            "fallback_reason": _settings.fallback_reason,
+        }
+    },
 )
 
 
@@ -104,6 +122,8 @@ async def ask(
     preflight = decide_scope(body.message, [], threshold, role)
     if any(contains_secret(content) for _, content in history) and not contains_secret(body.message):
         preflight = ScopeDecision("credential", False, True, "credential_detected")
+    if preflight.refusal_reason == "personal_data_export":
+        intent_message = body.message
     live_answer: str | None = None
     live_route: str | None = None
     live_links: tuple[tuple[str, str], ...] = ()
@@ -176,6 +196,7 @@ async def ask(
         live_links=live_links,
         previous_suggestions=body.previous_suggestions,
         matched_intent=intent.tool_name,
+        budget_key=rate_key,
     )
     return ChatAskResponse(
         answer=result.answer,
@@ -189,6 +210,8 @@ async def ask(
         category=result.category,
         refused=result.refused,
         needs_clarification=result.needs_clarification,
+        provider_fallback_reason=result.provider_fallback_reason,
+        provider_retry_after=result.provider_retry_after,
     )
 
 
@@ -224,12 +247,42 @@ async def chatbot_status(
         "retrieval": "hybrid" if vector_enabled else "bm25",
         "provider_ok": provider_configured(_settings),
         "provider_configured": provider_configured(_settings),
+        "fallback_reason": (
+            _settings.fallback_reason or _service.last_provider_fallback_reason
+        ),
         "rag_enabled": vector_enabled,
         "indexed_chunk_count": indexed_chunks,
         "last_indexed_at": last_indexed_at,
     }
     if getattr(getattr(user, "role", None), "value", "").lower() == "admin":
-        result["metrics"] = dict(_service.metrics)
+        path_names = ("curated", "tool", "retrieval", "llm", "fallback", "refusal")
+        result["metrics"] = {
+            **dict(_service.metrics),
+            **{name: _service.metrics.get(name, 0) for name in path_names},
+        }
+        result["provider_usage"] = _service.provider_budget.snapshot()
+        since = datetime.now(timezone.utc) - timedelta(days=30)
+        rows = (await db.execute(
+            select(
+                ChatbotLowConfidenceLog.role,
+                ChatbotLowConfidenceLog.question,
+                func.count().label("occurrences"),
+                func.max(ChatbotLowConfidenceLog.created_at).label("last_seen"),
+            )
+            .where(ChatbotLowConfidenceLog.created_at >= since)
+            .group_by(ChatbotLowConfidenceLog.role, ChatbotLowConfidenceLog.question)
+            .order_by(func.count().desc(), func.max(ChatbotLowConfidenceLog.created_at).desc())
+            .limit(10)
+        )).all()
+        result["low_confidence_questions"] = [
+            {
+                "role": row.role,
+                "question": row.question,
+                "occurrences": int(row.occurrences),
+                "last_seen": row.last_seen.isoformat() if row.last_seen else None,
+            }
+            for row in rows
+        ]
     return result
 
 
@@ -258,20 +311,28 @@ async def reindex_chatbot_knowledge(
 @router.post("/feedback", status_code=204)
 async def chatbot_feedback(
     body: ChatFeedbackRequest,
+    db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    """Log a feedback rating and non-sensitive turn metadata without storing message content."""
-    correlation_id = uuid4().hex
+    """Persist feedback metadata without storing the question or answer text."""
+    db.add(ChatbotFeedback(
+        user_id=user.id,
+        role=user.role.value.lower(),
+        rating=body.rating,
+        source_type=body.source_type,
+        turn_id=body.turn_id,
+    ))
+    await db.commit()
     logger.info(
-        "chatbot_feedback",
+        "chatbot_feedback role=%s rating=%s source_type=%s",
+        user.role.value.lower(),
+        body.rating,
+        body.source_type,
         extra={
             "chatbot_meta": {
-                "correlation_id": correlation_id,
-                "user_id": user.id,
                 "role": user.role.value.lower(),
                 "rating": body.rating,
                 "source_type": body.source_type,
-                "turn_id": body.turn_id,
             }
         },
     )

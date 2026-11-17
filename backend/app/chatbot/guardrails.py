@@ -13,6 +13,25 @@ ADMIN_ONLY_REPLY = "That area is only available to administrators."
 INJECTION_REPLY = "I can’t follow instructions to ignore my safety rules or reveal private configuration. I can help with InternSphere."
 SECRET_REPLY = "Please don’t share passwords, verification codes, tokens, or personal information here. I can’t process that message."
 ABUSE_REPLY = "I can’t help with harming anyone. If someone is in immediate danger, contact local emergency services."
+PERSONAL_DATA_EXPORT_REPLY = (
+    "I can't list user emails in chat. Open Platform Users to view accounts."
+)
+
+_CREDENTIAL_VALUE_REQUEST = re.compile(
+    r"\b(?:what(?:'s| is)|tell me|show me|give me|provide|send|share|reveal)\b"
+    r".{0,35}\b(?:my\s+|the\s+|a\s+|an\s+)?"
+    r"(?:password|passcode|otp|one[- ]time (?:password|code)|verification code|"
+    r"security code|authenticator code|(?:2fa|mfa) code|"
+    r"access token|refresh token|token|api key|secret)\b",
+    re.I,
+)
+_CREDENTIAL_CODE_REQUEST = re.compile(
+    r"\b(?:what(?:'s| is)|tell me|show me|give me|provide|send|share|reveal)\b"
+    r".{0,35}\b(?:my\s+|the\s+|a\s+|an\s+)"
+    r"(?:(?:verification|security|authenticator|2fa|mfa|one[- ]time)\s+)?code\b",
+    re.I,
+)
+_HTML_MARKUP = re.compile(r"<\s*/?\s*[a-z][^>]{0,300}>", re.I)
 
 INJECTION_PATTERNS = (
     re.compile(r"\b(ignore|disregard|forget|bypass|override)\b.{0,60}\b(instructions|rules|safety|prompt|system|policy)\b", re.I),
@@ -34,6 +53,20 @@ PRIVATE_CROSS_ACCOUNT_PATTERN = re.compile(
     r"|\b(?:show|list|find|tell me about)\b.{0,30}\b[a-z][a-z'-]{1,30}'s\b.{0,20}"
     r"\b(?:applications?|profiles?|interviews?|notifications?)\b"
     r"|\b(?:private|confidential)\s+(?:company|student|applicant|account)\s+(?:information|data|details)\b",
+    re.I,
+)
+PERSONAL_DATA_EXPORT_PATTERN = re.compile(
+    r"\b(?:list|make\s+a\s+list\s+of|show|export|download|dump|extract|compile|retrieve|"
+    r"provide|give|send|print|share|display)\b"
+    r".{0,80}\b(?:all\s+)?(?:users?|accounts?|students?|applicants?)\b.{0,50}"
+    r"\b(?:emails?|email addresses?|personal data|personal information|personal details|"
+    r"personal records|private information|private data|contact information|contact details|"
+    r"phone numbers?|profiles?|personally identifiable information|pii)\b"
+    r"|\b(?:list|make\s+a\s+list\s+of|show|export|download|dump|extract|compile|retrieve|"
+    r"provide|give|send|print|share|display)\b"
+    r".{0,50}\b(?:user emails?|emails?|email addresses?|personal data|personal information|personal details|"
+    r"personal records|private information|private data|contact details|"
+    r"personally identifiable information|pii)\b",
     re.I,
 )
 
@@ -72,6 +105,45 @@ def detect_injection(text: str) -> bool:
     return any(pattern.search(text) for pattern in INJECTION_PATTERNS)
 
 
+def requests_credential_value(text: str) -> bool:
+    """Detect requests to disclose a credential value, distinct from help changing it."""
+    return bool(
+        _CREDENTIAL_VALUE_REQUEST.search(text)
+        or _CREDENTIAL_CODE_REQUEST.search(text)
+    )
+
+
+def credential_question_guidance(text: str) -> str | None:
+    """Provide safe account-recovery guidance without disclosing or requesting a credential."""
+    if not requests_credential_value(text):
+        return None
+    normalized = text.casefold()
+    if re.search(r"\b(?:password|passcode)\b", normalized):
+        return (
+            "I can't see or share passwords. To change yours, open Privacy & Security, "
+            "then Security settings and choose Update Password, or use Forgot password "
+            "on the login page."
+        )
+    if re.search(
+        r"\b(?:otp|one[- ]time|verification code|security code|authenticator code|"
+        r"(?:2fa|mfa) code|code)\b",
+        normalized,
+    ):
+        return (
+            "I can't see or share one-time codes. Enter the 6-digit code only in the "
+            "verification step that requested it; if it expired, request a new code there."
+        )
+    return (
+        "I can't see or share tokens or secrets. Never paste them here; if one may have "
+        "been exposed, sign out and contact support."
+    )
+
+
+def contains_markup(text: str) -> bool:
+    """Detect HTML-like tags so pasted markup is never treated as help content."""
+    return bool(_HTML_MARKUP.search(text))
+
+
 def detect_account_specific(text: str) -> bool:
     """Detect first-person account-data requests, excluding general how-to questions."""
     if re.search(
@@ -89,6 +161,11 @@ def detect_account_specific(text: str) -> bool:
 def detect_cross_account_request(text: str) -> bool:
     """Return whether text asks for another person's or a broad set of users' private data."""
     return bool(PRIVATE_CROSS_ACCOUNT_PATTERN.search(text))
+
+
+def requests_personal_data_export(text: str) -> bool:
+    """Detect requests to list or export user emails or personal records."""
+    return bool(PERSONAL_DATA_EXPORT_PATTERN.search(text))
 
 
 def is_chatbot_capability_question(text: str) -> bool:

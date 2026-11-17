@@ -77,6 +77,14 @@ export function MessageList({ messages, typing, onSend, onFeedback }: MessageLis
               Please clarify
             </p>
           )}
+          {message.providerFallbackReason && (
+            <p role="status" className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950/50 dark:text-amber-100">
+              The language model could not answer this request; this response uses help documents.
+              {message.providerFallbackReason === 'provider_rate_limited' && message.providerRetryAfter
+                ? ` The provider can be retried in ${message.providerRetryAfter} seconds.`
+                : ''}
+            </p>
+          )}
           {message.summary && <PersonalSummaryCard summary={message.summary} />}
           {uniqueByRoute(message.links).map((link) => (
             <Link key={`${link.route}-${link.label}`} to={link.route} className="mt-2 inline-flex rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-200 dark:hover:bg-indigo-900">

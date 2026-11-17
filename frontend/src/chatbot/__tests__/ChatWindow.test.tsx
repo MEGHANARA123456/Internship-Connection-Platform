@@ -26,6 +26,36 @@ const props = {
 }
 
 describe('chatbot dialog accessibility', () => {
+  it('announces disabled, offline, and provider-fallback states', () => {
+    render(<MemoryRouter><ChatWindow
+      {...props}
+      online={false}
+      statusDisabled
+      fallbackReason="provider_not_configured"
+    /></MemoryRouter>)
+
+    expect(screen.getByText(/disabled by the backend/i)).toBeInTheDocument()
+    expect(screen.getByText(/language model is unavailable \(provider_not_configured\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/you are offline/i)).toBeInTheDocument()
+  })
+
+  it('shows the provider retry time when an answer falls back to help documents', () => {
+    render(<MemoryRouter><ChatWindow
+      {...props}
+      messages={[{
+        id: 'turn-rate-limited',
+        role: 'assistant',
+        content: 'Use the help documents for this answer.',
+        createdAt: Date.now(),
+        sourceType: 'docs',
+        providerFallbackReason: 'provider_rate_limited',
+        providerRetryAfter: 37,
+      }]}
+    /></MemoryRouter>)
+
+    expect(screen.getByText(/provider can be retried in 37 seconds/i)).toBeInTheDocument()
+  })
+
   it('opens as a labelled modal dialog, focuses the input, and closes with Escape', () => {
     const onClose = vi.fn()
     render(<MemoryRouter><ChatWindow {...props} onClose={onClose} /></MemoryRouter>)

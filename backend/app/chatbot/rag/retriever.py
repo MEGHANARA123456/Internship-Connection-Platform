@@ -74,14 +74,16 @@ class HybridRetriever:
                 f"{self.config.embedding_dim}."
             )
         vector_literal = "[" + ",".join(map(str, vectors[0])) + "]"
-        role_filter = "all" if audience == "all" else audience
+        # "all" is an evaluation audience, not a stored audience value. Guest-visible
+        # chunks are the safe common denominator for unauthenticated/general queries.
+        role_filter = "guest" if audience == "all" else audience
         vector_rows = (await db.execute(
             text(
                 """
                 SELECT id, doc_id, title, section, content, audience, route_hint,
                        1 - (embedding <=> CAST(:embedding AS vector)) AS similarity
                 FROM kb_chunks
-                WHERE audience IN (:audience, 'all')
+                WHERE audience IN (:audience, 'guest', 'all')
                 ORDER BY embedding <=> CAST(:embedding AS vector)
                 LIMIT :limit
                 """
@@ -97,7 +99,7 @@ class HybridRetriever:
                            websearch_to_tsquery('english', :query)
                        ) AS rank
                 FROM kb_chunks
-                WHERE audience IN (:audience, 'all')
+                WHERE audience IN (:audience, 'guest', 'all')
                   AND to_tsvector('english', title || ' ' || section || ' ' || content)
                       @@ websearch_to_tsquery('english', :query)
                 ORDER BY rank DESC

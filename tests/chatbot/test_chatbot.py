@@ -15,12 +15,12 @@ from app.chatbot.providers.anthropic import AnthropicProvider
 from app.chatbot.providers.base import ProviderPayload, ProviderResult
 from app.chatbot.providers.llm_http import LLMHTTPProvider
 from app.chatbot.redaction import contains_secret, redact
-from app.chatbot.retriever import BM25Retriever, load_documents
+from app.chatbot.retriever import BM25Retriever, _metadata_questions, load_documents
 from app.chatbot.scope import decide_scope, fixed_reply
 from app.chatbot.tools.read_only import ToolResult
 from app.main import app
-from app.models import User, UserRole
-from app.schemas.chatbot import ChatAskRequest
+from app.models import ChatbotFeedback, User, UserRole
+from app.schemas.chatbot import ChatAskRequest, ChatFeedbackRequest
 from app.services.audit import AuditEventSummary
 from app.services.chatbot_service import (
     ChatbotService,
@@ -29,6 +29,7 @@ from app.services.chatbot_service import (
     _render_retrieval_answer,
     _suggested_followups,
     _truncate_answer,
+    _load_curated_answers,
 )
 from httpx import ASGITransport, AsyncClient
 
@@ -96,9 +97,48 @@ def test_missing_llm_key_falls_back_to_retrieval_with_warning(tmp_path, monkeypa
         config = load_config()
 
     assert config.mode == "retrieval"
+    assert config.fallback_reason == "provider_not_configured"
     assert not provider_configured(config)
     assert "falling back to retrieval mode" in caplog.text
     assert "ANTHROPIC_API_KEY" not in caplog.text
+
+
+def test_duplicate_dotenv_keys_warn_without_logging_values(tmp_path, monkeypatch, caplog) -> None:
+    (tmp_path / ".env").write_text(
+        "CHATBOT_MODE=llm\nCHATBOT_MODE=retrieval\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CHATBOT_MODE", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="internsphere.chatbot"):
+        config = load_config()
+
+    assert config.mode == "retrieval"
+    assert "chatbot_duplicate_environment_keys" in caplog.text
+    assert "llm" not in caplog.text
+
+
+def test_openai_compatible_base_url_strips_v1_suffix(tmp_path, monkeypatch, caplog) -> None:
+    (tmp_path / ".env").write_text(
+        "CHATBOT_MODE=llm\n"
+        "CHATBOT_PROVIDER=openai-compatible\n"
+        "CHATBOT_BASE_URL=https://api.groq.com/openai/v1/\n"
+        "CHATBOT_API_KEY=local-test-key\n"
+        "CHATBOT_MODEL=gpt-oss-20b\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    for name in ("CHATBOT_MODE", "CHATBOT_PROVIDER", "CHATBOT_BASE_URL", "CHATBOT_API_KEY", "CHATBOT_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="internsphere.chatbot"):
+        config = load_config()
+
+    assert config.base_url == "https://api.groq.com/openai"
+    assert config.mode == "llm"
+    assert "chatbot_base_url_version_suffix_removed" in caplog.text
+    assert "local-test-key" not in caplog.text
 
 
 def test_anthropic_configuration_is_loaded_from_dotenv_and_bounded(tmp_path, monkeypatch) -> None:
@@ -361,6 +401,11 @@ async def test_llm_mode_calls_openai_compatible_provider(monkeypatch) -> None:
                     "needs_clarification": None,
                 })},
             }],
+            "usage": {
+                "prompt_tokens": 123,
+                "completion_tokens": 34,
+                "total_tokens": 157,
+            },
         }
         return json.dumps(response).encode("utf-8")
 
@@ -374,6 +419,56 @@ async def test_llm_mode_calls_openai_compatible_provider(monkeypatch) -> None:
 
     assert result.answer == "Open Applications to review your timeline."
     assert len(requests) == 1
+    assert service.metrics["prompt_tokens_total"] == 123
+    assert service.metrics["completion_tokens_total"] == 34
+    assert service.metrics["total_tokens"] == 157
+    usage = service.provider_budget.snapshot()
+    assert usage["tokens_per_minute"] == 157
+    assert usage["average_tokens_per_request"] == 157
+
+
+@pytest.mark.anyio
+async def test_provider_429_falls_back_and_honors_retry_after(monkeypatch, caplog) -> None:
+    from email.message import Message
+    from urllib.error import HTTPError
+
+    service = ChatbotService(config=_config(
+        mode="llm",
+        provider="openai-compatible",
+        base_url="https://chat.example.test",
+        api_key="local-test-key",
+        model="test-model",
+    ))
+    passage = next(
+        item for item in service.retriever.retrieve(
+            "How do students apply to an internship?", "student", top_k=8
+        ) if item.id.startswith("applying#")
+    )
+    headers = Message()
+    headers["Retry-After"] = "37"
+
+    def rate_limited(_request):
+        raise HTTPError("https://chat.example.test", 429, "rate limited", headers, None)
+
+    monkeypatch.setattr(service.provider, "_post", rate_limited)
+    with caplog.at_level(logging.WARNING, logger="internsphere.chatbot"):
+        answer, _, _, used_fallback, _, reason, retry_after = await service._answer_with_provider(
+            "How do students apply to an internship?",
+            [],
+            "student",
+            "applications",
+            [passage],
+            "user-fingerprint",
+        )
+
+    assert used_fallback
+    assert reason == "provider_rate_limited"
+    assert retry_after == 37
+    assert "Common reasons an application cannot be submitted" in answer
+    assert service.provider_budget.snapshot()["provider_cooldown_seconds"] == 37
+    assert "How do students apply" not in caplog.text
+    assert "local-test-key" not in caplog.text
+    assert "chatbot_provider_rate_limited retry_after=37" in caplog.text
 
 
 def test_redacts_credentials_and_personal_data() -> None:
@@ -393,6 +488,8 @@ async def test_credential_question_is_refused_without_provider_call() -> None:
     assert result.refused
     assert result.category == "credential"
     assert not provider.payloads
+    assert "process that message" in result.answer
+    assert "WinterSecret82" not in result.answer
 
 
 @pytest.mark.anyio
@@ -493,7 +590,7 @@ async def test_admin_audit_question_summarizes_sanitized_records() -> None:
         actor_role="ADMIN",
         target_type="posting",
         target_id=42,
-        created_at=datetime(2026, 10, 28, 8, 15, tzinfo=timezone.utc),
+        created_at=datetime.now(timezone.utc),
     )
     service = ChatbotService(config=_config())
     result = await service.ask(
@@ -504,8 +601,8 @@ async def test_admin_audit_question_summarizes_sanitized_records() -> None:
         [event],
     )
     assert not result.refused
-    assert "Admin #7 approved posting #42" in result.answer
-    assert "Oct 28, 2026 at 08:15 UTC" in result.answer
+    assert result.answer == "Last 7 days: 1 posting approved."
+    assert "#7" not in result.answer and "#42" not in result.answer
     assert "email" not in result.answer.lower()
 
 
@@ -592,6 +689,12 @@ async def test_curated_answers_are_role_scoped_and_handle_two_how_to_questions()
         ("today news updates", "student", "out_of_scope", "only help with InternSphere"),
         ("how to kill", "student", "abuse", "can’t help with harming"),
         ("private company information", "company", "privacy", "your postings"),
+        (
+            "Show the email addresses for all student accounts.",
+            "admin",
+            "personal_data_export",
+            "I can't list user emails in chat. Open Platform Users to view accounts.",
+        ),
     ],
 )
 def test_short_fixed_replies_cover_scope_privacy_and_abuse(
@@ -602,7 +705,11 @@ def test_short_fixed_replies_cover_scope_privacy_and_abuse(
 ) -> None:
     decision = decide_scope(question, [], 0.5, role)
     assert decision.category == category
-    assert expected_text in fixed_reply(decision, role)
+    reply = fixed_reply(decision, role)
+    if category == "personal_data_export":
+        assert reply == expected_text
+    else:
+        assert expected_text in reply
 
 
 def test_admin_analytics_is_restricted_to_administrators() -> None:
@@ -728,8 +835,8 @@ def test_role_prompts_are_separated_and_page_context_ranks_related_help() -> Non
     assert "Audience: ADMIN" in admin_prompt
     assert len({guest_prompt, student_prompt, company_prompt, admin_prompt}) == 4
     assert "numbered steps" in student_prompt
-    assert "under 120 words" in student_prompt
-    assert "I don't have sufficient data to answer this question." in student_prompt
+    assert "under 60 words" in student_prompt
+    assert "I don't have this in the help guide yet" in student_prompt
     assert "live platform data or general help" in admin_prompt
     assert "masked identifiers only" in admin_prompt
     assert "Examples:" in student_prompt
@@ -764,12 +871,12 @@ async def test_invalid_provider_output_falls_back_to_curated_content(caplog) -> 
         ) if item.id.startswith("applying#")
     )
     with caplog.at_level(logging.WARNING, logger="internsphere.chatbot"):
-        answer, sources, links, used_fallback, needs_clarification = await service._answer_with_provider(
+        answer, sources, links, used_fallback, needs_clarification, _, _ = await service._answer_with_provider(
             "How do students apply to an internship?", [], "student", "applications", [passage]
         )
     assert "/admin/users" not in answer
     assert used_fallback
-    assert "Students apply to an internship" in answer
+    assert "Common reasons an application cannot be submitted" in answer
     assert "answer service" not in answer
     assert sources
     assert all(route in {"/applications", "/opportunities"} for _, route in links)
@@ -920,6 +1027,8 @@ def test_required_help_articles_have_focused_question_variants() -> None:
         "match-percentage",
         "interview-invites-and-expiry",
         "assessment-badges",
+        "admin-moderation-reports",
+        "admin-account-suspension",
     }
     for document_id in required:
         content = (knowledge_dir / f"{document_id}.md").read_text(encoding="utf-8")
@@ -939,11 +1048,48 @@ def test_followup_suggestions_match_the_retrieved_topic() -> None:
         [],
         ("internship-verification-and-moderation",),
         [],
+        curated_answers=_load_curated_answers(),
     )
     assert len(suggestions) == 3
     assert any("verified company" in item.lower() for item in suggestions)
     assert any("report" in item.lower() for item in suggestions)
     assert any("warning signs" in item.lower() for item in suggestions)
+
+
+def test_admin_followups_skip_personal_applications_and_prior_suggestions() -> None:
+    previous = ["How do I manage platform users?"]
+    suggestions = _suggested_followups(
+        "admin",
+        "Where can I see my applications as an administrator?",
+        "admin-users",
+        [],
+        ("admin-users",),
+        previous,
+        curated_answers=_load_curated_answers(),
+    )
+
+    assert suggestions
+    assert all("my application" not in item.casefold() for item in suggestions)
+    assert not set(item.casefold() for item in suggestions) & {
+        item.casefold() for item in previous
+    }
+    assert len({item.casefold() for item in suggestions}) == len(suggestions)
+
+
+def test_low_confidence_followups_skip_previous_suggestions() -> None:
+    from app.services.chatbot_service import _closest_supported_questions
+
+    previous = ["How do I review pending postings?"]
+    suggestions = _closest_supported_questions(
+        BM25Retriever(),
+        "Where do I find an unknown administrator feature?",
+        "admin",
+        "home",
+        _load_curated_answers(),
+        previous,
+    )
+
+    assert previous[0] not in suggestions
 
 
 def test_suggested_chips_resolve_to_evaluated_role_safe_answers() -> None:
@@ -996,6 +1142,221 @@ def test_suggested_chips_resolve_to_evaluated_role_safe_answers() -> None:
                 suggestion,
                 passages,
             )
+
+
+def test_example_question_metadata_splits_each_question() -> None:
+    examples = _metadata_questions(
+        "[How do I archive a topic?, How do I restore a topic?, "
+        "How do I import questions?, How do I review analytics?]"
+    )
+
+    assert len(examples) == 4
+    assert all(question.count("?") == 1 for question in examples)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("case", "role", "question", "expected", "route"),
+    [
+        ("1", "company", "How do I update an internship posting?", "My Internships", "/company/jobs"),
+        ("2", "company", "How do I view applicants?", "Hiring Pipeline", "/company/applicants"),
+        ("3", "company", "How do I verify my company?", "business registration document", "/company/settings"),
+        ("10", "student", "Why can't I apply for an internship?", "deadline has passed", "/opportunities"),
+        ("13", "student", "How do I contact a company?", "suggested hiring company", "/messages"),
+        ("14", "student", "What if a company treats me unfairly?", "Report or Dispute", "/applications"),
+        ("15-student", "student", "How do I enable 2FA?", "Enable Authenticator", "/privacy-security"),
+        ("15-company", "company", "How do I enable 2FA?", "Company Settings", "/company/settings"),
+        ("15-admin", "admin", "How do I enable 2FA?", "Privacy & Security", "/privacy-security"),
+        ("18a", "admin", "How do I archive a skill topic?", "hidden from new attempts", "/admin/skill-assessments"),
+        ("18b", "admin", "How do I restore an archived topic?", "Archived topics", "/admin/skill-assessments"),
+        ("20", "admin", "How do I delete a student account?", "Delete permanently", "/admin/users"),
+        ("21", "admin", "How do I suspend a user account?", "Platform Users", "/admin/users"),
+        ("22", "admin", "Where do I review moderation reports?", "Investigating", "/admin/reports"),
+    ],
+)
+async def test_curated_chatbot_regression_cases(case, role, question, expected, route) -> None:
+    result = await ChatbotService(config=_config()).ask(question, [], role, "home")
+
+    assert expected.casefold() in result.answer.casefold(), case
+    assert len(result.answer.split()) <= 60, case
+    assert result.links and all(link_route == route for _, link_route in result.links), case
+    assert result.category != "low_confidence", case
+    if case == "13":
+        assert "companies can start conversations with students who applied" in result.answer.casefold()
+    if case.startswith("15"):
+        assert "Security settings" in result.answer
+        assert "6-digit code" in result.answer
+        assert "Confirm & Activate" in result.answer
+        assert "Verify & Enable" in result.answer
+    if case == "20":
+        assert "Permanently delete user" in result.answer
+        assert "type the exact email" in result.answer
+
+
+@pytest.mark.anyio
+async def test_two_company_questions_get_separate_curated_answers() -> None:
+    result = await ChatbotService(config=_config()).ask(
+        "How do I reject an applicant? How do I see candidate skills?",
+        [],
+        "company",
+        "company-applicants",
+    )
+
+    assert result.answer.startswith("1. Reject:")
+    assert "2. Skills:" in result.answer
+    assert "match percentage" in result.answer
+    assert len(result.answer.split()) <= 60
+    assert result.links == (("Applicants", "/company/applicants"),)
+
+
+def test_vague_company_change_and_admin_application_mismatch_are_clarified() -> None:
+    company = classify_intent("How do I change it?", "company")
+    admin = classify_intent("List my applications", "admin")
+
+    assert company.needs_clarification == (
+        "What would you like to change: a posting, an interview, or your company profile?"
+    )
+    assert admin.needs_clarification == (
+        "Admin accounts don't have applications. Student applications can be reviewed under Students."
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("role", "questions"),
+    [
+        ("student", (
+            "How do I apply for an internship?",
+            "How do I enable 2FA?",
+            "How do I contact a company?",
+            "What if a company treats me unfairly?",
+            "How do I withdraw an application?",
+        )),
+        ("company", (
+            "How do I create an internship posting?",
+            "How do I update an internship posting?",
+            "How do I view applicants?",
+            "How do I reject an applicant?",
+            "How do I verify my company?",
+        )),
+        ("admin", (
+            "How do I review pending postings?",
+            "How do I archive a skill topic?",
+            "How do I restore an archived topic?",
+            "How do I delete a student account?",
+            "How do I manage users?",
+        )),
+    ],
+)
+async def test_role_multi_turn_questions_do_not_repeat_answers(role, questions) -> None:
+    service = ChatbotService(config=_config())
+    history = []
+    answers = []
+    for question in questions:
+        result = await service.ask(question, history, role, "home")
+        assert result.answer != "I don't have this in the help guide yet"
+        assert result.answer not in answers
+        answers.append(result.answer)
+        history.extend((("user", question), ("assistant", result.answer)))
+
+
+@pytest.mark.anyio
+async def test_credential_value_request_uses_fixed_refusal() -> None:
+    result = await ChatbotService(config=_config()).ask(
+        "What is my password?", [], "student", "privacy"
+    )
+
+    assert result.refused
+    assert result.category == "credential"
+    assert " ".join(result.answer.split()) == (
+        "I can't see or share passwords. To change yours, open Privacy & Security, "
+        "then Security settings and choose Update Password, or use Forgot password "
+        "on the login page."
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("What is my OTP?", "Enter the 6-digit code only in the verification step"),
+        ("What is my verification code?", "request a new code there"),
+        ("What is my code?", "I can't see or share one-time codes"),
+        ("What is my token?", "I can't see or share tokens or secrets"),
+    ],
+)
+async def test_credential_questions_get_matching_safe_guidance(question, expected) -> None:
+    result = await ChatbotService(config=_config()).ask(
+        question, [], "student", "privacy"
+    )
+
+    assert result.refused
+    assert result.category == "credential"
+    assert expected in result.answer
+    assert "WinterSecret82" not in result.answer
+
+
+def test_credential_code_detection_does_not_match_unrelated_code_help() -> None:
+    from app.chatbot.guardrails import requests_credential_value
+
+    assert requests_credential_value("What is my code?")
+    assert requests_credential_value("What is my 2FA code?")
+    assert not requests_credential_value("Show me code to update an internship posting.")
+
+
+@pytest.mark.anyio
+async def test_pasted_markup_without_intent_uses_fallback_and_safe_chips() -> None:
+    question = "<script>alert(1)</script> nothing should run"
+    result = await ChatbotService(config=_config()).ask(
+        question, [], "student", "home"
+    )
+
+    assert result.answer == "I don't have this in the help guide yet"
+    assert "notification" not in result.answer.casefold()
+    assert len(result.suggested_followups) <= 3
+    assert all(chip.count("?") == 1 for chip in result.suggested_followups)
+    assert all(chip.casefold() != question.casefold() for chip in result.suggested_followups)
+
+
+@pytest.mark.anyio
+async def test_related_chips_are_individual_role_answerable_questions() -> None:
+    service = ChatbotService(config=_config())
+    questions = {
+        "student": "Where can I see my applications?",
+        "company": "How do I view applicants?",
+        "admin": "How do I archive a skill topic?",
+    }
+
+    for role, question in questions.items():
+        result = await service.ask(question, [], role, "home")
+        assert all(chip.count("?") == 1 for chip in result.suggested_followups)
+        assert all(
+            " ".join(re.findall(r"[a-z0-9]+", chip.casefold()))
+            != " ".join(re.findall(r"[a-z0-9]+", question.casefold()))
+            for chip in result.suggested_followups
+        )
+        for chip in result.suggested_followups:
+            intent = classify_intent(chip, role)
+            if intent.tool_name:
+                continue
+            chip_result = await service.ask(chip, [], role, "home")
+            assert chip_result.answer != "I don't have this in the help guide yet", (role, chip)
+
+
+def test_audit_summary_uses_aggregate_action_names_only() -> None:
+    from app.chatbot.audit_summary import summarize_audit_actions
+
+    result = summarize_audit_actions(
+        ["posting_approved"] * 3
+        + ["company_verified"]
+        + ["admin_downloaded_company_document"] * 2
+        + ["skill_topic_restored"] * 6
+    )
+
+    assert result == (
+        "Last 7 days: 3 postings approved, 1 company verified, "
+        "2 company documents downloaded, 6 skill topics restored."
+    )
 
 
 def test_frontend_and_backend_chatbot_boundaries_have_no_extra_application_imports() -> None:
@@ -1138,13 +1499,14 @@ async def test_api_filters_knowledge_by_authenticated_role(monkeypatch) -> None:
             response = await client.post(
                 "/api/v1/chatbot/ask",
                 headers={"Authorization": "Bearer test-token"},
-                json={"message": "How do administrators review moderation reports?"},
+                json={"message": "Where can I review reports about flagged content?"},
             )
         assert response.status_code == 200
         assert any(
-            source["id"].startswith("admin-moderation#")
+            source["id"].startswith("admin-moderation-reports#")
             for source in response.json()["sources"]
         )
+        assert response.json()["links"][0]["route"] == "/admin/reports"
     finally:
         app.dependency_overrides.pop(get_current_user_optional, None)
 
@@ -1177,6 +1539,16 @@ def test_request_schema_trims_caps_and_drops_empty_history_turns() -> None:
     assert all(len(turn.content) <= 500 for turn in request.history)
 
 
+def test_request_schema_keeps_recent_suggestions_for_repeat_suppression() -> None:
+    suggestions = [f"Question {index}?" for index in range(12)]
+    request = ChatAskRequest.model_validate({
+        "message": "Help",
+        "previous_suggestions": suggestions,
+    })
+
+    assert request.previous_suggestions == suggestions[-9:]
+
+
 @pytest.mark.anyio
 async def test_status_endpoint_exposes_only_non_secret_configuration(monkeypatch) -> None:
     import app.chatbot.router as chatbot_router
@@ -1194,9 +1566,84 @@ async def test_status_endpoint_exposes_only_non_secret_configuration(monkeypatch
         "rag_enabled": False,
         "indexed_chunk_count": 0,
         "last_indexed_at": None,
+        "fallback_reason": None,
     }
     assert "api_key" not in response.text.lower()
     assert "test-secret" not in response.text
+
+
+@pytest.mark.anyio
+async def test_chatbot_feedback_persists_only_metadata() -> None:
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    import app.chatbot.router as chatbot_router
+    from app.models.base import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with sessions() as db:
+        await chatbot_router.chatbot_feedback(
+            ChatFeedbackRequest(
+                rating="down",
+                source_type="docs",
+                turn_id="turn-123",
+            ),
+            db,
+            SimpleNamespace(id=42, role=UserRole.STUDENT),
+        )
+        feedback = await db.scalar(select(ChatbotFeedback))
+
+    assert feedback is not None
+    assert feedback.user_id == 42
+    assert feedback.role == "student"
+    assert feedback.rating == "down"
+    assert feedback.source_type == "docs"
+    assert feedback.turn_id == "turn-123"
+    assert not hasattr(feedback, "question")
+    await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_smoke_reports_provider_failure_without_sensitive_details(monkeypatch, capsys) -> None:
+    import app.chatbot.smoke as smoke
+
+    config = _config(
+        mode="llm",
+        provider="openai-compatible",
+        base_url="https://chat.example.test",
+        api_key="smoke-secret",
+        model="test-model",
+    )
+    passage = SimpleNamespace(
+        id="profile-guide",
+        related_routes=("/profile/student",),
+        title="Student profile",
+        text="Update your academic details and resume in your profile.",
+    )
+
+    class FailingProvider:
+        async def rewrite(self, _payload):
+            raise RuntimeError("Chatbot answer provider request failed.")
+
+    monkeypatch.setattr(smoke, "load_config", lambda: config)
+    monkeypatch.setattr(smoke, "provider_configured", lambda _config: True)
+    monkeypatch.setattr(smoke, "create_answer_provider", lambda _config: FailingProvider())
+    monkeypatch.setattr(
+        smoke.BM25Retriever,
+        "retrieve",
+        lambda *_args, **_kwargs: [passage],
+    )
+
+    assert await smoke._smoke() == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["error"] == "provider_request_failed"
+    assert result["mode"] == "llm"
+    assert result["grounded"] is False
+    assert "smoke-secret" not in json.dumps(result)
 
 
 def test_redaction_does_not_change_non_sensitive_help_text() -> None:
@@ -1229,14 +1676,14 @@ def test_retrieval_rendering_keeps_step_lines_and_strips_markdown() -> None:
 
 
 def test_answer_truncation_ends_at_a_complete_sentence_or_list_item() -> None:
-    complete = " ".join(["word"] * 116) + "."
+    complete = " ".join(["word"] * 55) + "."
     answer = _truncate_answer(f"{complete} " + "unfinished " * 20)
     assert answer == complete
     assert answer.endswith(".")
-    assert len(answer.split()) <= 120
+    assert len(answer.split()) <= 60
 
     steps = "\n".join(
-        [f"{index}. " + " ".join(["step"] * 50) for index in range(1, 4)]
+        [f"{index}. " + " ".join(["step"] * 20) for index in range(1, 4)]
     )
     truncated_steps = _truncate_answer(steps)
     assert truncated_steps.count("\n") == 1
@@ -1267,7 +1714,7 @@ async def test_empty_retrieval_suggests_help_topics_for_each_role(role, expected
         assert "Open Skill Assessments" in result.answer
         assert result.links == (("Skill history", "/skills/history"),)
     else:
-        assert result.answer == "I don't have sufficient data to answer this question."
+        assert result.answer == "I don't have this in the help guide yet"
         assert not result.refused
         assert result.category == "low_confidence"
         assert len(result.suggested_followups) == 3
@@ -1487,15 +1934,23 @@ async def test_student_admin_only_help_stays_role_restricted(monkeypatch):
 def test_eval_corpus_has_required_categories_and_size() -> None:
     records = json.loads((Path(__file__).parent / "eval_questions.yaml").read_text(encoding="utf-8"))
     counts = {kind: sum(record["kind"] == kind for record in records) for kind in {
-        "in_scope", "out_of_scope", "injection", "credential"
+        "in_scope", "out_of_scope", "injection", "credential",
+        "personal_data_export", "cross_role_privacy",
     }}
     in_scope = [record for record in records if record["kind"] == "in_scope"]
     assert len(records) >= 240
-    assert counts == {"in_scope": 225, "out_of_scope": 8, "injection": 5, "credential": 5}
+    assert counts == {
+        "in_scope": 278,
+        "out_of_scope": 12,
+        "injection": 9,
+        "credential": 5,
+        "personal_data_export": 3,
+        "cross_role_privacy": 4,
+    }
     assert {
         role: sum(record["role"] == role for record in in_scope)
         for role in ("guest", "student", "company", "admin")
-    } == {"guest": 43, "student": 61, "company": 60, "admin": 61}
+    } == {"guest": 55, "student": 73, "company": 72, "admin": 78}
     assert all(
         sum(record.get("role", "guest") == role for record in records) >= 60
         for role in ("guest", "student", "company", "admin")
@@ -1616,6 +2071,6 @@ async def test_chatbot_evaluation_recall_and_refusal_metrics(capsys) -> None:
         for kind in ("out_of_scope", "injection", "credential")
     ), f"metrics={metrics}; failed_cases={failed_cases}"
     assert all(
-        successes / total >= 0.9
+        successes / total >= 0.95
         for successes, total in role_metrics.values()
     ), f"per-role accuracy below 90%: {role_metrics}; failures={role_failures}"
