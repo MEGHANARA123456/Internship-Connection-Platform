@@ -503,3 +503,23 @@ class ChatbotLowConfidenceLog(Base):
         nullable=False,
         index=True,
     )
+
+
+class ChatbotFeedback(Base):
+    __tablename__ = "chatbot_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    rating: Mapped[str] = mapped_column(String(10), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
