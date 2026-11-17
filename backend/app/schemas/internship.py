@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Status = Literal["DRAFT", "PENDING_APPROVAL", "PUBLISHED", "CLOSED", "REJECTED"]
+Availability = Literal["OPEN", "CLOSED", "EXPIRED", "UNAVAILABLE"]
 
 
 class InternshipInput(BaseModel):
@@ -35,11 +36,21 @@ class InternshipResponse(InternshipInput):
     closed_at: datetime | None = None
     company_name: str | None = None
     is_saved: bool | None = None
+    application_id: int | None = None
+    application_status: str | None = None
+    availability: Availability | None = None
     match_score: int | None = None
     matched_skills: list[str] | None = None
     match_explanation: str | None = None
     match: dict | None = None
     applicant_count: int | None = None
+
+
+class SavedInternshipSummary(BaseModel):
+    total: int
+    open: int
+    applied: int
+    closed: int
 
 
 

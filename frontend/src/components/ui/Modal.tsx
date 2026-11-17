@@ -9,6 +9,7 @@ interface ModalProps {
   description?: string
   children: React.ReactNode
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl'
+  focusCloseButtonLast?: boolean
 }
 
 export function Modal({
@@ -18,8 +19,14 @@ export function Modal({
   description,
   children,
   maxWidth = 'md',
+  focusCloseButtonLast = false,
 }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
 
   useEffect(() => {
     if (!isOpen) return
@@ -28,40 +35,63 @@ export function Modal({
       : null
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    dialogRef.current?.querySelector<HTMLElement>(
-      'button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"])',
-    )?.focus()
+    const dialog = dialogRef.current
+    const initialFocus = dialog?.querySelector<HTMLElement>(
+      'input[autofocus]:not([disabled]), textarea[autofocus]:not([disabled]), select[autofocus]:not([disabled])',
+    ) ?? dialog?.querySelector<HTMLElement>(
+      'input:not([disabled]), textarea:not([disabled]), select:not([disabled])',
+    ) ?? dialog
+    initialFocus?.focus({ preventScroll: true })
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        onClose()
+        onCloseRef.current()
         return
       }
-      if (event.key !== 'Tab' || !dialogRef.current) return
-      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+      if (event.key !== 'Tab' || !dialog) return
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
         'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
       )).filter((element) => element.offsetParent !== null)
       if (!focusable.length) {
         event.preventDefault()
-        dialogRef.current.focus()
+        dialog.focus({ preventScroll: true })
         return
       }
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
+      const orderedFocus = focusable.some((element) => element.dataset.modalFocusOrder)
+        ? focusable
+          .map((element, index) => ({ element, index, order: Number(element.dataset.modalFocusOrder) }))
+          .sort((a, b) => {
+            const aOrder = Number.isFinite(a.order) ? a.order : Number.MAX_SAFE_INTEGER
+            const bOrder = Number.isFinite(b.order) ? b.order : Number.MAX_SAFE_INTEGER
+            return aOrder - bOrder || a.index - b.index
+          })
+          .map(({ element }) => element)
+        : focusable
+      if (focusable.some((element) => element.dataset.modalFocusOrder)) {
+        event.preventDefault()
+        const currentIndex = orderedFocus.indexOf(document.activeElement as HTMLElement)
+        const nextIndex = currentIndex < 0
+          ? (event.shiftKey ? orderedFocus.length - 1 : 0)
+          : (currentIndex + (event.shiftKey ? -1 : 1) + orderedFocus.length) % orderedFocus.length
+        orderedFocus[nextIndex].focus({ preventScroll: true })
+        return
+      }
+      const first = orderedFocus[0]
+      const last = orderedFocus[orderedFocus.length - 1]
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault()
-        last.focus()
+        last.focus({ preventScroll: true })
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault()
-        first.focus()
+        first.focus({ preventScroll: true })
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => {
       document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', handleKeyDown)
-      previousActiveElement?.focus()
+      if (previousActiveElement?.isConnected) previousActiveElement.focus({ preventScroll: true })
     }
-  }, [isOpen, onClose])
+  }, [isOpen])
 
   if (!isOpen) return null
 
@@ -94,6 +124,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
       >
         <div className="flex items-start justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
           <div>
@@ -106,6 +137,7 @@ export function Modal({
             className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
             aria-label="Close dialog"
             title="Close dialog"
+            data-modal-focus-order={focusCloseButtonLast ? '5' : undefined}
           >
             <X className="w-5 h-5" />
           </button>

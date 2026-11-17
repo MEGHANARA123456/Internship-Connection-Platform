@@ -62,7 +62,7 @@ html {
   --bg-hover: var(--surface-muted);
   --border: var(--border-color);
   --analytics-axis: #64748b;
-  --analytics-grid: #e2e8f0;
+  --analytics-grid: #c2ccda;
   --analytics-surface: #ffffff;
 
   color-scheme: light;
@@ -412,6 +412,33 @@ html:not(.dark) .fill-slate-500 {
 
 html:not(.dark) .glass-static .recharts-cartesian-axis-tick text {
   fill: var(--analytics-axis);
+}
+
+html:not(.dark) .recharts-cartesian-grid {
+  opacity: 1 !important;
+}
+
+html:not(.dark) .recharts-cartesian-grid line {
+  opacity: 1 !important;
+  stroke: var(--analytics-grid, #c2ccda) !important;
+  stroke-opacity: 1 !important;
+  stroke-dasharray: 4 3 !important;
+  stroke-width: 1.25px !important;
+}
+
+.dark .skill-assessment-chart .recharts-cartesian-grid line {
+  stroke: #64748b;
+}
+
+.recharts-wrapper:focus:not(:focus-visible),
+.recharts-surface:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.recharts-wrapper:focus-visible,
+.recharts-surface:focus-visible {
+  outline: 1px solid #6366f1;
+  outline-offset: 2px;
 }
 
 option {

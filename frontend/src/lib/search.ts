@@ -1,5 +1,11 @@
-export function normalizeSearchText(value: string): string {
-  return value
+export function normalizeSearchText(value: unknown): string {
+  let text: string
+  try {
+    text = String(value ?? '').trim()
+  } catch {
+    return ''
+  }
+  return text
     .normalize('NFKD')
     .replace(/\p{Diacritic}/gu, '')
     .toLocaleLowerCase()
@@ -26,11 +32,19 @@ function levenshteinDistance(left: string, right: string): number {
   return previous[right.length]
 }
 
-export function searchTextMatches(query: string, values: Array<string | null | undefined>): boolean {
+function searchableValues(value: unknown): string[] {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean') {
+    return [String(value)]
+  }
+  if (Array.isArray(value)) return value.flatMap(searchableValues)
+  return []
+}
+
+export function searchTextMatches(query: unknown, values: readonly unknown[]): boolean {
   const terms = normalizeSearchText(query).split(' ').filter(Boolean)
-  if (!terms.length) return !query.trim() || values.some((value) => value?.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  if (!terms.length) return true
   const words = values
-    .filter((value): value is string => Boolean(value))
+    .flatMap(searchableValues)
     .flatMap((value) => normalizeSearchText(value).split(' '))
   return terms.every((term) => words.some((word) => (
     word === term

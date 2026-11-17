@@ -4,12 +4,13 @@
 
 from typing import Annotated
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from html import escape
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy import and_, extract, func, select
+from sqlalchemy import and_, extract, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.api.v1.dependencies import DbSession, get_current_user, require_roles
@@ -752,22 +753,17 @@ async def search_company_applications(
         query = query.where(Application.status != "WITHDRAWN")
     if internship_id is not None:
         query = query.where(Internship.id == internship_id)
-    postgres = db.get_bind().dialect.name == "postgresql"
-    python_search = bool(search and search.strip() and not postgres)
-    if search and search.strip() and postgres:
-        query = query.where(
-            *search_conditions(
-                search,
-                (
-                    StudentProfile.full_name,
-                    User.email,
-                    StudentProfile.skills,
-                    StudentProfile.university,
-                    StudentProfile.major,
-                ),
-                postgres=True,
-            )
-        )
+    if search and search.strip():
+        terms = [term[:50] for term in re.split(r"[\s,]+", search.strip()) if term][:5]
+        for term in terms:
+            escaped_term = escape_search_term(term)
+            query = query.where(or_(
+                StudentProfile.full_name.ilike(f"%{escaped_term}%", escape="\\"),
+                StudentProfile.university.ilike(f"%{escaped_term}%", escape="\\"),
+                StudentProfile.major.ilike(f"%{escaped_term}%", escape="\\"),
+                StudentProfile.skills.ilike(f"%{escaped_term}%", escape="\\"),
+                Internship.title.ilike(f"%{escaped_term}%", escape="\\"),
+            ))
     if date_from is not None:
         query = query.where(func.date(Application.created_at) >= date_from.isoformat())
     if date_to is not None:
@@ -829,33 +825,11 @@ async def search_company_applications(
     else:
         sort_order = (Application.created_at.desc(), Application.id.desc())
 
-    needs_all_candidates = python_search or applicant_filter == "high_match" or sort == "best_match"
+    needs_all_candidates = applicant_filter == "high_match" or sort == "best_match"
     if needs_all_candidates:
-        candidate_rows = (
-            await db.execute(
-                query.order_by(None).add_columns(
-                    StudentProfile.full_name,
-                    User.email,
-                    StudentProfile.skills,
-                    StudentProfile.university,
-                    StudentProfile.major,
-                )
-            )
-        ).all()
+        candidate_rows = list((await db.scalars(query.order_by(None))).all())
         matched_items: list[dict] = []
-        for (
-            application,
-            student_name,
-            student_email,
-            student_skills,
-            university,
-            major,
-        ) in candidate_rows:
-            if python_search and match_search_text(
-                search or "",
-                (student_name, student_email, student_skills, university, major),
-            ) is None:
-                continue
+        for application in candidate_rows:
             item = await serialize(
                 application,
                 db,

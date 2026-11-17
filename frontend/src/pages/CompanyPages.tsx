@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -44,6 +44,7 @@ import {
   UploadCloud,
   ArrowUpDown,
   ChevronDown,
+  ArrowLeft,
 } from 'lucide-react'
 import { DesktopAnalysisVisuals } from '../components/analytics/DesktopAnalysisVisuals'
 import { AccountSecurityCard } from '../components/security/AccountSecurityCard'
@@ -574,6 +575,150 @@ export function CompanyApplicantsPage({
   return <CompanyApplicantsRedesign pipeline={false} view="applicants" />
 }
 
+export function CompanyJobDetailPage() {
+  const navigate = useNavigate()
+  const { id } = useParams()
+  const [job, setJob] = useState<any | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [, setError] = useState<string | null>(null)
+
+  const loadJob = useCallback(async () => {
+    if (!id) {
+      setJob(null)
+      setError('Posting not found')
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+    try {
+      const { data } = await api.get(`/internships/${id}`)
+      setJob(data)
+    } catch (requestError: any) {
+      const message = requestError?.response?.status === 404 ? 'Posting not found' : 'Unable to load this posting.'
+      setError(message)
+      setJob(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [id])
+
+  useEffect(() => {
+    void loadJob()
+  }, [loadJob])
+
+  const closeRole = async () => {
+    if (!job) return
+    try {
+      await api.post(`/internships/${job.id}/close`, { reject_pending: false, note: null })
+      navigate(routes.companyJobs())
+      showToast('Role closed successfully.', 'success')
+    } catch {
+      showToast('Failed to close internship.', 'error')
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="space-y-4">
+          <CardSkeleton />
+          <CardSkeleton />
+        </div>
+      </div>
+    )
+  }
+
+  if (!job) {
+    return (
+      <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center dark:border-rose-900 dark:bg-rose-950/20">
+          <p className="text-lg font-semibold text-rose-900 dark:text-rose-200">Posting not found</p>
+          <p className="mt-2 text-sm text-rose-700 dark:text-rose-300">The internship you tried to open is unavailable or belongs to another company.</p>
+          <div className="mt-5 flex justify-center gap-3">
+            <Button variant="outline" onClick={() => navigate(-1)}>Back</Button>
+            <Button onClick={() => void loadJob()} variant="primary">Retry</Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const details = [
+    { label: 'Status', value: job.status },
+    { label: 'Work mode', value: job.work_mode },
+    { label: 'Location', value: job.location },
+    { label: 'Industry', value: job.industry },
+    { label: 'Stipend', value: job.stipend == null ? 'Unpaid' : `${formatINR(job.stipend)}/month` },
+    { label: 'Duration', value: `${job.duration_months} months` },
+    { label: 'Deadline', value: job.deadline ? new Date(`${job.deadline}T00:00:00`).toLocaleDateString() : 'Not set' },
+    { label: 'Posted', value: new Date(job.created_at).toLocaleDateString() },
+    { label: 'Applicants', value: `${job.applicant_count ?? 0} applicant${(job.applicant_count ?? 0) === 1 ? '' : 's'}` },
+  ]
+
+  return (
+    <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <Button variant="outline" size="sm" leftIcon={<ArrowLeft className="h-4 w-4" />} onClick={() => navigate(-1)}>
+          Back
+        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => navigate(routes.companyJobApplicants(job.id))}>View Applicants</Button>
+          <Button variant="outline" onClick={() => navigate(routes.interviews({ tab: 'upcoming' }))}>Interview Scheduling</Button>
+          {job.status === 'PUBLISHED' && <Button variant="danger" onClick={() => void closeRole()}>Close Role</Button>}
+          {['DRAFT', 'PENDING_APPROVAL', 'REJECTED'].includes(job.status) && <Button variant="primary" onClick={() => navigate(routes.editCompanyInternship(job.id))}>Edit</Button>}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">Company internship</p>
+            <h1 className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{job.title}</h1>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge status={job.status}>{job.status === 'CLOSED' ? 'Closed' : job.status}</Badge>
+            <Badge variant="slate">Moderation: {job.status === 'REJECTED' ? 'Rejected' : job.status === 'PENDING_APPROVAL' ? 'Pending approval' : 'Active'}</Badge>
+          </div>
+        </div>
+
+        {job.status === 'REJECTED' && (
+          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">
+            <span className="font-semibold">Rejection reason:</span> {job.reason || 'No additional reason provided.'}
+          </div>
+        )}
+
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {details.map((detail) => (
+            <div key={detail.label} className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/70">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{detail.label}</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-white">{detail.value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-8 grid gap-6 lg:grid-cols-2">
+          <section className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">Description</h2>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-600 dark:text-slate-300">{job.description || 'No description provided.'}</p>
+          </section>
+          <section className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">Requirements</h2>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {job.skills && job.skills.length > 0 ? job.skills.map((skill: string) => (
+                <span key={skill} className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
+                  {skill}
+                </span>
+              )) : <span className="text-sm text-slate-600 dark:text-slate-300">No skills listed.</span>}
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function CompanyJobsPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -595,7 +740,13 @@ export function CompanyJobsPage() {
     setError(null)
     try {
       const res = await api.get('/internships/mine')
-      setJobs(res.data || [])
+      const postings = Array.isArray(res.data) ? res.data : []
+      setJobs(postings.filter((job: unknown) => (
+        typeof job === 'object'
+        && job !== null
+        && typeof (job as { id?: unknown }).id === 'number'
+        && typeof (job as { title?: unknown }).title === 'string'
+      )))
     } catch {
       setError('Failed to fetch your internship listings.')
     } finally {
@@ -781,66 +932,108 @@ export function CompanyJobsPage() {
         />
       ) : (
         <div className="space-y-3">
-          {visibleJobs.map((job) => (
-            <Card key={job.id} className="p-5 bg-white dark:bg-slate-900">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div className="min-w-0 flex-1 space-y-1">
-                  <div className="flex items-center gap-2.5 flex-wrap">
-                    <h3 className="text-base font-bold text-slate-900 dark:text-white">{job.title}</h3>
-                    <Badge status={job.status}>{job.status === 'CLOSED' ? 'Closed' : job.status}</Badge>
-                    <Badge variant="slate">{job.work_mode}</Badge>
-                  </div>
-                  <p className="text-xs text-slate-500">
-                    {job.industry} • {job.location} • {job.stipend == null ? 'Unpaid' : `${formatINR(job.stipend)}/mo`} • {job.duration_months} mo • {job.applicant_count ?? 0} applicants
-                  </p>
-                </div>
+          {visibleJobs.map((job) => {
+            const applicantLabel = `${job.applicant_count ?? 0} applicant${(job.applicant_count ?? 0) === 1 ? '' : 's'}`
+            return (
+              <Link
+                key={job.id}
+                to={routes.companyJob(job.id)}
+                aria-label={`Open details for ${job.title}`}
+                title={`Open details for ${job.title}`}
+                className="block cursor-pointer transition duration-150 hover:-translate-y-0.5 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-950"
+              >
+                <Card className="p-5 bg-white dark:bg-slate-900">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <h3 className="text-base font-bold text-slate-900 dark:text-white">{job.title}</h3>
+                        <Badge status={job.status}>{job.status === 'CLOSED' ? 'Closed' : job.status}</Badge>
+                        <Badge variant="slate">{job.work_mode}</Badge>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        {job.industry} • {job.location} • {job.stipend == null ? 'Unpaid' : `${formatINR(job.stipend)}/mo`} • {job.duration_months} mo • {applicantLabel}
+                      </p>
+                    </div>
 
-                <CardActions className="shrink-0">
-                  <CardActionButton
-                    title={['DRAFT', 'PENDING_APPROVAL'].includes(job.status) ? 'Applicants are available after this role is published.' : 'View applicants'}
-                    disabled={['DRAFT', 'PENDING_APPROVAL'].includes(job.status)}
-                    onClick={() => navigate(routes.companyJobApplicants(job.id))}
-                  >
-                    <Users className="h-4 w-4 shrink-0" />
-                    <span>View Applicants</span>
-                  </CardActionButton>
-                  <CardActionButton
-                    title={['DRAFT', 'PENDING_APPROVAL'].includes(job.status) ? 'Interview scheduling is available after this role is published.' : 'Schedule interviews for this role'}
-                    disabled={['DRAFT', 'PENDING_APPROVAL'].includes(job.status)}
-                    onClick={() => setSchedulingJob({ id: job.id, title: job.title })}
-                  >
-                    <Calendar className="h-4 w-4 shrink-0" />
-                    <span>Interview Scheduling</span>
-                  </CardActionButton>
-                  <CardActionButton
-                    intent="danger"
-                    title={job.status === 'CLOSED' ? 'Already closed' : job.status === 'PUBLISHED' ? 'Close this role to new applicants' : 'Only published roles can be closed.'}
-                    disabled={job.status !== 'PUBLISHED'}
-                    onClick={() => void handleCloseListing(job.id)}
-                  >
-                    Close Role
-                  </CardActionButton>
-                  {job.status === 'DRAFT' && (
-                    <>
-                      <Link to={routes.editCompanyInternship(job.id)} className="w-full">
-                        <CardActionButton intent="outline">Edit</CardActionButton>
-                      </Link>
+                    <CardActions className="shrink-0">
                       <CardActionButton
-                        intent="primary"
-                        isLoading={submittingId === job.id}
-                        onClick={() => handleSubmitForApproval(job.id)}
+                        title={['DRAFT', 'PENDING_APPROVAL'].includes(job.status) ? 'Applicants are available after this role is published.' : 'View applicants'}
+                        disabled={['DRAFT', 'PENDING_APPROVAL'].includes(job.status)}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          navigate(routes.companyJobApplicants(job.id))
+                        }}
                       >
-                        <Send className="h-4 w-4" />
-                        <span>Submit for Review</span>
+                        <Users className="h-4 w-4 shrink-0" />
+                        <span>View Applicants</span>
                       </CardActionButton>
-                      <CardActionButton intent="outline" onClick={() => void duplicateJob(job.id)}>Duplicate</CardActionButton>
-                      <CardActionButton intent="danger" onClick={() => void deleteDraft(job.id)}>Delete Draft</CardActionButton>
-                    </>
-                  )}
-                </CardActions>
-              </div>
-            </Card>
-          ))}
+                      <CardActionButton
+                        title={['DRAFT', 'PENDING_APPROVAL'].includes(job.status) ? 'Interview scheduling is available after this role is published.' : 'Schedule interviews for this role'}
+                        disabled={['DRAFT', 'PENDING_APPROVAL'].includes(job.status)}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setSchedulingJob({ id: job.id, title: job.title })
+                        }}
+                      >
+                        <Calendar className="h-4 w-4 shrink-0" />
+                        <span>Interview Scheduling</span>
+                      </CardActionButton>
+                      <CardActionButton
+                        intent="danger"
+                        title={job.status === 'CLOSED' ? 'Already closed' : job.status === 'PUBLISHED' ? 'Close this role to new applicants' : 'Only published roles can be closed.'}
+                        disabled={job.status !== 'PUBLISHED'}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          void handleCloseListing(job.id)
+                        }}
+                      >
+                        Close Role
+                      </CardActionButton>
+                      {job.status === 'DRAFT' && (
+                        <>
+                          <CardActionButton
+                            intent="outline"
+                            onClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              navigate(routes.editCompanyInternship(job.id))
+                            }}
+                          >
+                            Edit
+                          </CardActionButton>
+                          <CardActionButton
+                            intent="primary"
+                            isLoading={submittingId === job.id}
+                            onClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              void handleSubmitForApproval(job.id)
+                            }}
+                          >
+                            <Send className="h-4 w-4" />
+                            <span>Submit for Review</span>
+                          </CardActionButton>
+                          <CardActionButton intent="outline" onClick={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            void duplicateJob(job.id)
+                          }}>Duplicate</CardActionButton>
+                          <CardActionButton intent="danger" onClick={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            void deleteDraft(job.id)
+                          }}>Delete Draft</CardActionButton>
+                        </>
+                      )}
+                    </CardActions>
+                  </div>
+                </Card>
+              </Link>
+            )
+          })}
         </div>
       )}
 

@@ -106,6 +106,19 @@ function readNormalizedHandle(key: string, parse: (value: string) => string | nu
   return normalized || ''
 }
 
+type SavedRoleFilter = 'all' | 'open' | 'applied' | 'closed'
+
+function savedRoleAvailability(job: any): 'OPEN' | 'CLOSED' | 'EXPIRED' | 'UNAVAILABLE' {
+  if (job.availability) return job.availability
+  if (job.status === 'CLOSED') return 'CLOSED'
+  if (job.deadline && job.deadline < new Date().toISOString().slice(0, 10)) return 'EXPIRED'
+  return job.status === 'PUBLISHED' ? 'OPEN' : 'UNAVAILABLE'
+}
+
+function hasActiveSavedApplication(job: any): boolean {
+  return !!job.application_status && job.application_status !== 'WITHDRAWN'
+}
+
 // --- 1. Opportunities Page (Browse Internships) ---
 
 export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' | 'saved' }) {
@@ -151,6 +164,8 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
   // Data & loading states
   const [internships, setInternships] = useState<any[]>([])
   const [total, setTotal] = useState(0)
+  const [savedSummary, setSavedSummary] = useState<{ total: number; open: number; applied: number; closed: number } | null>(null)
+  const [savedRoleFilter, setSavedRoleFilter] = useState<SavedRoleFilter>('all')
   const [applications, setApplications] = useState<any[]>([])
   const [applicationsLoaded, setApplicationsLoaded] = useState(false)
   const [applicationsLoading, setApplicationsLoading] = useState(false)
@@ -229,10 +244,14 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
     setError(null)
     try {
       if (activeTab === 'saved') {
-        const res = await api.get('/internships/saved')
+        const [res, summary] = await Promise.all([
+          api.get('/internships/saved'),
+          api.get('/internships/saved/summary'),
+        ])
         const items = parseInternshipsPayload(res.data)
         setInternships(items)
         setTotal(items.length)
+        setSavedSummary(summary.data)
       } else {
         const params = new URLSearchParams()
         if (location) params.append('location', location)
@@ -304,11 +323,15 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
           if (minStipend) params.set('min_stipend', minStipend)
           if (skills) params.set('skills', skills)
           const query = params.toString()
-          const res = await api.get(query ? `/internships/saved?${query}` : '/internships/saved')
+          const [res, summary] = await Promise.all([
+            api.get(query ? `/internships/saved?${query}` : '/internships/saved'),
+            api.get('/internships/saved/summary'),
+          ])
           if (requestId !== requestIdRef.current) return
           const items = parseInternshipsPayload(res.data)
           setInternships(items)
           setTotal(items.length)
+          setSavedSummary(summary.data)
         } else {
           const params = new URLSearchParams()
           if (location) params.append('location', location)
@@ -376,8 +399,16 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
         await api.post(`/internships/${job.id}/save`)
       }
       if (activeTab === 'saved' && isSaved) {
+        const wasApplied = hasActiveSavedApplication(job)
+        const wasOpen = savedRoleAvailability(job) === 'OPEN'
         setInternships((prev) => prev.filter((j) => j.id !== job.id))
         setTotal((prev) => Math.max(prev - 1, 0))
+        setSavedSummary((previous) => previous ? {
+          total: Math.max(previous.total - 1, 0),
+          open: Math.max(previous.open - (wasOpen && !wasApplied ? 1 : 0), 0),
+          applied: Math.max(previous.applied - (wasApplied ? 1 : 0), 0),
+          closed: Math.max(previous.closed - (!wasOpen && !wasApplied ? 1 : 0), 0),
+        } : previous)
       }
     } catch {
       // Revert if request failed
@@ -413,6 +444,22 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
   }, [id, internships])
 
   const displayedJobs = Array.isArray(internships) ? internships : []
+  const savedCounts = {
+    all: savedSummary?.total ?? displayedJobs.length,
+    open: savedSummary?.open ?? displayedJobs.filter((job) => savedRoleAvailability(job) === 'OPEN' && !hasActiveSavedApplication(job)).length,
+    applied: savedSummary?.applied ?? displayedJobs.filter(hasActiveSavedApplication).length,
+    closed: savedSummary?.closed ?? displayedJobs.filter((job) => savedRoleAvailability(job) !== 'OPEN' && !hasActiveSavedApplication(job)).length,
+  }
+  const savedJobs = activeTab === 'saved'
+    ? displayedJobs.filter((job) => {
+        const availability = savedRoleAvailability(job)
+        const applied = hasActiveSavedApplication(job)
+        if (savedRoleFilter === 'open') return availability === 'OPEN' && !applied
+        if (savedRoleFilter === 'applied') return applied
+        if (savedRoleFilter === 'closed') return availability !== 'OPEN' && !applied
+        return true
+      })
+    : displayedJobs
 
   const handleApplyClick = (job: any) => {
     if (!session) {
@@ -426,22 +473,41 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
     setApplyModalJob(job)
   }
 
-  const handleApplicationSubmitted = () => {
+  const handleApplicationSubmitted = (applicationId?: number) => {
     const appliedJob = applyModalJob
     if (appliedJob) {
       const wasVisible = internships.some((job) => job.id === appliedJob.id)
-      setInternships((previous) => previous.filter((job) => job.id !== appliedJob.id))
-      if (wasVisible) setTotal((previous) => Math.max(previous - 1, 0))
+      if (activeTab === 'saved') {
+        const alreadyApplied = hasActiveSavedApplication(appliedJob)
+        setInternships((previous) => previous.map((job) => job.id === appliedJob.id
+          ? { ...job, application_id: applicationId ?? job.application_id, application_status: 'APPLIED' }
+          : job))
+        setSelectedJob((previous: any) => previous?.id === appliedJob.id
+          ? { ...previous, application_id: applicationId ?? previous.application_id, application_status: 'APPLIED' }
+          : previous)
+        if (!alreadyApplied) {
+          const wasOpen = savedRoleAvailability(appliedJob) === 'OPEN'
+          setSavedSummary((previous) => previous ? {
+            ...previous,
+            open: Math.max(previous.open - (wasOpen ? 1 : 0), 0),
+            applied: previous.applied + 1,
+            closed: Math.max(previous.closed - (wasOpen ? 0 : 1), 0),
+          } : previous)
+        }
+      } else {
+        setInternships((previous) => previous.filter((job) => job.id !== appliedJob.id))
+        if (wasVisible) setTotal((previous) => Math.max(previous - 1, 0))
+      }
       setApplications((previous) => {
         const existingIndex = previous.findIndex((application) => application.internship_id === appliedJob.id)
         if (existingIndex !== -1) {
           return previous.map((application, index) => index === existingIndex
-            ? { ...application, status: 'APPLIED', created_at: new Date().toISOString() }
+            ? { ...application, id: applicationId ?? application.id, status: 'APPLIED', created_at: new Date().toISOString() }
             : application)
         }
         return [
           {
-            id: `pending-${appliedJob.id}`,
+            id: applicationId ?? `pending-${appliedJob.id}`,
             internship_id: appliedJob.id,
             internship_title: appliedJob.title,
             company_name: appliedJob.company_name,
@@ -458,21 +524,39 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
         const items = Array.isArray(response.data?.applications) ? response.data.applications : []
         setApplications(items)
         setApplicationsLoaded(true)
+        if (activeTab === 'saved' && appliedJob) {
+          const application = items.find((item: any) => item.internship_id === appliedJob.id)
+          if (application) {
+            setInternships((previous) => previous.map((job) => job.id === appliedJob.id
+              ? { ...job, application_id: application.id, application_status: application.status }
+              : job))
+          }
+        }
       })
       .catch((refreshError) => console.error('Failed to refresh applications:', refreshError))
   }
 
   const handleApplicationAlreadyExists = () => {
     if (applyModalJob) {
-      const wasVisible = internships.some((job) => job.id === applyModalJob.id)
-      setInternships((previous) => previous.filter((job) => job.id !== applyModalJob.id))
-      if (wasVisible) setTotal((previous) => Math.max(previous - 1, 0))
+      if (activeTab !== 'saved') {
+        const wasVisible = internships.some((job) => job.id === applyModalJob.id)
+        setInternships((previous) => previous.filter((job) => job.id !== applyModalJob.id))
+        if (wasVisible) setTotal((previous) => Math.max(previous - 1, 0))
+      }
     }
     void api.get('/applications/student')
       .then((response) => {
         const items = Array.isArray(response.data?.applications) ? response.data.applications : []
         setApplications(items)
         setApplicationsLoaded(true)
+        if (activeTab === 'saved' && applyModalJob) {
+          const application = items.find((item: any) => item.internship_id === applyModalJob.id)
+          if (application) {
+            setInternships((previous) => previous.map((job) => job.id === applyModalJob.id
+              ? { ...job, application_id: application.id, application_status: application.status }
+              : job))
+          }
+        }
       })
       .catch((refreshError) => console.error('Failed to refresh applications:', refreshError))
   }
@@ -565,10 +649,27 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
       )}
 
       {session?.role === 'STUDENT' && activeTab === 'saved' && (
-        <div className="mb-4 flex items-center gap-2 text-xs">
-          <span className="text-slate-500 dark:text-slate-400">Filtered by:</span>
-          <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 font-medium text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300">Saved roles</span>
-          <button type="button" onClick={() => chooseOpportunityTab('all')} className="rounded px-2 py-1 font-semibold text-indigo-700 underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300">Clear</button>
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs" aria-label="Saved role filters">
+          {([
+            ['all', 'All'],
+            ['open', 'Open'],
+            ['applied', 'Applied'],
+            ['closed', 'Closed & expired'],
+          ] as const).map(([filter, label]) => (
+            <button
+              key={filter}
+              type="button"
+              onClick={() => setSavedRoleFilter(filter)}
+              aria-pressed={savedRoleFilter === filter}
+              className={`rounded-full border px-2.5 py-1 font-semibold transition-colors ${
+                savedRoleFilter === filter
+                  ? 'border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
+              }`}
+            >
+              {label} <span className="ml-1 tabular-nums">{savedCounts[filter]}</span>
+            </button>
+          ))}
         </div>
       )}
 
@@ -640,7 +741,9 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
 
         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs text-slate-500">
           <span>
-            {activeTab === 'all' && total > internships.length
+            {activeTab === 'saved'
+              ? <><strong className="text-slate-900 dark:text-white">{savedSummary?.total ?? total}</strong> saved roles</>
+              : activeTab === 'all' && total > internships.length
               ? <>Showing <strong className="text-slate-900 dark:text-white">{internships.length}</strong> of <strong className="text-slate-900 dark:text-white">{total}</strong> opportunities</>
               : <>Found <strong className="text-slate-900 dark:text-white">{total}</strong> {total === 1 ? 'opportunity' : 'opportunities'}</>}
           </span>
@@ -755,21 +858,49 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
         </div>
       ) : error ? (
         <ErrorState message={error} onRetry={fetchInternships} />
-      ) : displayedJobs.length === 0 ? (
+      ) : savedJobs.length === 0 ? (
         <EmptyState
-          title={activeTab === 'saved' ? 'No saved internships' : 'No internships found'}
+          title={activeTab === 'saved'
+            ? (savedSummary?.total ?? total) === 0 ? 'No saved internships' : 'No roles match this filter'
+            : 'No internships found'}
           description={
             activeTab === 'saved'
-              ? 'You have not bookmarked any internships yet. Click the bookmark icon on any opportunity to save it here.'
+              ? (savedSummary?.total ?? total) === 0
+                ? 'You have not bookmarked any internships yet. Click the bookmark icon on any opportunity to save it here.'
+                : 'Try a different saved-role filter or clear your search and opportunity filters.'
               : 'Try broadening your search criteria or clearing active filters to see more results.'
           }
+          actionLabel={activeTab === 'saved' && (savedSummary?.total ?? total) > 0 ? 'Clear' : undefined}
+          onAction={activeTab === 'saved' && (savedSummary?.total ?? total) > 0 ? () => {
+            setSavedRoleFilter('all')
+            setLocation('')
+            setIndustry('')
+            setWorkMode('')
+            setMinStipend('')
+            setSkills('')
+            setSearchTerm('')
+            setPage(1)
+          } : undefined}
         />
       ) : (
         <div className="space-y-3">
-          {displayedJobs.map((job) => (
+          {savedJobs.map((job) => {
+            const availability = savedRoleAvailability(job)
+            const savedTab = activeTab === 'saved'
+            const applied = savedTab && hasActiveSavedApplication(job)
+            const unavailable = availability !== 'OPEN'
+            const unavailableReason = availability === 'CLOSED'
+              ? 'This internship is closed and no longer accepts applications.'
+              : availability === 'EXPIRED'
+                ? 'The application deadline has passed.'
+                : 'This internship is not currently available for applications.'
+            const applicationStage = job.application_status && job.application_status !== 'APPLIED'
+              ? job.application_status.replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (letter: string) => letter.toUpperCase())
+              : null
+            return (
             <Card
               key={job.id}
-              className="p-5 hover:border-indigo-300 transition-all cursor-pointer bg-white dark:bg-slate-900"
+              className={`p-5 hover:border-indigo-300 transition-all cursor-pointer bg-white dark:bg-slate-900 ${savedTab && unavailable ? 'opacity-70' : ''}`}
               onClick={() => setSelectedJob(job)}
             >
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -778,7 +909,16 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                     <h3 className="text-base font-bold text-slate-900 hover:text-indigo-600 transition-colors">
                       {job.title}
                     </h3>
-                    {job.status === 'CLOSED' && <Badge variant="slate">Closed</Badge>}
+                    {savedTab && job.application_status === 'WITHDRAWN' && <Badge status="WITHDRAWN">Withdrawn</Badge>}
+                    {applied && (
+                      <Badge status={job.application_status}>
+                        {applicationStage ? `Applied · ${applicationStage}` : 'Applied'}
+                      </Badge>
+                    )}
+                    {savedTab && availability === 'CLOSED' && <Badge variant="slate">Closed</Badge>}
+                    {savedTab && availability === 'EXPIRED' && <Badge variant="slate">Expired</Badge>}
+                    {savedTab && availability === 'UNAVAILABLE' && <Badge variant="slate">Unavailable</Badge>}
+                    {!savedTab && job.status === 'CLOSED' && <Badge variant="slate">Closed</Badge>}
                     <Badge status={job.work_mode}>{job.work_mode}</Badge>
                     <Badge variant="slate">{job.industry}</Badge>
                     {job.match_score !== null && job.match_score !== undefined && (
@@ -862,7 +1002,7 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                           )}
                         </button>
                       )}
-                      {session?.role === 'STUDENT' && (
+                      {session?.role === 'STUDENT' && (!savedTab || (availability === 'OPEN' && !applied)) && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -877,18 +1017,32 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                         </Button>
                       )}
                     </div>
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      disabled={job.status === 'CLOSED'}
-                      title={job.status === 'CLOSED' ? 'This internship is closed and no longer accepts applications.' : 'Apply for this internship'}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleApplyClick(job)
-                      }}
-                    >
-                      Apply Now
-                    </Button>
+                    {applied && job.application_id ? (
+                      <Link
+                        to={routes.applications({ id: job.application_id })}
+                        onClick={(event) => event.stopPropagation()}
+                        className="inline-flex"
+                      >
+                        <Button size="sm" variant="outline">View application</Button>
+                      </Link>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        disabled={savedTab ? unavailable : job.status === 'CLOSED'}
+                        title={savedTab && unavailable
+                          ? unavailableReason
+                          : !savedTab && job.status === 'CLOSED'
+                            ? 'This internship is closed and no longer accepts applications.'
+                            : 'Apply for this internship'}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleApplyClick(job)
+                        }}
+                      >
+                        Apply Now
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -929,10 +1083,10 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
                 )}
               </div>
             </Card>
-          ))}
+          )})}
 
           {/* Pagination Controls */}
-          {total > 10 && (
+          {activeTab === 'all' && total > 10 && (
             <div className="flex items-center justify-between pt-4 border-t border-slate-200 text-xs">
               <Button
                 variant="outline"
@@ -1118,8 +1272,8 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
           location={applyModalJob.location}
           stipend={applyModalJob.stipend}
           deadline={applyModalJob.deadline}
-          onApplied={() => {
-            handleApplicationSubmitted()
+          onApplied={(applicationId) => {
+            handleApplicationSubmitted(applicationId)
           }}
           onAlreadyApplied={handleApplicationAlreadyExists}
         />

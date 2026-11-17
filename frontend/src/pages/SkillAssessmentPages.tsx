@@ -212,10 +212,10 @@ export function SkillAssessmentResultPage() {
       <section className="mt-6 grid gap-5 lg:grid-cols-2">
         <article className="glass-static rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <h2 className="mb-3 text-base font-bold text-slate-900 dark:text-white">Performance by subtopic</h2>
-          <div className="h-64" role="img" aria-label="Bar chart of performance by subtopic">
+          <div className="skill-assessment-chart h-64" role="img" aria-label="Bar chart of performance by subtopic">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={subtopics} margin={{ top: 8, right: 8, left: -20, bottom: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#64748b" opacity={0.2} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--analytics-grid, #e2e8f0)" opacity={0.2} />
                 <XAxis dataKey="name" angle={-20} textAnchor="end" interval={0} height={55} tick={{ fontSize: 10 }} />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} />
                 <Tooltip formatter={(value) => [`${value}%`, 'Score']} />
@@ -226,10 +226,10 @@ export function SkillAssessmentResultPage() {
         </article>
         <article className="glass-static rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <h2 className="mb-3 text-base font-bold text-slate-900 dark:text-white">Performance by difficulty</h2>
-          <div className="h-64" role="img" aria-label="Bar chart of performance by difficulty">
+          <div className="skill-assessment-chart h-64" role="img" aria-label="Bar chart of performance by difficulty">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={difficulties} margin={{ top: 8, right: 8, left: -20, bottom: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#64748b" opacity={0.2} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--analytics-grid, #e2e8f0)" opacity={0.2} />
                 <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} />
                 <Tooltip formatter={(value) => [`${value}%`, 'Score']} />
@@ -365,10 +365,10 @@ export function SkillAssessmentHistoryPage() {
           </div>
           <section className="glass-static rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
             <h2 className="mb-3 text-base font-bold capitalize text-slate-900 dark:text-white">{topic.replaceAll('-', ' ')} score trend</h2>
-            <div className="h-72" role="img" aria-label={`Score-over-time chart for ${topic}`}>
+            <div className="skill-assessment-chart h-72" role="img" aria-label={`Score-over-time chart for ${topic}`}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#64748b" opacity={0.2} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--analytics-grid, #e2e8f0)" opacity={0.2} />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(value) => [`${value}%`, 'Weighted score']} labelFormatter={(label, values) => `${label}${values[0]?.payload?.date ? ` · ${values[0].payload.date}` : ''}`} />

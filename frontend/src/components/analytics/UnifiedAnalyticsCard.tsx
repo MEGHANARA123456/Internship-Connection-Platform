@@ -1,7 +1,6 @@
 import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  Activity,
   Award,
   Bookmark,
   Briefcase,
@@ -9,7 +8,6 @@ import {
   Check,
   ChevronDown,
   FileText,
-  Info,
   RefreshCw,
   SlidersHorizontal,
   Users,
@@ -347,15 +345,7 @@ const KPI_CONFIG: Record<AnalyticsKind, KpiCardConfig[]> = {
     { label: 'Interviews scheduled', key: 'interviews_scheduled', href: routes.interviews({ tab: 'upcoming' }), icon: <CalendarDays className="h-4 w-4" />, info: 'Future interviews in SCHEDULED or RESCHEDULED status.', sampleUnit: 'interviews' },
     { label: 'Offers', key: 'offers', href: routes.companyApplicants({ status: 'selected' }), icon: <Award className="h-4 w-4" />, info: 'Applications currently selected or accepted.', sampleUnit: 'applications' },
   ],
-  admin: [
-    { label: 'Users signed up', key: 'users_signed_up', href: routes.adminUsers({ created: 'this_month' }), icon: <Users className="h-4 w-4" />, info: 'Accounts created since the start of the current UTC month.', sampleUnit: 'users' },
-    { label: 'Student signups', key: 'student_signups', href: routes.adminStudents({ created: 'this_month' }), icon: <Users className="h-4 w-4" />, info: 'Student accounts created this UTC calendar month.', sampleUnit: 'students' },
-    { label: 'Company signups', key: 'company_signups', href: routes.adminCompanies + '?created=this_month', icon: <Briefcase className="h-4 w-4" />, info: 'Company accounts created this UTC calendar month.', sampleUnit: 'companies' },
-    { label: 'Admin actions', key: 'admin_actions', href: routes.adminAuditLogs(), icon: <Activity className="h-4 w-4" />, info: 'Audit log records created in the selected reporting range.', sampleUnit: 'actions' },
-    { label: 'Pending verifications', key: 'pending_verifications', href: routes.adminVerifications, icon: <Check className="h-4 w-4" />, info: 'Company profiles currently awaiting verification.', sampleUnit: 'companies' },
-    { label: 'Job queue', key: 'job_queue', href: routes.adminModeration, icon: <FileText className="h-4 w-4" />, info: 'Internships currently awaiting moderation.', sampleUnit: 'postings' },
-    { label: 'Disputes', key: 'disputes', href: routes.adminReports({ status: 'open' }), icon: <Info className="h-4 w-4" />, info: 'Reports currently open.', sampleUnit: 'reports' },
-  ],
+  admin: [],
 }
 
 export function UnifiedAnalyticsCard({

@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { api } from '../api/client'
@@ -120,22 +121,29 @@ describe('AdminSkillAssessmentsPage resource form', () => {
   })
 
   it('saves a resource, clears the form, and shows success', async () => {
+    const user = userEvent.setup()
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never)
     const { container } = renderPage()
 
     const topic = await screen.findByRole('combobox', { name: 'Topic ID' })
-    fireEvent.click(topic)
-    fireEvent.click(within(screen.getByRole('listbox', { name: 'Topic ID' })).getByRole('option', { name: 'python' }))
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'PyTorch tutorials' } })
-    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://example.test/course' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add resource' }))
+    await user.click(topic)
+    await user.click(within(screen.getByRole('listbox', { name: 'Topic ID' })).getByRole('option', { name: 'python' }))
+    const title = screen.getByLabelText('Title')
+    const titleText = 'An applied guide to using PyTorch effectively'
+    await user.type(title, titleText)
+    expect(title).toHaveValue(titleText)
+    expect(document.activeElement).toBe(title)
+    const url = screen.getByLabelText('URL')
+    await user.type(url, 'https://example.test/course-with-a-clear-description')
+    expect(document.activeElement).toBe(url)
+    await user.click(screen.getByRole('button', { name: 'Add resource' }))
 
     await waitFor(() => {
       expect(api.post).toHaveBeenCalledWith('/skills/admin/resources', {
         topic: 'python',
         subtopic: 'general',
-        title: 'PyTorch tutorials',
-        url: 'https://example.test/course',
+        title: titleText,
+        url: 'https://example.test/course-with-a-clear-description',
       })
     })
     expect(await screen.findByText('Learning resource added and audit logged.')).toBeInTheDocument()

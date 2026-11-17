@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { api } from '../../api/client'
@@ -18,6 +19,48 @@ afterEach(() => {
 })
 
 describe('schedule interview role and candidate selection', () => {
+  it('keeps focus in candidate instructions while typing a full sentence', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === '/internships/mine') {
+        return Promise.resolve({
+          data: [{ id: 11, title: 'Frontend Intern', status: 'PUBLISHED' }],
+        }) as never
+      }
+      if (url === '/applications/internships/11') {
+        return Promise.resolve({
+          data: [{
+            id: 101,
+            student_id: 501,
+            student_name: 'Alex Student',
+            student_university: 'Example University',
+            status: 'APPLIED',
+          }],
+        }) as never
+      }
+      return Promise.resolve({ data: [] }) as never
+    })
+
+    render(
+      <ScheduleInterviewModal
+        isOpen
+        onClose={vi.fn()}
+        onScheduled={vi.fn()}
+      />,
+    )
+
+    const rolePicker = await screen.findByRole('combobox', { name: 'Internship Role' })
+    await user.click(rolePicker)
+    await user.click(await screen.findByRole('option', { name: 'Frontend Intern' }))
+    const notes = await screen.findByRole('textbox', { name: 'Instructions / Notes for Candidate' })
+    const sentence = 'Please prepare a concise walkthrough of your latest project.'
+
+    await user.type(notes, sentence)
+
+    expect(notes).toHaveValue(sentence)
+    expect(document.activeElement).toBe(notes)
+  })
+
   it('shows neutral, loading, empty, and candidate states as roles change', async () => {
     let finishEmptyRoleLoad: ((value: { data: unknown[] }) => void) | undefined
     vi.mocked(api.get).mockImplementation((url: string) => {

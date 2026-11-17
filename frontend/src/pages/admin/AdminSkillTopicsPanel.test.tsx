@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../api/client'
 import { AdminSkillTopicsPanel } from './AdminSkillTopicsPanel'
@@ -94,6 +95,7 @@ describe('AdminSkillTopicsPanel', () => {
   })
 
   it('updates topic metadata through the administrative endpoint', async () => {
+    const user = userEvent.setup()
     vi.mocked(api.get).mockImplementation(async (url) => {
       if (url.startsWith('/skills/admin/skill-topics?')) return { data: [topic] } as never
       if (url.includes('/subtopics')) return { data: [] } as never
@@ -106,19 +108,31 @@ describe('AdminSkillTopicsPanel', () => {
     vi.mocked(api.patch).mockResolvedValue({ data: { ...topic, active: false } } as never)
 
     render(<AdminSkillTopicsPanel />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit topic' }))
+    await user.click(await screen.findByRole('button', { name: 'Edit topic' }))
     expect(screen.getByLabelText('Display name')).toHaveValue('Python')
     expect(screen.getByLabelText('Description')).toHaveValue('Python systems')
     expect(screen.getByLabelText('Display name')).toHaveClass('border-slate-300', 'bg-white')
-    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Python Engineering' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    const displayName = screen.getByLabelText('Display name')
+    await user.clear(displayName)
+    await user.type(displayName, 'Python Engineering')
+    const description = screen.getByLabelText('Description')
+    const sentence = 'A practical introduction to Python systems design.'
+    await user.clear(description)
+    await user.type(description, sentence)
+    expect(description).toHaveValue(sentence)
+    expect(document.activeElement).toBe(description)
+    await user.click(screen.getByRole('button', { name: 'Save settings' }))
 
     await waitFor(() => {
-      expect(api.patch).toHaveBeenCalledWith('/skills/admin/topics/python', expect.objectContaining({ name: 'Python Engineering' }))
+      expect(api.patch).toHaveBeenCalledWith('/skills/admin/topics/python', expect.objectContaining({
+        name: 'Python Engineering',
+        description: sentence,
+      }))
     })
   })
 
   it('creates a new topic without a topic-level active flag', async () => {
+    const user = userEvent.setup()
     vi.mocked(api.get).mockImplementation(async (url) => {
       if (url.startsWith('/skills/admin/skill-topics?')) return { data: [topic] } as never
       if (url.includes('/subtopics')) return { data: [] } as never
@@ -129,12 +143,19 @@ describe('AdminSkillTopicsPanel', () => {
     vi.mocked(api.post).mockResolvedValue({ data: { topic: 'data-science' } } as never)
 
     render(<AdminSkillTopicsPanel />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Add topic' }))
+    await user.click(await screen.findByRole('button', { name: 'Add topic' }))
     const dialog = await screen.findByRole('dialog', { name: 'Add skill topic' })
     expect(dialog.querySelector('#new-skill-topic-id')).not.toBeNull()
-    fireEvent.change(screen.getByLabelText('Topic ID'), { target: { value: 'data-science' } })
-    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Data Science' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Create topic' }))
+    await user.type(screen.getByLabelText('Topic ID'), 'data-science')
+    await user.type(screen.getByLabelText('Display name'), 'Data Science')
+    const description = screen.getByLabelText('Description')
+    const sentence = 'A comprehensive foundation for practical data science.'
+    await user.type(description, sentence)
+    expect(description).toHaveValue(sentence)
+    expect(document.activeElement).toBe(description)
+    await user.type(screen.getByLabelText('Icon or symbol'), '*')
+    await user.type(screen.getByLabelText('Badge title'), 'Data Science Specialist')
+    await user.click(screen.getByRole('button', { name: 'Create topic' }))
 
     await waitFor(() => expect(api.post).toHaveBeenCalledWith('/skills/admin/skill-topics', expect.objectContaining({
       topic: 'data-science',

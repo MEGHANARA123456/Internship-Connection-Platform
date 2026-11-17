@@ -547,7 +547,13 @@ export function AdminUsersPage() {
     setError(null)
     try {
       const res = await api.get('/admin/users')
-      setUsers(res.data || [])
+      const users = Array.isArray(res.data) ? res.data : []
+      setUsers(users.filter((user: unknown) => (
+        typeof user === 'object'
+        && user !== null
+        && typeof (user as { id?: unknown }).id === 'number'
+        && typeof (user as { email?: unknown }).email === 'string'
+      )))
     } catch {
       setError('Failed to fetch platform users.')
     } finally {
@@ -755,6 +761,7 @@ export function AdminUsersPage() {
         }}
         title="Permanently delete user"
         description="This action cannot be undone."
+        focusCloseButtonLast
       >
         {userToDelete && (
           <div className="space-y-4">
@@ -772,7 +779,12 @@ export function AdminUsersPage() {
               placeholder="Enter a reason (at least 5 characters)"
               required
               minLength={5}
+              maxLength={500}
+              data-modal-focus-order="1"
             />
+            <p className="-mt-3 text-right text-xs text-slate-500 dark:text-slate-400" aria-live="polite">
+              {deleteReason.length}/500 characters
+            </p>
             <div className="space-y-1.5">
               <label htmlFor="delete-confirmation-email" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
                 Type the exact email to confirm
@@ -783,6 +795,7 @@ export function AdminUsersPage() {
                 value={confirmationEmail}
                 onChange={(event) => setConfirmationEmail(event.target.value)}
                 autoComplete="off"
+                data-modal-focus-order="2"
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
               />
             </div>
@@ -796,6 +809,7 @@ export function AdminUsersPage() {
                   setDeleteReason('')
                   setConfirmationEmail('')
                 }}
+                data-modal-focus-order="3"
               >
                 Cancel
               </Button>
@@ -805,6 +819,7 @@ export function AdminUsersPage() {
                 isLoading={deletingUser}
                 disabled={deleteReason.trim().length < 5 || confirmationEmail !== userToDelete.email}
                 onClick={() => void handleDeleteUser()}
+                data-modal-focus-order="4"
               >
                 Delete permanently
               </Button>

@@ -1,9 +1,9 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { DesktopAnalysisVisuals } from '../../components/analytics/DesktopAnalysisVisuals'
-import { CompanyAnalyticsPage, CompanyJobsPage } from '../CompanyPages'
+import { CompanyAnalyticsPage, CompanyJobDetailPage, CompanyJobsPage } from '../CompanyPages'
 import { AdminDashboardPage } from '../AdminPages'
 import { api } from '../../api/client'
 import { useAuthStore } from '../../store/auth'
@@ -179,6 +179,57 @@ describe('Dashboard Features & Buttons', () => {
     expect(screen.getByText('Full Stack Engineering Intern')).toBeInTheDocument()
   })
 
+  it('keeps company posting search working and skips postings with missing titles', async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => {
+      if (url === '/internships/mine') {
+        return {
+          data: [
+            {
+              id: 101,
+              status: 'PUBLISHED',
+              skills: ['Python'],
+              work_mode: 'REMOTE',
+              industry: 'Software',
+              location: 'Remote',
+              stipend: 2000,
+              duration_months: 3,
+            },
+            {
+              id: 102,
+              title: 'Python Internship',
+              status: 'PUBLISHED',
+              skills: ['Python'],
+              work_mode: 'REMOTE',
+              industry: 'Software',
+              location: 'Remote',
+              stipend: 2000,
+              duration_months: 3,
+            },
+          ],
+        }
+      }
+      return { data: [] }
+    })
+    useAuthStore.setState({
+      session: {
+        accessToken: 'mock-token',
+        refreshToken: 'mock-refresh',
+        role: 'COMPANY',
+        userId: 2,
+        name: 'Tech Corp',
+      },
+    })
+
+    render(<BrowserRouter><CompanyJobsPage /></BrowserRouter>)
+
+    const search = await screen.findByRole('combobox', { name: 'Search internships by title' })
+    fireEvent.change(search, { target: { value: 'python' } })
+
+    expect(await screen.findByText('Python Internship')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Open details for undefined/ })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Something went wrong/i)).not.toBeInTheDocument()
+  })
+
   it('keeps company charts on the dedicated analytics page', async () => {
     vi.mocked(api.get).mockImplementation(async (url: string) => {
       if (url.startsWith('/companies/me/insights')) {
@@ -328,6 +379,112 @@ describe('Dashboard Features & Buttons', () => {
     // Top dashboard refresh button
     const refreshButtons = screen.getAllByRole('button', { name: /refresh/i })
     expect(refreshButtons.length).toBeGreaterThan(0)
+  })
+
+  it('keeps the top four admin KPI cards and removes the monthly metric row', async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => {
+      if (url === '/admin/users') return { data: [{ role: 'STUDENT' }, { role: 'COMPANY' }, { role: 'ADMIN' }] }
+      if (url === '/admin/companies/unverified') return { data: [] }
+      if (url === '/admin/internships') return { data: [] }
+      if (url === '/admin/reports') return { data: [] }
+      if (url === '/analytics/overview') return { data: { funnel: { applied: 0, screened: 0, interviews: 0, offers: 0 } } }
+      return { data: [] }
+    })
+
+    render(
+      <BrowserRouter>
+        <AdminDashboardPage />
+      </BrowserRouter>
+    )
+
+    expect(await screen.findByText('Total users')).toBeInTheDocument()
+    expect(screen.getByText('Verifications')).toBeInTheDocument()
+    expect(screen.getByText('Job queue')).toBeInTheDocument()
+    expect(screen.getByText('Disputes')).toBeInTheDocument()
+    expect(screen.queryByText('Users signed up')).not.toBeInTheDocument()
+    expect(screen.queryByText('Student signups')).not.toBeInTheDocument()
+    expect(screen.queryByText('Company signups')).not.toBeInTheDocument()
+    expect(screen.queryByText('Admin actions')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pending verifications')).not.toBeInTheDocument()
+  })
+
+  it('navigates to a company posting details page from a card link', async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => {
+      if (url === '/internships/mine') {
+        return { data: [{ id: 101, title: 'Sales Manager', status: 'PUBLISHED', work_mode: 'REMOTE', industry: 'Software', location: 'Remote', stipend: 250000, duration_months: 6, applicant_count: 3, created_at: '2026-01-10T00:00:00Z', deadline: '2026-02-15' }] }
+      }
+      if (url === '/internships/101') {
+        return { data: { id: 101, title: 'Sales Manager', status: 'PUBLISHED', work_mode: 'REMOTE', industry: 'Software', location: 'Remote', stipend: 250000, duration_months: 6, applicant_count: 3, created_at: '2026-01-10T00:00:00Z', deadline: '2026-02-15', description: 'Lead sales operations.', skills: ['Strategy', 'CRM'] } }
+      }
+      return { data: [] }
+    })
+
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/company/jobs']}>
+        <Routes>
+          <Route path="/company/jobs" element={<CompanyJobsPage />} />
+          <Route path="/company/jobs/:id" element={<CompanyJobDetailPage />} />
+          <Route path="/company/jobs/:id/applicants" element={<div>Applicants page</div>} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const detailsLink = await screen.findByRole('link', { name: 'Open details for Sales Manager' })
+    expect(detailsLink).toHaveAttribute('href', '/company/jobs/101')
+    fireEvent.click(detailsLink)
+    expect(await screen.findByRole('heading', { name: 'Sales Manager' })).toBeInTheDocument()
+    unmount()
+  })
+
+  it('keeps action buttons on the details page from navigating to the posting details route', async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => {
+      if (url === '/internships/101') {
+        return { data: { id: 101, title: 'Sales Manager', status: 'PUBLISHED', work_mode: 'REMOTE', industry: 'Software', location: 'Remote', stipend: 250000, duration_months: 6, applicant_count: 3, created_at: '2026-01-10T00:00:00Z', deadline: '2026-02-15', description: 'Lead sales operations.', skills: ['Strategy', 'CRM'] } }
+      }
+      return { data: [] }
+    })
+
+    const { unmount: unmountDetailPage } = render(
+      <MemoryRouter initialEntries={['/company/jobs/101']}>
+        <Routes>
+          <Route path="/company/jobs/:id" element={<CompanyJobDetailPage />} />
+          <Route path="/company/jobs/:id/applicants" element={<div>Applicants page</div>} />
+          <Route path="/company/jobs" element={<div>Company jobs page</div>} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Sales Manager' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'View Applicants' }))
+    expect(await screen.findByText('Applicants page')).toBeInTheDocument()
+    unmountDetailPage()
+
+    render(
+      <MemoryRouter initialEntries={['/company/jobs/101']}>
+        <Routes>
+          <Route path="/company/jobs/:id" element={<CompanyJobDetailPage />} />
+          <Route path="/company/jobs" element={<div>Company jobs page</div>} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Sales Manager' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close Role' }))
+    expect(await screen.findByText('Company jobs page')).toBeInTheDocument()
+  })
+
+  it('shows a not found state for a posting that does not belong to the company', async () => {
+    vi.mocked(api.get).mockRejectedValue({ response: { status: 404 } })
+
+    render(
+      <MemoryRouter initialEntries={['/company/jobs/999']}>
+        <Routes>
+          <Route path="/company/jobs/:id" element={<CompanyJobDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    expect(await screen.findByText('Posting not found')).toBeInTheDocument()
   })
 
   it('opens and closes Visual Options & Actions menu and handles view switching, time ranges, and empty data exports', async () => {

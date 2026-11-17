@@ -5,8 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.v1.dependencies import get_db
+from app.chatbot.tools.read_only import _student_saved_internships
 from app.main import app
-from app.models import Internship, SavedInternship, User, UserRole
+from app.models import Application, CompanyProfile, Internship, SavedInternship, User
 from app.models.base import Base
 
 
@@ -87,6 +88,99 @@ async def test_saved_internships_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         async with sessions() as session:
             job = await session.scalar(select(Internship).where(Internship.id == job_id))
             job.status = "PUBLISHED"
+            company_profile = await session.scalar(
+                select(CompanyProfile).where(CompanyProfile.user_id == job.company_id)
+            )
+            company_profile.verification_status = "VERIFIED"
+            extra_roles = [
+                Internship(
+                    company_id=job.company_id,
+                    title="Applied Role",
+                    description="A role with an active student application.",
+                    location="Remote",
+                    industry="Technology",
+                    duration_months=3,
+                    stipend=1000,
+                    work_mode="REMOTE",
+                    skills="Python",
+                    deadline=date.today() + timedelta(days=30),
+                    status="PUBLISHED",
+                ),
+                Internship(
+                    company_id=job.company_id,
+                    title="Closed Role",
+                    description="A role closed by the company.",
+                    location="Remote",
+                    industry="Technology",
+                    duration_months=3,
+                    stipend=1000,
+                    work_mode="REMOTE",
+                    skills="Python",
+                    deadline=date.today() + timedelta(days=30),
+                    status="CLOSED",
+                ),
+                Internship(
+                    company_id=job.company_id,
+                    title="Expired Role",
+                    description="A role with a passed deadline.",
+                    location="Remote",
+                    industry="Technology",
+                    duration_months=3,
+                    stipend=1000,
+                    work_mode="REMOTE",
+                    skills="Python",
+                    deadline=date.today() - timedelta(days=1),
+                    status="PUBLISHED",
+                ),
+                Internship(
+                    company_id=job.company_id,
+                    title="Draft Role",
+                    description="A draft role not available to students.",
+                    location="Remote",
+                    industry="Technology",
+                    duration_months=3,
+                    stipend=1000,
+                    work_mode="REMOTE",
+                    skills="Python",
+                    deadline=date.today() + timedelta(days=30),
+                    status="DRAFT",
+                ),
+                Internship(
+                    company_id=job.company_id,
+                    title="Withdrawn Application Role",
+                    description="A role whose application was withdrawn.",
+                    location="Remote",
+                    industry="Technology",
+                    duration_months=3,
+                    stipend=1000,
+                    work_mode="REMOTE",
+                    skills="Python",
+                    deadline=date.today() + timedelta(days=30),
+                    status="PUBLISHED",
+                ),
+            ]
+            session.add_all(extra_roles)
+            await session.flush()
+            student = await session.scalar(
+                select(User).where(User.email == "saved-student@example.com")
+            )
+            student_id = student.id
+            session.add_all([
+                SavedInternship(student_id=student_id, internship_id=role.id)
+                for role in extra_roles
+            ])
+            session.add_all([
+                Application(
+                    student_id=student_id,
+                    internship_id=extra_roles[0].id,
+                    status="SHORTLISTED",
+                ),
+                Application(
+                    student_id=student_id,
+                    internship_id=extra_roles[4].id,
+                    status="WITHDRAWN",
+                ),
+            ])
             await session.commit()
 
         # Student saves internship
@@ -103,9 +197,34 @@ async def test_saved_internships_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         saved_list = await client.get("/api/v1/internships/saved", headers=s_headers)
         assert saved_list.status_code == 200
         items = saved_list.json()
-        assert len(items) == 1
-        assert items[0]["id"] == job_id
-        assert items[0]["is_saved"] is True
+        assert len(items) == 6
+        saved_by_title = {item["title"]: item for item in items}
+        assert saved_by_title["React Frontend Intern"]["availability"] == "OPEN"
+        assert saved_by_title["Closed Role"]["availability"] == "CLOSED"
+        assert saved_by_title["Expired Role"]["availability"] == "EXPIRED"
+        assert saved_by_title["Draft Role"]["availability"] == "UNAVAILABLE"
+        assert saved_by_title["Applied Role"]["application_status"] == "SHORTLISTED"
+        assert saved_by_title["Applied Role"]["application_id"] is not None
+        assert saved_by_title["Withdrawn Application Role"]["application_status"] == "WITHDRAWN"
+        assert saved_by_title["Withdrawn Application Role"]["availability"] == "OPEN"
+        assert all(item["is_saved"] is True and "match_score" in item for item in items)
+
+        summary = await client.get("/api/v1/internships/saved/summary", headers=s_headers)
+        assert summary.status_code == 200
+        assert summary.json() == {"total": 6, "open": 2, "applied": 1, "closed": 3}
+        nav_counts = await client.get("/api/v1/students/me/nav-counts", headers=s_headers)
+        assert nav_counts.json()["saved"] == summary.json()["total"]
+        insights = await client.get(
+            "/api/v1/students/me/insights?range=all",
+            headers=s_headers,
+        )
+        assert insights.json()["kpis"]["saved_roles"]["value"] == summary.json()["total"]
+        async with sessions() as session:
+            student = await session.scalar(
+                select(User).where(User.email == "saved-student@example.com")
+            )
+            saved_answer = await _student_saved_internships(session, student)
+            assert saved_answer.answer.startswith("6 saved roles (2 open, 1 applied).")
 
         # Check browse endpoint reflects is_saved = True
         browse_res = await client.get("/api/v1/internships", headers=s_headers)
@@ -114,13 +233,15 @@ async def test_saved_internships_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         matching = [b for b in browse_items if b["id"] == job_id]
         assert len(matching) == 1
         assert matching[0]["is_saved"] is True
+        assert all(item["id"] != saved_by_title["Applied Role"]["id"] for item in browse_items)
 
         # Unsave internship
         unsave_res = await client.delete(f"/api/v1/internships/{job_id}/save", headers=s_headers)
         assert unsave_res.status_code == 200
         assert unsave_res.json()["is_saved"] is False
 
-        # Verify saved list is empty
-        saved_empty = await client.get("/api/v1/internships/saved", headers=s_headers)
-        assert saved_empty.status_code == 200
-        assert len(saved_empty.json()) == 0
+        # Other saved roles remain after unsaving one role.
+        saved_remaining = await client.get("/api/v1/internships/saved", headers=s_headers)
+        assert saved_remaining.status_code == 200
+        assert len(saved_remaining.json()) == 5
+        assert (await client.get("/api/v1/internships/saved/summary", headers=s_headers)).json()["total"] == 5

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../api/client'
@@ -149,5 +150,18 @@ describe('ApplyModal', () => {
     expect(screen.getByText('0/1000')).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Cover note (optional)'), { target: { value: 'A note' } })
     await waitFor(() => expect(screen.getByText('6/1000')).toBeInTheDocument())
+  })
+
+  it('keeps focus in the cover note while typing a full sentence', async () => {
+    const user = userEvent.setup()
+    renderModal()
+    await user.click(await screen.findByRole('button', { name: /Continue/ }))
+    const note = await screen.findByLabelText('Cover note (optional)')
+    const sentence = 'I am excited to contribute my experience to this internship.'
+
+    await user.type(note, sentence)
+
+    expect(note).toHaveValue(sentence)
+    expect(document.activeElement).toBe(note)
   })
 })

@@ -9,6 +9,10 @@
 !**/.env.*.example
 *.md
 !/README.md
+!/backend/kb/admin-moderation.md
+!/backend/kb/admin-users.md
+!/backend/kb/admin-moderation-reports.md
+!/backend/kb/admin-account-suspension.md
 
 
 # Python
@@ -62,3 +66,8 @@ backend/.env
 
 
 backup.dump
+backend/storage/company_documents/*
+backend/storage/avatars/*
+backend/storage/resumes/*
+!backend/storage/avatars/.gitkeep
+!backend/storage/resumes/.gitkeep

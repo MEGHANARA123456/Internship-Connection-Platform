@@ -8,12 +8,12 @@ import logging
 import re
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
 from app.models import Application, CompanyProfile, Interview, Internship, SavedInternship, StudentProfile, User, UserRole
-from app.schemas.internship import InternshipCloseRequest, InternshipInput, InternshipPage, InternshipResponse
+from app.schemas.internship import InternshipCloseRequest, InternshipInput, InternshipPage, InternshipResponse, SavedInternshipSummary
 from app.services.ai import compute_explicit_eligibility_fit, compute_match_score_fast, get_student_resume_text
 from app.services.audit import write_audit
 from app.services.skill_badges import apply_verified_badge_boost, get_valid_badges
@@ -21,6 +21,7 @@ from app.services.mail import send_dev_email
 from app.services.notify import notify
 from app.services.internship_closing import close_internship as close_internship_service, send_closure_emails
 from app.services.search_matching import match_search_text, search_conditions, search_rank_expression
+from app.services.saved_internships import saved_internship_availability
 
 router = APIRouter(prefix="/internships", tags=["internships"])
 logger = logging.getLogger(__name__)
@@ -152,17 +153,23 @@ async def list_saved_internships(
 ) -> list[dict]:
     """List internships saved by the authenticated student."""
     query = (
-        select(Internship)
+        select(
+            Internship,
+            Application.id,
+            Application.status,
+            CompanyProfile.verification_status,
+        )
         .join(SavedInternship, SavedInternship.internship_id == Internship.id)
-        .where(
-            SavedInternship.student_id == user.id,
-            Internship.status == "PUBLISHED",
-            Internship.deadline >= date.today(),
-            ~select(Application.id).where(
+        .outerjoin(
+            Application,
+            and_(
                 Application.internship_id == Internship.id,
                 Application.student_id == user.id,
-                Application.status != "WITHDRAWN",
-            ).exists(),
+            ),
+        )
+        .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
+        .where(
+            SavedInternship.student_id == user.id,
         )
         .order_by(SavedInternship.created_at.desc())
     )
@@ -183,16 +190,19 @@ async def list_saved_internships(
         filters.append(search_filter)
     if filters:
         query = query.where(*filters)
-    items = list(await db.scalars(query))
-    if not items:
+    rows = (await db.execute(query)).all()
+    if not rows:
         return []
 
+    items = [row[0] for row in rows]
     company_ids = {item.company_id for item in items}
     comp_profiles = (await db.scalars(select(CompanyProfile).where(CompanyProfile.user_id.in_(company_ids)))).all() if company_ids else []
     comp_map = {cp.user_id: cp.company_name for cp in comp_profiles if cp.company_name}
     if search and not postgres:
-        scored_items = [
-            (match_search_text(
+        items = [
+            item
+            for item in items
+            if match_search_text(
                 search,
                 (
                     item.title,
@@ -201,16 +211,7 @@ async def list_saved_internships(
                     item.location,
                     item.industry,
                 ),
-            ), item)
-            for item in items
-        ]
-        items = [
-            item
-            for score, item in sorted(
-                (entry for entry in scored_items if entry[0] is not None),
-                key=lambda entry: (entry[0], entry[1].created_at),
-                reverse=True,
-            )
+            ) is not None
         ]
 
     student_prof = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
@@ -219,7 +220,9 @@ async def list_saved_internships(
     badges = await get_valid_badges(db, user.id)
 
     results = []
+    row_by_internship_id = {row[0].id: row[1:] for row in rows}
     for item in items:
+        application_id, application_status, verification_status = row_by_internship_id[item.id]
         job_skills = [s.strip() for s in (item.skills or "").split(",") if s.strip()]
         match_info = compute_match_score_fast(
             student_skills,
@@ -245,7 +248,57 @@ async def list_saved_internships(
                 match=match_info,
             )
         )
+        results[-1].update(
+            application_id=application_id,
+            application_status=application_status,
+            availability=saved_internship_availability(
+                item.status,
+                item.deadline,
+                verification_status == "VERIFIED",
+            ),
+        )
     return results
+
+
+@router.get("/saved/summary", response_model=SavedInternshipSummary)
+async def saved_internships_summary(user: student_only, db: DbSession) -> dict[str, int]:
+    """Return counts across every internship saved by the authenticated student."""
+    active_application = and_(Application.id.is_not(None), Application.status != "WITHDRAWN")
+    open_role = and_(
+        Internship.status == "PUBLISHED",
+        Internship.deadline >= date.today(),
+        CompanyProfile.verification_status == "VERIFIED",
+        or_(Application.id.is_(None), Application.status == "WITHDRAWN"),
+    )
+    total, open_count, applied_count = (
+        await db.execute(
+            select(
+                func.count(SavedInternship.id),
+                func.sum(case((open_role, 1), else_=0)),
+                func.sum(case((active_application, 1), else_=0)),
+            )
+            .select_from(SavedInternship)
+            .join(Internship, Internship.id == SavedInternship.internship_id)
+            .outerjoin(
+                Application,
+                and_(
+                    Application.internship_id == Internship.id,
+                    Application.student_id == user.id,
+                ),
+            )
+            .outerjoin(CompanyProfile, CompanyProfile.user_id == Internship.company_id)
+            .where(SavedInternship.student_id == user.id)
+        )
+    ).one()
+    total = int(total or 0)
+    open_count = int(open_count or 0)
+    applied_count = int(applied_count or 0)
+    return {
+        "total": total,
+        "open": open_count,
+        "applied": applied_count,
+        "closed": total - open_count - applied_count,
+    }
 
 
 @router.post("/{internship_id}/save", status_code=200)

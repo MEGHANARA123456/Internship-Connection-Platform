@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type DragEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useState, type DragEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   BriefcaseBusiness,
@@ -58,12 +58,9 @@ interface CompanyInternship {
 
 interface CandidateFiltersProps {
   search: string
+  searchPlaceholder: string
   setSearch: (value: string) => void
   internshipId: string
-  skills: string
-  setSkills: (value: string) => void
-  education: string
-  setEducation: (value: string) => void
   applicantFilter: string
   setApplicantFilter: (value: string) => void
   sort: string
@@ -76,12 +73,9 @@ interface CandidateFiltersProps {
 
 function CandidateFilters({
   search,
+  searchPlaceholder,
   setSearch,
   internshipId,
-  skills,
-  setSkills,
-  education,
-  setEducation,
   sort,
   setSort,
   internships,
@@ -91,24 +85,20 @@ function CandidateFilters({
   applyFilters,
   resetFilters,
 }: CandidateFiltersProps) {
-  const submitOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') applyFilters()
-  }
-
   return (
     <div
       role="group"
       aria-label="Candidate filters"
-      className="glass-strong grid grid-cols-1 items-end gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-[repeat(5,minmax(0,1fr))_minmax(160px,1fr)_auto]"
+      className="glass-strong grid grid-cols-1 items-end gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900 sm:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_minmax(12rem,1fr)_minmax(10rem,1fr)_minmax(9rem,1fr)_minmax(13rem,auto)]"
     >
       <SearchBox
-        ariaLabel="Search candidate"
+        ariaLabel="Search name, skill, education or internship"
         value={search}
         onChange={setSearch}
         onSubmit={applyFilters}
         scope="applicants"
-        placeholder="Search candidate"
-        className="min-w-0"
+        placeholder={searchPlaceholder}
+        className="min-w-0 xl:min-w-[16rem]"
       />
       <div className="min-w-0">
         <DropdownSelect
@@ -121,28 +111,6 @@ function CandidateFilters({
           ]}
         />
       </div>
-      <label className="min-w-0">
-        <span className="sr-only">Filter by skills</span>
-        <input
-          aria-label="Filter by skills"
-          value={skills}
-          onChange={(event) => setSkills(event.target.value)}
-          onKeyDown={submitOnEnter}
-          placeholder="Skills"
-          className="glass-input h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800"
-        />
-      </label>
-      <label className="min-w-0">
-        <span className="sr-only">Filter by education</span>
-        <input
-          aria-label="Filter by education"
-          value={education}
-          onChange={(event) => setEducation(event.target.value)}
-          onKeyDown={submitOnEnter}
-          placeholder="Education"
-          className="glass-input h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800"
-        />
-      </label>
       <div className="min-w-0">
         <DropdownSelect
           aria-label="Filter by verified skill"
@@ -159,10 +127,10 @@ function CandidateFilters({
           ]}
         />
       </div>
-      <div className="min-w-0 xl:min-w-[160px]">
-        <span className="mb-1.5 block text-xs font-semibold text-slate-700 dark:text-slate-300">Sort by</span>
+      <label className="min-w-0">
+        <span className="sr-only">Sort by</span>
         <DropdownSelect
-          aria-label="Sort candidates"
+          aria-label="Sort by"
           value={sort}
           onChange={setSort}
           options={[
@@ -172,8 +140,8 @@ function CandidateFilters({
             { label: 'Name A-Z', value: 'name' },
           ]}
         />
-      </div>
-      <div className="flex h-10 min-w-0 items-center gap-2 lg:col-span-2 2xl:col-span-1">
+      </label>
+      <div className="flex h-10 min-w-0 items-center gap-2">
         <Button size="md" variant="primary" className="h-10 min-w-0 flex-1" onClick={applyFilters}>Apply</Button>
         <Button size="md" variant="ghost" className="h-10 min-w-0 flex-1" onClick={resetFilters}>Clear filters</Button>
       </div>
@@ -182,34 +150,38 @@ function CandidateFilters({
 }
 
 function internshipOptions(internships: CompanyInternship[]) {
-  const options = internships.map((internship) => {
-    const posted = internship.created_at
-      ? new Intl.DateTimeFormat('en-GB', {
-          day: 'numeric',
-          month: 'short',
-          timeZone: 'UTC',
-        }).format(new Date(internship.created_at))
-      : internship.status?.replaceAll('_', ' ').toLowerCase()
-    const count = internship.applicant_count ?? 0
-    const label = [
-      internship.title,
-      internship.location?.trim() || 'Location not set',
-      posted,
-    ].filter(Boolean).join(' · ')
+  const groupedByTitle = new Map<string, CompanyInternship[]>()
+  for (const internship of internships) {
+    const group = groupedByTitle.get(internship.title) ?? []
+    group.push(internship)
+    groupedByTitle.set(internship.title, group)
+  }
+  const duplicateTitleRanks = new Map<number, number>()
+  for (const group of groupedByTitle.values()) {
+    if (group.length < 2) continue
+    const oldestFirst = [...group].sort((left, right) => {
+      const leftDate = Date.parse(left.created_at ?? '')
+      const rightDate = Date.parse(right.created_at ?? '')
+      const leftTime = Number.isFinite(leftDate) ? leftDate : Number.POSITIVE_INFINITY
+      const rightTime = Number.isFinite(rightDate) ? rightDate : Number.POSITIVE_INFINITY
+      return leftTime - rightTime || left.id - right.id
+    })
+    oldestFirst.forEach((internship, index) => duplicateTitleRanks.set(internship.id, index + 1))
+  }
+  return internships.map((internship) => {
+    const rank = duplicateTitleRanks.get(internship.id)
     return {
-      id: internship.id,
-      label: `${label} (${count})`,
+      label: `${internship.title}${rank ? ` #${rank}` : ''} (${internship.applicant_count ?? 0})`,
       value: String(internship.id),
     }
   })
-  const labelCounts = new Map<string, number>()
-  for (const option of options) {
-    labelCounts.set(option.label, (labelCounts.get(option.label) ?? 0) + 1)
-  }
-  return options.map((option) => ({
-    label: labelCounts.get(option.label)! > 1 ? `${option.label} · #${option.id}` : option.label,
-    value: option.value,
-  }))
+}
+
+function searchFromParams(params: URLSearchParams) {
+  return [params.get('search'), params.get('skills'), params.get('education')]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
 }
 
 const stages = [
@@ -364,14 +336,22 @@ export function CompanyApplicantsRedesign({
   const [noteDraft, setNoteDraft] = useState('')
   const [noteError, setNoteError] = useState('')
   const [savingNote, setSavingNote] = useState(false)
-  const [search, setSearch] = useState(searchParams.get('search') ?? '')
-  const [skills, setSkills] = useState(searchParams.get('skills') ?? '')
-  const [education, setEducation] = useState(searchParams.get('education') ?? '')
+  const [search, setSearch] = useState(() => searchFromParams(searchParams))
+  const [compactSearchPlaceholder, setCompactSearchPlaceholder] = useState(() => window.innerWidth < 640)
   const [sort, setSort] = useState(searchParams.get('sort') ?? 'newest')
   const [mobileStage, setMobileStage] = useState('APPLIED')
   const [rejectedExpanded, setRejectedExpanded] = useState(false)
   const page = Math.max(1, Number(searchParams.get('page') ?? 1) || 1)
   const queryString = searchParams.toString()
+  const searchPlaceholder = compactSearchPlaceholder
+    ? 'Name, skill, education...'
+    : 'Search name, skill, education or internship'
+
+  useEffect(() => {
+    const updatePlaceholder = () => setCompactSearchPlaceholder(window.innerWidth < 640)
+    window.addEventListener('resize', updatePlaceholder)
+    return () => window.removeEventListener('resize', updatePlaceholder)
+  }, [])
   const applicantFilter = searchParams.get('applicant_filter')
     || (searchParams.get('verified_skill') === 'true' ? 'verified_skill' : '')
 
@@ -385,6 +365,11 @@ export function CompanyApplicantsRedesign({
     setError(null)
     try {
       const params = Object.fromEntries(new URLSearchParams(queryString).entries())
+      if (params.skills || params.education) {
+        params.search = searchFromParams(new URLSearchParams(queryString))
+        delete params.skills
+        delete params.education
+      }
       if (pipeline) {
         params.page = '1'
         params.page_size = '100'
@@ -415,25 +400,31 @@ export function CompanyApplicantsRedesign({
   useEffect(() => { void load() }, [load])
   useEffect(() => {
     const params = new URLSearchParams(queryString)
-    setSearch(params.get('search') ?? '')
-    setSkills(params.get('skills') ?? '')
-    setEducation(params.get('education') ?? '')
+    setSearch(searchFromParams(params))
     setSort(params.get('sort') ?? 'newest')
-  }, [queryString])
+    if (params.has('skills') || params.has('education')) {
+      const foldedSearch = searchFromParams(params)
+      params.delete('skills')
+      params.delete('education')
+      if (foldedSearch) params.set('search', foldedSearch)
+      else params.delete('search')
+      setSearchParams(params, { replace: true })
+    }
+  }, [queryString, setSearchParams])
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const next = new URLSearchParams(searchParams)
-      for (const [key, value] of [['search', search], ['skills', skills], ['education', education]]) {
-        if (value.trim()) next.set(key, value.trim())
-        else next.delete(key)
-      }
+      if (search.trim()) next.set('search', search.trim())
+      else next.delete('search')
+      next.delete('skills')
+      next.delete('education')
       next.delete('page')
       if (next.toString() !== queryString) {
         setSearchParams(next, { replace: true })
       }
     }, 300)
     return () => window.clearTimeout(timer)
-  }, [education, queryString, search, searchParams, setSearchParams, skills])
+  }, [queryString, search, searchParams, setSearchParams])
   useEffect(() => {
     api.get('/internships/mine')
       .then(({ data }) => setInternships(data ?? []))
@@ -463,18 +454,18 @@ export function CompanyApplicantsRedesign({
 
   const applyFilters = () => {
     const next = new URLSearchParams(searchParams)
-    for (const [key, value] of [['search', search], ['skills', skills], ['education', education], ['sort', sort]]) {
-      if (value.trim()) next.set(key, value.trim())
-      else next.delete(key)
-    }
+    if (search.trim()) next.set('search', search.trim())
+    else next.delete('search')
+    if (sort.trim()) next.set('sort', sort.trim())
+    else next.delete('sort')
+    next.delete('skills')
+    next.delete('education')
     next.delete('page')
     setSearchParams(next)
   }
 
   const resetFilters = () => {
     setSearch('')
-    setSkills('')
-    setEducation('')
     setSort('newest')
     setSearchParams(pipeline || view === 'applicants' ? new URLSearchParams() : new URLSearchParams({ status: 'SHORTLISTED' }))
   }
@@ -596,8 +587,6 @@ export function CompanyApplicantsRedesign({
     key: 'applicant_filter',
     label: applicantFilterLabels[applicantFilter] ?? 'Verified skill',
   })
-  if (searchParams.get('skills')) activeFilterChips.push({ key: 'skills', label: `Skills: ${searchParams.get('skills')}` })
-  if (searchParams.get('education')) activeFilterChips.push({ key: 'education', label: `Education: ${searchParams.get('education')}` })
   if (searchParams.get('sort') && searchParams.get('sort') !== 'newest') {
     const sortLabel = searchParams.get('sort') === 'best_match'
       ? 'Best match'
@@ -629,14 +618,15 @@ export function CompanyApplicantsRedesign({
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{total.toLocaleString()} candidates across your internships</p>
         </div>
         {pipeline ? (
-          <Card className="glass-strong grid w-full gap-2 bg-white p-3 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-4 xl:max-w-6xl">
+          <Card className="glass-strong grid w-full gap-2 bg-white p-3 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-4 xl:max-w-6xl xl:grid-cols-[minmax(16rem,1fr)_minmax(12rem,1fr)_minmax(10rem,1fr)_minmax(9rem,1fr)_minmax(13rem,auto)]">
             <SearchBox
-              ariaLabel="Search candidate"
+              ariaLabel="Search name, skill, education or internship"
               value={search}
               onChange={setSearch}
               onSubmit={applyFilters}
               scope="applicants"
-              placeholder="Search candidates"
+              placeholder={searchPlaceholder}
+              className="min-w-0 xl:min-w-[16rem]"
             />
             <DropdownSelect aria-label="Filter by internship" value={selectedInternshipId ?? ''} onChange={(value) => updateFilter('internship', value)} options={[{ label: 'All internships', value: '' }, ...internshipOptions(internships)]} />
             <DropdownSelect aria-label="Filter by verified skill" value={applicantFilter} onChange={updateApplicantFilter} options={[
@@ -646,10 +636,8 @@ export function CompanyApplicantsRedesign({
               { label: 'High match (70%+)', value: 'high_match' },
               { label: 'Not reviewed (Applied)', value: 'not_reviewed' },
             ]} />
-            <DropdownSelect aria-label="Sort candidates" value={sort} onChange={(value) => { setSort(value); updateFilter('sort', value) }} options={[{ label: 'Best match', value: 'best_match' }, { label: 'Newest', value: 'newest' }, { label: 'Oldest', value: 'oldest' }, { label: 'Name A-Z', value: 'name' }]} />
-            <input aria-label="Filter by skills" value={skills} onChange={(event) => setSkills(event.target.value)} placeholder="Skills" className="glass-input h-10 min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
-            <input aria-label="Filter by education" value={education} onChange={(event) => setEducation(event.target.value)} placeholder="Education" className="glass-input h-10 min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800" />
-            <div className="flex items-center gap-2 lg:col-span-2">
+            <label className="min-w-0"><span className="sr-only">Sort by</span><DropdownSelect aria-label="Sort by" value={sort} onChange={(value) => { setSort(value); updateFilter('sort', value) }} options={[{ label: 'Best match', value: 'best_match' }, { label: 'Newest', value: 'newest' }, { label: 'Oldest', value: 'oldest' }, { label: 'Name A-Z', value: 'name' }]} /></label>
+            <div className="flex h-10 min-w-0 items-center gap-2">
               <Button size="md" variant="primary" className="h-10 flex-1" onClick={applyFilters}>Apply</Button>
               <Button size="md" variant="ghost" className="h-10 flex-1" onClick={resetFilters}>Clear filters</Button>
             </div>
@@ -657,12 +645,9 @@ export function CompanyApplicantsRedesign({
         ) : (
           <CandidateFilters
             search={search}
+            searchPlaceholder={searchPlaceholder}
             setSearch={setSearch}
             internshipId={searchParams.get('internship') ?? ''}
-            skills={skills}
-            setSkills={setSkills}
-            education={education}
-            setEducation={setEducation}
             applicantFilter={applicantFilter}
             setApplicantFilter={updateApplicantFilter}
             sort={sort}

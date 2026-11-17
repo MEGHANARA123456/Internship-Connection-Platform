@@ -136,6 +136,7 @@ const companyPages = () => import('./pages/CompanyPages')
 const CompanyPortalShell = lazy(async () => ({ default: (await companyPages()).CompanyPortalShell }))
 const CompanyOverviewPage = lazy(async () => ({ default: (await companyPages()).CompanyOverviewPage }))
 const CompanyJobsPage = lazy(async () => ({ default: (await companyPages()).CompanyJobsPage }))
+const CompanyJobDetailPage = lazy(async () => ({ default: (await companyPages()).CompanyJobDetailPage }))
 const CompanyAnalyticsPage = lazy(async () => ({ default: (await companyPages()).CompanyAnalyticsPage }))
 const CompanyApplicantsPage = lazy(async () => ({ default: (await companyPages()).CompanyApplicantsPage }))
 const CompanySettingsPage = lazy(async () => ({ default: (await companyPages()).CompanySettingsPage }))
@@ -230,6 +231,7 @@ export default function App() {
                 <Route path={routes.company} element={<CompanyOverviewPage />} />
                 <Route path={routes.companyDashboard} element={<Navigate to={routes.company} replace />} />
                 <Route path={routes.companyJobs()} element={<CompanyJobsPage />} />
+                <Route path={routes.companyJobDetailRoute} element={<CompanyJobDetailPage />} />
                 <Route path={routes.companyAnalytics} element={<CompanyAnalyticsPage />} />
                 <Route path={routes.companyApplicants()} element={<CompanyApplicantsPage />} />
                 <Route path={routes.companyPipeline} element={<CompanyApplicantsPage pipeline />} />

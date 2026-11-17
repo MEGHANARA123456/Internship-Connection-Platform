@@ -53,7 +53,7 @@ async def pipeline_data(monkeypatch: pytest.MonkeyPatch):
             StudentProfile(
                 user_id=amy.id,
                 full_name="Amy Applicant",
-                university="North University",
+                university="Sri Venkateswara University",
                 major="Computer Science",
                 graduation_year=2027,
                 skills="Python, SQL",
@@ -227,7 +227,7 @@ async def test_company_pipeline_filters_combine_and_remain_company_scoped(pipeli
             headers=pipeline_data["company_headers"],
         )
         combined = await client.get(
-            f"/api/v1/applications/company/search?internship={role_ids[1]}&applicant_filter=not_reviewed&skills=Python&education=North&search=bea%40example.com",
+            f"/api/v1/applications/company/search?internship={role_ids[1]}&applicant_filter=not_reviewed&skills=Python&education=North&search=Bea",
             headers=pipeline_data["company_headers"],
         )
         other_company = await client.get(
@@ -243,6 +243,71 @@ async def test_company_pipeline_filters_combine_and_remain_company_scoped(pipeli
     assert [item["student_name"] for item in combined.json()["items"]] == ["Bea Applicant"]
     assert other_company.status_code == 200
     assert [item["student_name"] for item in other_company.json()["items"]] == ["Outside Applicant"]
+
+
+@pytest.mark.anyio
+async def test_company_search_matches_profile_and_posting_fields_with_bounded_and_terms(pipeline_data) -> None:
+    headers = pipeline_data["company_headers"]
+    queries = {
+        "name": "amy",
+        "skill": "python",
+        "university": "venkateswara",
+        "major": "computer science",
+        "internship": "design assistant",
+        "cross_field_and": "python sri",
+        "comma_terms": "amy,python",
+        "five_term_limit": "amy applicant python python python ignored",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        responses = {
+            key: await client.get(
+                "/api/v1/applications/company/search",
+                params={"search": value, "page_size": 100},
+                headers=headers,
+            )
+            for key, value in queries.items()
+        }
+        email = await client.get(
+            "/api/v1/applications/company/search",
+            params={"search": "bea@example.com"},
+            headers=headers,
+        )
+        percent = await client.get(
+            "/api/v1/applications/company/search",
+            params={"search": "%"},
+            headers=headers,
+        )
+        underscore = await client.get(
+            "/api/v1/applications/company/search",
+            params={"search": "_"},
+            headers=headers,
+        )
+        first_page = await client.get(
+            "/api/v1/applications/company/search",
+            params={"search": "python", "page": 1, "page_size": 1},
+            headers=headers,
+        )
+        second_page = await client.get(
+            "/api/v1/applications/company/search",
+            params={"search": "python", "page": 2, "page_size": 1},
+            headers=headers,
+        )
+
+    assert all(response.status_code == 200 for response in responses.values())
+    assert [item["student_name"] for item in responses["name"].json()["items"]] == ["Amy Applicant"]
+    assert {item["student_name"] for item in responses["skill"].json()["items"]} == {"Amy Applicant", "Bea Applicant"}
+    assert [item["student_name"] for item in responses["university"].json()["items"]] == ["Amy Applicant"]
+    assert {item["student_name"] for item in responses["major"].json()["items"]} == {"Amy Applicant", "Bea Applicant"}
+    assert [item["student_name"] for item in responses["internship"].json()["items"]] == ["Zed Applicant"]
+    assert [item["student_name"] for item in responses["cross_field_and"].json()["items"]] == ["Amy Applicant"]
+    assert [item["student_name"] for item in responses["comma_terms"].json()["items"]] == ["Amy Applicant"]
+    assert [item["student_name"] for item in responses["five_term_limit"].json()["items"]] == ["Amy Applicant"]
+    assert email.json()["items"] == []
+    assert percent.json()["items"] == []
+    assert underscore.json()["items"] == []
+    assert first_page.json()["total"] == second_page.json()["total"] == 2
+    assert len(first_page.json()["items"]) == len(second_page.json()["items"]) == 1
+    assert first_page.json()["items"][0]["id"] != second_page.json()["items"][0]["id"]
 
 
 @pytest.mark.anyio

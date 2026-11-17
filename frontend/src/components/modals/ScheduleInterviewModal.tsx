@@ -10,6 +10,7 @@ import { Button } from '../ui/Button'
 import { DropdownSelect as OptionMenu } from '../ui/DropdownSelect'
 import { Calendar, CheckCircle2, Clock, Sparkles, User, Briefcase, AlertCircle } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { routes } from '../../lib/routes'
 
 interface CompanyInternship {
   id: number
@@ -325,7 +326,7 @@ export function ScheduleInterviewModal({
                 ) : jobs.length === 0 ? (
                   <p className="text-xs text-slate-500 dark:text-slate-400">
                     You have no open roles yet.{' '}
-                    <Link to="/company/internships/new" className="font-medium text-indigo-600 underline dark:text-indigo-400">
+                    <Link to={routes.newCompanyInternship} className="font-medium text-indigo-600 underline dark:text-indigo-400">
                       Post Internship
                     </Link>
                   </p>

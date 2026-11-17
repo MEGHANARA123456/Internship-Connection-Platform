@@ -40,7 +40,10 @@ function accountKey(session: ReturnType<typeof useAuthStore.getState>['session']
 function readRecent(account: string, scope: string): string[] {
   try {
     const stored = JSON.parse(localStorage.getItem(RECENT_SEARCH_KEY) || '{}') as Record<string, Record<string, string[]>>
-    return Array.isArray(stored[account]?.[scope]) ? stored[account][scope].slice(0, 5) : []
+    const recent = stored[account]?.[scope]
+    return Array.isArray(recent)
+      ? recent.filter((item): item is string => typeof item === 'string').slice(0, 5)
+      : []
   } catch {
     return []
   }
@@ -61,21 +64,30 @@ function saveRecent(account: string, scope: string, term: string) {
   }
 }
 
+function isSearchSuggestion(value: unknown): value is SearchSuggestion {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const suggestion = value as Record<string, unknown>
+  return typeof suggestion.id === 'number'
+    && typeof suggestion.text === 'string'
+    && typeof suggestion.kind === 'string'
+    && typeof suggestion.subtitle === 'string'
+    && typeof suggestion.url === 'string'
+    && (suggestion.match_text === undefined || typeof suggestion.match_text === 'string')
+}
+
 function HighlightedText({ text, match }: { text: string; match?: string }) {
   if (!match) return <>{text}</>
-  const start = normalizeSearchText(text).indexOf(normalizeSearchText(match))
-  if (start < 0 || !match.length) return <>{text}</>
-  const normalizedText = text.normalize('NFKD').replace(/\p{Diacritic}/gu, '')
-  const normalizedMatch = match.normalize('NFKD').replace(/\p{Diacritic}/gu, '')
-  const normalizedStart = normalizedText.toLocaleLowerCase().indexOf(normalizedMatch.toLocaleLowerCase())
-  if (normalizedStart < 0) return <>{text}</>
+  const normalizedMatch = normalizeSearchText(match)
+  if (!normalizedMatch || !normalizeSearchText(text).includes(normalizedMatch)) return <>{text}</>
+  const start = text.toLocaleLowerCase().indexOf(match.toLocaleLowerCase())
+  if (start < 0) return <>{text}</>
   return (
     <>
-      {text.slice(0, normalizedStart)}
+      {text.slice(0, start)}
       <mark className="rounded bg-amber-100 text-inherit dark:bg-amber-900/60">
-        {text.slice(normalizedStart, normalizedStart + match.length)}
+        {text.slice(start, start + match.length)}
       </mark>
-      {text.slice(normalizedStart + match.length)}
+      {text.slice(start + match.length)}
     </>
   )
 }
@@ -138,7 +150,9 @@ export function SearchBox({
         params: { q: term, scope },
         signal: controller.signal,
       }).then((response) => {
-        setSuggestions(Array.isArray(response.data?.items) ? response.data.items : [])
+        setSuggestions(Array.isArray(response.data?.items)
+          ? response.data.items.filter(isSearchSuggestion)
+          : [])
       }).catch((requestError: unknown) => {
         if (!controller.signal.aborted) {
           console.error('Search suggestions request failed.', requestError)

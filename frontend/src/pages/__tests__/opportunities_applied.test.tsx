@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -205,6 +205,149 @@ describe('OpportunitiesPage Applied tab', () => {
     const applyButton = screen.getByRole('button', { name: 'Apply Now' })
     expect(applyButton).toBeDisabled()
     expect(applyButton).toHaveAttribute('title', 'This internship is closed and no longer accepts applications.')
+  })
+
+  it('filters every saved role by status and updates counts when a role is unsaved', async () => {
+    const savedRoles = [
+      {
+        id: 21,
+        title: 'Shortlisted Intern',
+        status: 'PUBLISHED',
+        availability: 'OPEN',
+        application_id: 201,
+        application_status: 'SHORTLISTED',
+        is_saved: true,
+        company_name: 'Example Co',
+        industry: 'Software',
+        location: 'Remote',
+        description: 'An applied role.',
+        stipend: 1000,
+        duration_months: 3,
+        work_mode: 'REMOTE',
+        skills: [],
+      },
+      {
+        id: 22,
+        title: 'Expired Intern',
+        status: 'PUBLISHED',
+        availability: 'EXPIRED',
+        is_saved: true,
+        company_name: 'Example Co',
+        industry: 'Software',
+        location: 'Remote',
+        description: 'An expired role.',
+        stipend: 1000,
+        duration_months: 3,
+        work_mode: 'REMOTE',
+        skills: [],
+      },
+      {
+        id: 23,
+        title: 'Open Intern',
+        status: 'PUBLISHED',
+        availability: 'OPEN',
+        is_saved: true,
+        company_name: 'Example Co',
+        industry: 'Software',
+        location: 'Remote',
+        description: 'An open role.',
+        stipend: 1000,
+        duration_months: 3,
+        work_mode: 'REMOTE',
+        skills: [],
+      },
+    ]
+    vi.mocked(api.get).mockImplementation(async (path) => {
+      if (path === '/internships/saved') return { data: savedRoles } as never
+      if (path === '/internships/saved/summary') {
+        return { data: { total: 3, open: 1, applied: 1, closed: 1 } } as never
+      }
+      if (path.startsWith('/internships?')) return { data: { items: [], total: 0 } } as never
+      return { data: [] } as never
+    })
+    vi.spyOn(api, 'delete').mockResolvedValue({ data: { is_saved: false } } as never)
+
+    renderOpportunities()
+    fireEvent.click(screen.getByRole('button', { name: /Saved Roles/ }))
+
+    expect(await screen.findByText('Shortlisted Intern')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'All 3' })).toBeInTheDocument()
+    expect(screen.getByText('Applied · Shortlisted')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'View application' })).toHaveAttribute('href', '/applications?id=201')
+    const applyButtons = screen.getAllByRole('button', { name: 'Apply Now' })
+    expect(applyButtons.some((button) => !button.hasAttribute('disabled'))).toBe(true)
+    expect(applyButtons.some((button) => button.hasAttribute('disabled'))).toBe(true)
+    expect(screen.getByText('Expired')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Open 1/ }))
+    expect(screen.getByText('Open Intern')).toBeInTheDocument()
+    expect(screen.queryByText('Expired Intern')).not.toBeInTheDocument()
+    expect(screen.queryByText('Shortlisted Intern')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Closed & expired 1/ }))
+    expect(screen.getByText('Expired Intern')).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('Remove from saved'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'All 2' })).toBeInTheDocument())
+    expect(screen.queryByText('Expired Intern')).not.toBeInTheDocument()
+  })
+
+  it('marks a saved role as applied immediately after submission', async () => {
+    vi.mocked(api.get).mockImplementation(async (path) => {
+      if (path === '/internships/saved') {
+        return {
+          data: [{
+            id: 23,
+            title: 'Open Intern',
+            status: 'PUBLISHED',
+            availability: 'OPEN',
+            is_saved: true,
+            company_name: 'Example Co',
+            industry: 'Software',
+            location: 'Remote',
+            description: 'An open role.',
+            stipend: 1000,
+            duration_months: 3,
+            work_mode: 'REMOTE',
+            skills: [],
+          }],
+        } as never
+      }
+      if (path === '/internships/saved/summary') {
+        return { data: { total: 1, open: 1, applied: 0, closed: 0 } } as never
+      }
+      if (path === '/applications/eligibility/23') {
+        return {
+          data: {
+            can_apply: true,
+            blockers: [],
+            warnings: [],
+            match_score: 78,
+            matched_skills: [],
+            missing_skills: [],
+            resume: { filename: 'resume.pdf', uploaded_at: null },
+          },
+        } as never
+      }
+      if (path.startsWith('/internships?')) return { data: { items: [], total: 0 } } as never
+      return { data: { applications: [] } } as never
+    })
+    vi.spyOn(api, 'post').mockResolvedValue({ data: { id: 203 } } as never)
+
+    renderOpportunities()
+    fireEvent.click(screen.getByRole('button', { name: /Saved Roles/ }))
+    const roleCard = (await screen.findByText('Open Intern')).closest('.cursor-pointer')
+    expect(roleCard).not.toBeNull()
+    fireEvent.click(within(roleCard as HTMLElement).getByRole('button', { name: 'Apply Now' }))
+
+    await screen.findByText('Review internship')
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Application' }))
+
+    expect(await screen.findByText('Applied', { selector: '.glass-badge' })).toBeInTheDocument()
+    expect(within(roleCard as HTMLElement).getByRole('link', { name: 'View application' })).toHaveAttribute('href', '/applications?id=203')
+    expect(screen.getByRole('button', { name: 'Open 0' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Applied 1' })).toBeInTheDocument()
   })
 
   it('opens a closed role by direct link in read-only mode', async () => {
