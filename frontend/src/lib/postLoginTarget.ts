@@ -1,5 +1,7 @@
 import { routes } from './routes'
 
+type UserRole = 'STUDENT' | 'COMPANY' | 'ADMIN'
+
 export function getRoleHome(role?: string | null): string {
   const normalized = (role ?? '').toUpperCase()
   if (normalized === 'ADMIN') return routes.admin
@@ -9,18 +11,28 @@ export function getRoleHome(role?: string | null): string {
 
 export function isSameOriginRelativePath(path: unknown): path is string {
   if (typeof path !== 'string') return false
-  const trimmed = path.trim()
-  if (!trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('\\')) {
-    return false
-  }
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) {
+  if (
+    path !== path.trim()
+    || !path.startsWith('/')
+    || path.startsWith('//')
+    || path.includes('\\')
+    || /[\u0000-\u001f]/.test(path)
+  ) {
     return false
   }
   return true
 }
 
-export function isRouteAllowedForRole(role: string | null | undefined, path: string): boolean {
+export function isRouteAllowedForRole(
+  role: string | null | undefined,
+  path: string,
+  allowedRoles?: readonly UserRole[],
+): boolean {
   const normalizedRole = (role ?? '').toUpperCase()
+  if (allowedRoles) {
+    return allowedRoles.includes(normalizedRole as UserRole)
+  }
+
   const pathname = path.split('?')[0].split('#')[0]
 
   // Prevent redirect loops back to auth pages or generic dashboard
@@ -68,6 +80,11 @@ export function isRouteAllowedForRole(role: string | null | undefined, path: str
     pathname.startsWith('/applications/') ||
     pathname === routes.studentProfile ||
     pathname === '/profile/student' ||
+    pathname === routes.interviewStudio ||
+    pathname.startsWith(`${routes.interviewStudio}/`) ||
+    pathname === routes.learningLibrary ||
+    pathname.startsWith(`${routes.learningLibrary}/`) ||
+    pathname === routes.skillInsights ||
     pathname.startsWith('/skills/')
   ) {
     return normalizedRole === 'STUDENT'
@@ -95,10 +112,9 @@ export function resolvePostLoginTarget(
   if (!isSameOriginRelativePath(next)) {
     return roleHome
   }
-  const trimmed = next.trim()
-  if (!isRouteAllowedForRole(role, trimmed)) {
+  if (!isRouteAllowedForRole(role, next)) {
     return roleHome
   }
-  return trimmed
+  return next
 }
 

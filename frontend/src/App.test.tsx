@@ -6,6 +6,7 @@ import App from './App'
 import { LoginPage } from './pages/AuthPages'
 import { api } from './api/client'
 import { useAuthStore } from './store/auth'
+import { ProtectedRoute } from './components/ProtectedRoute'
 
 function CurrentPath() {
   return <div>{useLocation().pathname}</div>
@@ -14,6 +15,23 @@ function CurrentPath() {
 function CurrentLocation() {
   const location = useLocation()
   return <div>{`${location.pathname}${location.search}`}</div>
+}
+
+function renderLoginWithRoleRoutes(initialEntry: string) {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
+          <Route path="/admin" element={<CurrentPath />} />
+        </Route>
+        <Route element={<ProtectedRoute allowedRoles={['STUDENT']} />}>
+          <Route path="/interview-studio" element={<CurrentPath />} />
+        </Route>
+        <Route path="/opportunities" element={<CurrentPath />} />
+      </Routes>
+    </MemoryRouter>,
+  )
 }
 
 afterEach(() => {
@@ -241,6 +259,61 @@ describe('platform shell', () => {
 
     expect(await screen.findByRole('heading', { name: 'Interviews & Meetings' })).toBeTruthy()
     expect(screen.getByText('/interviews?tab=upcoming&highlight=17')).toBeTruthy()
+  })
+
+  it('sends an admin to /admin when next points to the student Interview Studio', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: { access_token: 'admin-token', refresh_token: 'admin-refresh', role: 'ADMIN', user_id: 73 },
+    } as never)
+    renderLoginWithRoleRoutes('/login?next=%2Finterview-studio')
+
+    fireEvent.change(await screen.findByLabelText('Email address'), { target: { value: 'admin@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'valid-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByText('/admin')).toBeInTheDocument()
+  })
+
+  it('sends a student to /interview-studio when next requests it', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: { access_token: 'student-token', refresh_token: 'student-refresh', role: 'STUDENT', user_id: 72 },
+    } as never)
+    renderLoginWithRoleRoutes('/login?next=%2Finterview-studio')
+
+    fireEvent.change(await screen.findByLabelText('Email address'), { target: { value: 'student@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'valid-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByText('/interview-studio')).toBeInTheDocument()
+  })
+
+  it('ignores an external next URL and sends the student to their home', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: { access_token: 'student-token', refresh_token: 'student-refresh', role: 'STUDENT', user_id: 72 },
+    } as never)
+    renderLoginWithRoleRoutes('/login?next=https%3A%2F%2Fevil.example')
+
+    fireEvent.change(await screen.findByLabelText('Email address'), { target: { value: 'student@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'valid-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByText('/opportunities')).toBeInTheDocument()
+  })
+
+  it('sends a signed-in admin to /admin from the wrong-role page', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'admin-token',
+      refreshToken: 'admin-refresh',
+      role: 'ADMIN',
+      userId: 73,
+      email: 'admin@example.com',
+    })
+    renderLoginWithRoleRoutes('/interview-studio')
+
+    expect(await screen.findByRole('heading', { name: "This page isn't available for your account" })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('link', { name: 'Go to your home' }))
+
+    expect(await screen.findByText('/admin')).toBeInTheDocument()
   })
 
   it('shows a friendly wrong-role screen instead of the landing page for admins', async () => {
