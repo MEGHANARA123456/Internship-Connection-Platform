@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { Eye, RotateCcw, Trash2 } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
-import { Card, CardContent } from '../../components/ui/Card'
+import { Badge } from '../../components/ui/Badge'
+import { DataList } from '../../components/ui/DataList'
+import { IconButton } from '../../components/ui/IconButton'
 import { InterviewErrorNotice, useInterviewError } from '../../components/interviews/InterviewErrorNotice'
 import { InterviewPageLayout } from '../../components/interviews/InterviewPageLayout'
 import { routes } from '../../lib/routes'
@@ -43,6 +46,7 @@ export function InterviewHistoryPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const requestError = useInterviewError()
+  const navigate = useNavigate()
 
   const loadHistory = useCallback(async (silent = false) => {
     if (!silent) {
@@ -99,46 +103,65 @@ export function InterviewHistoryPage() {
     >
       {error && <InterviewErrorNotice message={error} onRetry={() => void loadHistory()} retrying={loading} />}
       {loading && items.length === 0 && <p role="status" className="text-sm text-slate-500">Loading interview history…</p>}
-      {!loading && items.length === 0 && !error && (
-        <Card><CardContent className="py-10 text-center text-sm text-slate-600 dark:text-slate-300">You have no interview attempts yet.</CardContent></Card>
-      )}
-      <div className="space-y-3">
-        {items.map((item) => {
-          const { session, report, reportError } = item
+      <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Interview attempts ({items.length})</h2>
+      <DataList
+        ariaLabel="Interview history"
+        rows={items}
+        getRowKey={({ session }) => session.id}
+        loading={loading}
+        emptyState={error ? 'Interview history is unavailable.' : 'You have no interview attempts yet.'}
+        columns={[
+          {
+            key: 'interview',
+            header: 'Interview',
+            render: ({ session, report, reportError }) => (
+              <div className="min-w-0">
+                <p className="font-semibold text-slate-900 dark:text-white">
+                  {session.category.replaceAll('_', ' ')} · {session.session_type === 'PRACTICE' ? 'Practice' : 'Assessment'} · {session.interview_mode.toLowerCase()}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">{session.question_count} questions · {formatDate(session.created_at)}</p>
+                {report && typeof report.overall_score === 'number' && <p className="mt-1 text-xs font-semibold text-indigo-700 dark:text-indigo-300">Overall score: {report.overall_score}/100</p>}
+                {report?.status === 'PENDING' && <p role="status" className="mt-1 text-xs text-amber-700 dark:text-amber-300">Evaluation pending.</p>}
+                {report?.status === 'FAILED' && <p role="status" className="mt-1 text-xs text-rose-700 dark:text-rose-300">Evaluation failed; retry from the report.</p>}
+                {reportError && <p role="alert" className="mt-1 text-xs text-rose-700 dark:text-rose-300">{reportError}</p>}
+              </div>
+            ),
+          },
+          {
+            key: 'status',
+            header: 'Status',
+            render: ({ session }) => <Badge status={session.status}>{statusLabel(session.status)}</Badge>,
+          },
+        ]}
+        actions={({ session }) => {
           const reportAvailable = hasReport(session)
           return (
-            <Card key={session.id}>
-              <CardContent className="flex flex-col gap-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-                <div className="min-w-0">
-                  <h2 className="font-semibold text-slate-900 dark:text-white">
-                    {session.category.replaceAll('_', ' ')} · {session.session_type === 'PRACTICE' ? 'Practice' : 'Assessment'} · {session.interview_mode.toLowerCase()}
-                  </h2>
-                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                    {statusLabel(session.status)} · {formatDate(session.created_at)} · {session.question_count} questions
-                  </p>
-                  {report && typeof report.overall_score === 'number' && (
-                    <p className="mt-1 text-sm font-semibold text-indigo-700 dark:text-indigo-300">Overall score: {report.overall_score}/100</p>
-                  )}
-                  {report?.status === 'PENDING' && <p role="status" className="mt-1 text-sm text-amber-700 dark:text-amber-300">Evaluation pending.</p>}
-                  {report?.status === 'FAILED' && <p role="status" className="mt-1 text-sm text-rose-700 dark:text-rose-300">Evaluation failed; retry from the report.</p>}
-                  {reportError && <p role="alert" className="mt-1 text-sm text-rose-700 dark:text-rose-300">{reportError}</p>}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Link to={reportAvailable ? routes.interviewReport(session.id) : routes.interviewSession(session.id)} className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900">
-                    {reportAvailable ? 'View report' : session.status === 'EXPIRED' ? 'View session' : 'Continue'}
-                  </Link>
-                  <Link to={routes.interviewSetup({ retake_of_session_id: session.id })} className="inline-flex min-h-10 items-center justify-center rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
-                    Retake
-                  </Link>
-                  <Button variant="danger" size="sm" isLoading={deletingId === session.id} disabled={deletingId !== null} onClick={() => void removeSession(item)}>
-                    Delete
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+            <>
+              <IconButton
+                icon={Eye}
+                aria-label={`${reportAvailable ? 'View report' : session.status === 'EXPIRED' ? 'View session' : 'Continue'} interview ${session.id}`}
+                onClick={() => navigate(reportAvailable ? routes.interviewReport(session.id) : routes.interviewSession(session.id))}
+              />
+              <IconButton
+                icon={RotateCcw}
+                aria-label={`Retake interview ${session.id}`}
+                onClick={() => navigate(routes.interviewSetup({ retake_of_session_id: session.id }))}
+              />
+              <IconButton
+                icon={Trash2}
+                variant="danger"
+                aria-label={`Delete interview ${session.id}`}
+                isLoading={deletingId === session.id}
+                disabled={deletingId !== null}
+                onClick={() => {
+                  const item = items.find((entry) => entry.session.id === session.id)
+                  if (item) void removeSession(item)
+                }}
+              />
+            </>
           )
-        })}
-      </div>
+        }}
+      />
       {items.length > 0 && <Button variant="outline" onClick={() => void loadHistory()} isLoading={loading}>Refresh history</Button>}
     </InterviewPageLayout>
   )

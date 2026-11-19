@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { Check, Pencil, Plus, Power } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
+import { Badge } from '../../components/ui/Badge'
+import { DataList } from '../../components/ui/DataList'
+import { IconButton } from '../../components/ui/IconButton'
 import {
   createAdminLearningCategory,
   createAdminLearningPath,
@@ -102,6 +106,17 @@ export function AdminLearningLibraryPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [reload, setReload] = useState(0)
+  const [resourceSearch, setResourceSearch] = useState('')
+  const [resourceType, setResourceType] = useState('')
+  const [resourceState, setResourceState] = useState('')
+  const visibleResources = useMemo(() => resources.filter((resource) => {
+    const matchesSearch = !resourceSearch
+      || `${resource.title} ${resource.url} ${resource.slug}`.toLowerCase().includes(resourceSearch.toLowerCase())
+    const matchesType = !resourceType || resource.type === resourceType
+    const matchesState = !resourceState
+      || (resourceState === 'ACTIVE' ? resource.active : !resource.active)
+    return matchesSearch && matchesType && matchesState
+  }), [resources, resourceSearch, resourceType, resourceState])
 
   const load = useCallback(async () => {
     setError('')
@@ -274,14 +289,44 @@ export function AdminLearningLibraryPage() {
             <label className="text-sm font-medium">Role tags (comma-separated)<input className={inputClass} value={resourceTags.roles} onChange={(event) => setResourceTags({ ...resourceTags, roles: event.target.value })} placeholder={roleChoices.map(([, label]) => label).slice(0, 3).join(', ')} /></label>
             <label className="text-sm font-medium">Topic tags (comma-separated)<input className={inputClass} value={resourceTags.topics} onChange={(event) => setResourceTags({ ...resourceTags, topics: event.target.value })} placeholder="sql, coding-practice" /></label>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={resourceDraft.active} onChange={(event) => setResourceDraft({ ...resourceDraft, active: event.target.checked })} />Active</label>
-            <div className="flex gap-2 md:col-span-2"><Button type="submit" disabled={busy}>{editingResource === null ? 'Add resource' : 'Save changes'}</Button>{editingResource !== null && <Button type="button" variant="secondary" onClick={() => { setEditingResource(null); setResourceDraft(blankResource()); setResourceTags({ roles: '', topics: '' }) }}>Cancel edit</Button>}</div>
+            <div className="flex gap-2 md:col-span-2"><Button type="submit" disabled={busy} leftIcon={editingResource === null ? <Plus className="h-4 w-4" /> : undefined}>{editingResource === null ? 'Add resource' : 'Save changes'}</Button>{editingResource !== null && <Button type="button" variant="secondary" onClick={() => { setEditingResource(null); setResourceDraft(blankResource()); setResourceTags({ roles: '', topics: '' }) }}>Cancel edit</Button>}</div>
           </form>
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-            <table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-800"><tr><th className="p-3">Resource</th><th className="p-3">Category</th><th className="p-3">Status</th><th className="p-3">Actions</th></tr></thead><tbody>
-              {resources.map((resource) => <tr key={resource.id} className="border-t border-slate-200 dark:border-slate-800"><td className="p-3"><strong>{resource.title}</strong><p className="max-w-md truncate text-xs text-slate-500">{resource.url}</p></td><td className="p-3">{resource.category ?? '—'}</td><td className="p-3">{resource.active ? 'Active' : 'Inactive'} · {resource.verified_at ? 'Verified' : 'Unverified'}</td><td className="p-3"><div className="flex flex-wrap gap-2"><Button size="sm" variant="secondary" onClick={() => startEditResource(resource)}>Edit</Button><Button size="sm" variant="secondary" disabled={busy || !resource.active || Boolean(resource.verified_at)} onClick={() => void runMutation(() => verifyAdminLearningResource(resource.id), 'Resource verified and available to students.')}>Verify</Button><Button size="sm" variant="secondary" disabled={busy} onClick={() => void runMutation(() => updateAdminLearningResource(resource.id, { active: !resource.active }), resource.active ? 'Resource deactivated.' : 'Resource activated.')}>{resource.active ? 'Deactivate' : 'Activate'}</Button></div></td></tr>)}
-              {!resources.length && <tr><td className="p-4 text-slate-500" colSpan={4}>No resources yet.</td></tr>}
-            </tbody></table>
+          <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+            <label className="min-w-52 flex-1 text-xs font-semibold">Search resources<input className={inputClass} value={resourceSearch} onChange={(event) => setResourceSearch(event.target.value)} placeholder="Title, URL, or slug" /></label>
+            <label className="text-xs font-semibold">Type<select className={inputClass} value={resourceType} onChange={(event) => setResourceType(event.target.value)}><option value="">All types</option>{['link', 'video', 'pdf', 'notes', 'course'].map((type) => <option key={type}>{type}</option>)}</select></label>
+            <label className="text-xs font-semibold">State<select className={inputClass} value={resourceState} onChange={(event) => setResourceState(event.target.value)}><option value="">All states</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>
+            <span className="pb-2 text-xs text-slate-500">{visibleResources.length} resources</span>
           </div>
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Resources ({visibleResources.length})</h3>
+          <DataList
+            ariaLabel="Learning resources"
+            rows={visibleResources}
+            getRowKey={(resource) => resource.id}
+            emptyState={resources.length ? 'No resources match these filters.' : 'No resources yet.'}
+            columns={[
+              { key: 'resource', header: 'Resource', render: (resource) => <div><p className="font-semibold">{resource.title}</p><p className="mt-1 max-w-lg truncate text-xs text-slate-500">{resource.url}</p></div> },
+              { key: 'category', header: 'Category · type', render: (resource) => <span>{resource.category ?? '—'} · {resource.type}</span> },
+              { key: 'state', header: 'State', render: (resource) => <div className="flex flex-wrap gap-1.5"><Badge variant={resource.active ? 'emerald' : 'slate'}>{resource.active ? 'Active' : 'Inactive'}</Badge><Badge variant={resource.verified_at ? 'blue' : 'amber'}>{resource.verified_at ? 'Verified' : 'Unverified'}</Badge></div> },
+            ]}
+            actions={(resource) => (
+              <>
+                <IconButton icon={Pencil} aria-label={`Edit resource ${resource.title}`} onClick={() => startEditResource(resource)} />
+                <IconButton
+                  icon={Check}
+                  variant="primary"
+                  aria-label={`Verify resource ${resource.title}`}
+                  disabled={busy || !resource.active || Boolean(resource.verified_at)}
+                  onClick={() => void runMutation(() => verifyAdminLearningResource(resource.id), 'Resource verified and available to students.')}
+                />
+                <IconButton
+                  icon={Power}
+                  aria-label={`${resource.active ? 'Deactivate' : 'Activate'} resource ${resource.title}`}
+                  disabled={busy}
+                  onClick={() => void runMutation(() => updateAdminLearningResource(resource.id, { active: !resource.active }), resource.active ? 'Resource deactivated.' : 'Resource activated.')}
+                />
+              </>
+            )}
+          />
         </section>
       )}
 
@@ -297,9 +342,21 @@ export function AdminLearningLibraryPage() {
             <label className="text-sm font-medium">Topic tags<input className={inputClass} value={pathTags.topics} onChange={(event) => setPathTags({ ...pathTags, topics: event.target.value })} /></label>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={pathDraft.active} onChange={(event) => setPathDraft({ ...pathDraft, active: event.target.checked })} />Active</label>
             <fieldset className="space-y-2 md:col-span-2"><legend className="text-sm font-semibold">Ordered resources (shown in selection order)</legend><div className="grid gap-2 sm:grid-cols-2">{resources.map((resource) => <label key={resource.id} className={`flex items-center gap-2 rounded-lg border p-2 text-sm ${!resource.active || !resource.verified_at ? 'opacity-50' : ''}`}><input type="checkbox" disabled={!resource.active || !resource.verified_at} checked={pathDraft.resources.some((item) => item.resource_id === resource.id)} onChange={() => toggleResource(resource.id)} />{resource.title}{!resource.verified_at && <span className="text-xs text-amber-700">unverified</span>}</label>)}</div></fieldset>
-            <div className="flex gap-2 md:col-span-2"><Button type="submit" disabled={busy}>{editingPath === null ? 'Create path' : 'Save path'}</Button>{editingPath !== null && <Button type="button" variant="secondary" onClick={() => { setEditingPath(null); setPathDraft(blankPath()); setPathTags({ roles: '', topics: '' }) }}>Cancel edit</Button>}</div>
+            <div className="flex gap-2 md:col-span-2"><Button type="submit" disabled={busy} leftIcon={editingPath === null ? <Plus className="h-4 w-4" /> : undefined}>{editingPath === null ? 'Create path' : 'Save path'}</Button>{editingPath !== null && <Button type="button" variant="secondary" onClick={() => { setEditingPath(null); setPathDraft(blankPath()); setPathTags({ roles: '', topics: '' }) }}>Cancel edit</Button>}</div>
           </form>
-          <div className="grid gap-3 md:grid-cols-2">{paths.map((path) => <article key={path.id} className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><div className="flex items-start justify-between gap-3"><div><h3 className="font-bold">{path.title}</h3><p className="mt-1 text-sm text-slate-500">{path.resources.length} resources · {path.active ? 'Active' : 'Inactive'}</p><p className="mt-1 text-xs text-slate-500">{path.resources.filter((resource) => resource.active && resource.verified).length}/{path.resources.length} usable</p></div><Button size="sm" variant="secondary" onClick={() => editPath(path)}>Edit</Button></div></article>)}</div>
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Learning paths ({paths.length})</h3>
+          <DataList
+            ariaLabel="Learning paths"
+            rows={paths}
+            getRowKey={(path) => path.id}
+            emptyState="No learning paths are configured."
+            columns={[
+              { key: 'path', header: 'Learning path', render: (path) => <div><p className="font-semibold">{path.title}</p><p className="mt-1 text-xs text-slate-500">{path.slug}</p></div> },
+              { key: 'resources', header: 'Resources', render: (path) => <span>{path.resources.length} total · {path.resources.filter((resource) => resource.active && resource.verified).length} usable</span> },
+              { key: 'state', header: 'State', render: (path) => <Badge variant={path.active ? 'emerald' : 'slate'}>{path.active ? 'Active' : 'Inactive'}</Badge> },
+            ]}
+            actions={(path) => <IconButton icon={Pencil} aria-label={`Edit learning path ${path.title}`} onClick={() => editPath(path)} />}
+          />
         </section>
       )}
 
@@ -311,19 +368,53 @@ export function AdminLearningLibraryPage() {
             <label className="text-sm font-medium">Title<input required minLength={2} maxLength={120} className={inputClass} value={categoryDraft.title} onChange={(event) => setCategoryDraft({ ...categoryDraft, title: event.target.value })} /></label>
             <label className="text-sm font-medium">Description<textarea maxLength={1000} className={inputClass} rows={2} value={categoryDraft.description} onChange={(event) => setCategoryDraft({ ...categoryDraft, description: event.target.value })} /></label>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={categoryDraft.active} onChange={(event) => setCategoryDraft({ ...categoryDraft, active: event.target.checked })} />Active</label>
-            <div className="flex gap-2"><Button type="submit" disabled={busy}>{editingCategory === null ? 'Add category' : 'Save changes'}</Button>{editingCategory !== null && <Button type="button" variant="secondary" onClick={() => { setEditingCategory(null); setCategoryDraft({ slug: '', title: '', description: '', active: true }) }}>Cancel</Button>}</div>
+            <div className="flex gap-2"><Button type="submit" disabled={busy} leftIcon={editingCategory === null ? <Plus className="h-4 w-4" /> : undefined}>{editingCategory === null ? 'Add category' : 'Save changes'}</Button>{editingCategory !== null && <Button type="button" variant="secondary" onClick={() => { setEditingCategory(null); setCategoryDraft({ slug: '', title: '', description: '', active: true }) }}>Cancel</Button>}</div>
           </form>
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase dark:bg-slate-800"><tr><th className="p-3">Category</th><th className="p-3">Status</th><th className="p-3">Actions</th></tr></thead><tbody>{categories.map((category) => <tr key={category.id} className="border-t dark:border-slate-800"><td className="p-3"><strong>{category.title}</strong><p className="text-xs text-slate-500">{category.slug}</p></td><td className="p-3">{category.active ? 'Active' : 'Inactive'}</td><td className="p-3"><div className="flex gap-2"><Button size="sm" variant="secondary" onClick={() => { setEditingCategory(category.id); setCategoryDraft({ slug: category.slug, title: category.title, description: category.description, active: category.active }) }}>Edit</Button><Button size="sm" variant="secondary" onClick={() => void runMutation(() => updateAdminLearningCategory(category.id, { active: !category.active }), category.active ? 'Category deactivated.' : 'Category activated.')}>{category.active ? 'Deactivate' : 'Activate'}</Button></div></td></tr>)}</tbody></table></div>
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Categories ({categories.length})</h3>
+          <DataList
+            ariaLabel="Learning categories"
+            rows={categories}
+            getRowKey={(category) => category.id}
+            emptyState="No learning categories are configured."
+            columns={[
+              { key: 'category', header: 'Category', render: (category) => <div><p className="font-semibold">{category.title}</p><p className="mt-1 text-xs text-slate-500">{category.slug}</p></div> },
+              { key: 'state', header: 'State', render: (category) => <Badge variant={category.active ? 'emerald' : 'slate'}>{category.active ? 'Active' : 'Inactive'}</Badge> },
+            ]}
+            actions={(category) => (
+              <>
+                <IconButton
+                  icon={Pencil}
+                  aria-label={`Edit category ${category.title}`}
+                  onClick={() => { setEditingCategory(category.id); setCategoryDraft({ slug: category.slug, title: category.title, description: category.description, active: category.active }) }}
+                />
+                <IconButton
+                  icon={Power}
+                  aria-label={`${category.active ? 'Deactivate' : 'Activate'} category ${category.title}`}
+                  disabled={busy}
+                  onClick={() => void runMutation(() => updateAdminLearningCategory(category.id, { active: !category.active }), category.active ? 'Category deactivated.' : 'Category activated.')}
+                />
+              </>
+            )}
+          />
         </section>
       )}
 
       {tab === 'audit' && (
-        <section className="overflow-x-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-          <table className="w-full min-w-[700px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase dark:bg-slate-800"><tr><th className="p-3">When</th><th className="p-3">Action</th><th className="p-3">Entity</th><th className="p-3">Summary</th></tr></thead><tbody>
-            {audit.map((entry, index) => <tr key={`${String(entry.id ?? entry.action)}-${index}`} className="border-t dark:border-slate-800"><td className="p-3">{typeof entry.created_at === 'string' ? new Date(entry.created_at).toLocaleString() : '—'}</td><td className="p-3">{eventSummary(entry.action)}</td><td className="p-3">{eventSummary(entry.entity_type)} #{eventSummary(entry.entity_id)}</td><td className="max-w-lg truncate p-3">{eventSummary(entry.summary ?? entry.after_summary ?? entry.details)}</td></tr>)}
-            {!audit.length && <tr><td colSpan={4} className="p-4 text-slate-500">No learning library changes have been recorded.</td></tr>}
-          </tbody></table>
-        </section>
+        <>
+          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Audit log ({audit.length})</h2>
+          <DataList
+            ariaLabel="Learning Library audit log"
+            rows={audit}
+            getRowKey={(entry, index) => `${String(entry.id ?? entry.action)}-${index}`}
+            emptyState="No learning library changes have been recorded."
+            columns={[
+              { key: 'when', header: 'When', render: (entry) => typeof entry.created_at === 'string' ? new Date(entry.created_at).toLocaleString() : '—' },
+              { key: 'action', header: 'Action', render: (entry) => eventSummary(entry.action) },
+              { key: 'entity', header: 'Entity', render: (entry) => `${eventSummary(entry.entity_type)} #${eventSummary(entry.entity_id)}` },
+              { key: 'summary', header: 'Summary', render: (entry) => <span className="break-words">{eventSummary(entry.summary ?? entry.after_summary ?? entry.details)}</span> },
+            ]}
+          />
+        </>
       )}
     </main>
   )

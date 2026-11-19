@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Bookmark, BookmarkCheck, BookOpen, CheckCircle2, ExternalLink, GraduationCap, ListChecks, RotateCw, Search, Sparkles } from 'lucide-react'
+import { Bookmark, BookmarkCheck, BookOpen, CheckCircle2, ExternalLink, Eye, GraduationCap, ListChecks, RotateCw, Search, Sparkles } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
+import { Badge } from '../../components/ui/Badge'
+import { DataList } from '../../components/ui/DataList'
+import { IconButton } from '../../components/ui/IconButton'
 import {
   getLearningPath,
   getLearningPreference,
@@ -72,16 +75,13 @@ function LearningResourceCard({
           </p>
           <h3 className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{resource.title}</h3>
         </div>
-        <button
-          type="button"
+        <IconButton
+          icon={resource.bookmarked ? BookmarkCheck : Bookmark}
           aria-label={resource.bookmarked ? `Remove ${resource.title} bookmark` : `Bookmark ${resource.title}`}
           aria-pressed={resource.bookmarked}
           disabled={busy}
           onClick={() => onBookmark(resource)}
-          className="rounded-lg p-2 text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300 dark:hover:bg-slate-800"
-        >
-          {resource.bookmarked ? <BookmarkCheck className="h-5 w-5" /> : <Bookmark className="h-5 w-5" />}
-        </button>
+        />
       </div>
       <p className="mt-2 flex-1 text-sm leading-6 text-slate-600 dark:text-slate-300">{resource.description}</p>
       <div className="mt-3 flex flex-wrap gap-1.5">
@@ -94,11 +94,7 @@ function LearningResourceCard({
           {resource.progress === 'COMPLETED' ? 'Completed' : resource.progress === 'VIEWED' ? 'Viewed' : 'Not started'}
         </span>
         <div className="flex gap-2">
-          {resource.progress !== 'COMPLETED' && (
-            <Button size="sm" variant="secondary" disabled={busy} onClick={() => onComplete(resource)}>
-              Mark complete
-            </Button>
-          )}
+          {resource.progress !== 'COMPLETED' && <IconButton icon={CheckCircle2} aria-label={`Mark ${resource.title} complete`} disabled={busy} onClick={() => onComplete(resource)} />}
           <a
             href={resource.url}
             target="_blank"
@@ -113,6 +109,76 @@ function LearningResourceCard({
         </div>
       </div>
     </article>
+  )
+}
+
+function LearningResourceList({
+  resources,
+  busyResource,
+  onBookmark,
+  onView,
+  onComplete,
+}: {
+  resources: LearningResource[]
+  busyResource: number | null
+  onBookmark: (resource: LearningResource) => void
+  onView: (resource: LearningResource) => void
+  onComplete: (resource: LearningResource) => void
+}) {
+  return (
+    <DataList
+      ariaLabel="Learning resources"
+      rows={resources}
+      getRowKey={(resource) => resource.id}
+      emptyState="No matching verified resources. Try changing the filters."
+      columns={[
+        {
+          key: 'resource',
+          header: 'Resource',
+          render: (resource) => <div><p className="font-semibold text-slate-900 dark:text-white">{resource.title}</p><p className="mt-1 max-w-2xl text-xs text-slate-500">{resource.description}</p></div>,
+        },
+        {
+          key: 'topics',
+          header: 'Type · topics',
+          render: (resource) => <div><p>{resource.type} · {resource.level.toLowerCase()}</p><p className="mt-1 text-xs text-slate-500">{resource.topic_tags.slice(0, 5).map((tag) => tag.replaceAll('-', ' ')).join(', ') || 'No topic tags'}</p></div>,
+        },
+        {
+          key: 'progress',
+          header: 'Progress',
+          render: (resource) => <Badge variant={resource.progress === 'COMPLETED' ? 'emerald' : resource.progress === 'VIEWED' ? 'blue' : 'slate'}>{resource.progress === 'COMPLETED' ? 'Completed' : resource.progress === 'VIEWED' ? 'Viewed' : 'Not started'}</Badge>,
+        },
+      ]}
+      actions={(resource) => (
+        <>
+          <IconButton
+            icon={resource.bookmarked ? BookmarkCheck : Bookmark}
+            aria-label={resource.bookmarked ? `Remove ${resource.title} bookmark` : `Bookmark ${resource.title}`}
+            aria-pressed={resource.bookmarked}
+            disabled={busyResource === resource.id}
+            onClick={() => onBookmark(resource)}
+          />
+          {resource.progress !== 'COMPLETED' && (
+            <IconButton
+              icon={CheckCircle2}
+              aria-label={`Mark ${resource.title} complete`}
+              disabled={busyResource === resource.id}
+              onClick={() => onComplete(resource)}
+            />
+          )}
+          <a
+            href={resource.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open ${resource.title}`}
+            title="Open resource"
+            onClick={() => { if (!resource.progress) onView(resource) }}
+            className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg text-indigo-700 transition-colors hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300 dark:hover:bg-slate-800"
+          >
+            <ExternalLink aria-hidden="true" className="h-4 w-4" />
+          </a>
+        </>
+      )}
+    />
   )
 }
 
@@ -375,33 +441,39 @@ export function StudentLearningLibraryPage() {
                 <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${selectedPath.progress_percent}%` }} /></div>
                 <span className="text-sm font-semibold">{selectedPath.progress_percent}% · {selectedPath.completed_count}/{selectedPath.resource_count}</span>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                {selectedPath.resources.map((resource) => <LearningResourceCard key={resource.id} resource={resource} onBookmark={changeBookmark} onView={(item) => void markResource(item, 'VIEWED')} onComplete={(item) => void markResource(item)} busy={busyResource === resource.id} />)}
+              <div className="mt-4">
+                <LearningResourceList resources={selectedPath.resources} busyResource={busyResource} onBookmark={changeBookmark} onView={(item) => void markResource(item, 'VIEWED')} onComplete={(item) => void markResource(item)} />
               </div>
             </article>
           )}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {paths.map((path) => (
-              <button key={path.id} type="button" onClick={() => void choosePath(path.id)} className="rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm hover:border-indigo-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-800 dark:bg-slate-900">
-                <p className="text-xs font-semibold uppercase text-indigo-600">{path.category?.replaceAll('-', ' ')}</p>
-                <h3 className="mt-1 text-lg font-bold text-slate-900 dark:text-white">{path.title}</h3>
-                <p className="mt-2 min-h-12 text-sm text-slate-600 dark:text-slate-300">{path.description}</p>
-                <div className="mt-4 flex items-center justify-between text-xs"><span>{path.completed_count}/{path.resource_count} resources completed</span><strong>{path.progress_percent}%</strong></div>
-                <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${path.progress_percent}%` }} /></div>
-              </button>
-            ))}
-          </div>
-          {!paths.length && <p className="rounded-xl border border-dashed p-6 text-sm text-slate-500">No active learning paths are available for this role yet.</p>}
+          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Learning paths ({paths.length})</h2>
+          <DataList
+            ariaLabel="Learning paths"
+            rows={paths}
+            getRowKey={(path) => path.id}
+            emptyState="No active learning paths are available for this role yet."
+            columns={[
+              { key: 'path', header: 'Learning path', render: (path) => <div><p className="font-semibold text-slate-900 dark:text-white">{path.title}</p><p className="mt-1 text-xs text-slate-500">{path.category?.replaceAll('-', ' ')} · {path.description}</p></div> },
+              { key: 'progress', header: 'Progress', render: (path) => <div><p>{path.completed_count}/{path.resource_count} resources · {path.progress_percent}%</p><div className="mt-2 h-1.5 w-40 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className="h-full bg-emerald-500" style={{ width: `${path.progress_percent}%` }} /></div></div> },
+            ]}
+            actions={(path) => <IconButton icon={Eye} aria-label={`View ${path.title} learning path`} onClick={() => void choosePath(path.id)} />}
+          />
         </section>
       )}
 
       {!loading && (section === 'INTERVIEW_QUESTIONS' || section === 'CODING_PRACTICE' || section === 'COURSES' || section === 'PRACTICE_TESTS' || section === 'MY_PROGRESS') && (
         <section aria-label={sections.find((item) => item.id === section)?.label} className="space-y-3">
           {section === 'MY_PROGRESS' && <div className="flex flex-wrap gap-4 rounded-xl bg-slate-100 p-4 text-sm dark:bg-slate-900"><strong>{progress?.viewed_count ?? 0} viewed</strong><strong>{progress?.completed_count ?? 0} completed</strong></div>}
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {visibleResources.map((resource) => <LearningResourceCard key={resource.id} resource={resource} onBookmark={changeBookmark} onView={(item) => void markResource(item, 'VIEWED')} onComplete={(item) => void markResource(item)} busy={busyResource === resource.id} />)}
-          </div>
-          {!visibleResources.length && <p className="rounded-xl border border-dashed p-6 text-sm text-slate-500">{section === 'MY_PROGRESS' ? 'You have not viewed or completed any resources yet.' : 'No matching verified resources. Try changing the filters.'}</p>}
+          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+            {section === 'MY_PROGRESS' ? 'My progress' : bookmarkedOnly ? 'Bookmarked resources' : 'Resources'} ({visibleResources.length})
+          </h2>
+          <LearningResourceList
+            resources={visibleResources}
+            busyResource={busyResource}
+            onBookmark={changeBookmark}
+            onView={(item) => void markResource(item, 'VIEWED')}
+            onComplete={(resource) => void markResource(resource)}
+          />
         </section>
       )}
     </main>

@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { Check, Pencil, Plus, Power } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
+import { Badge } from '../../components/ui/Badge'
+import { DataList } from '../../components/ui/DataList'
+import { IconButton } from '../../components/ui/IconButton'
 import {
   approveAdminInterviewQuestion,
   createAdminInterviewCategory,
@@ -69,6 +73,8 @@ export function InterviewStudioAdminPage() {
   const [questionDraft, setQuestionDraft] = useState(blankQuestion)
   const [editingQuestion, setEditingQuestion] = useState<number | null>(null)
   const [search, setSearch] = useState('')
+  const [questionCategory, setQuestionCategory] = useState('')
+  const [questionDifficulty, setQuestionDifficulty] = useState('')
   const [tests, setTests] = useState<AdminInterviewTest[]>([])
   const [testDraft, setTestDraft] = useState({
     slug: '',
@@ -91,6 +97,13 @@ export function InterviewStudioAdminPage() {
   const [analytics, setAnalytics] = useState<Record<string, unknown> | null>(null)
   const [failures, setFailures] = useState<Record<string, unknown> | null>(null)
   const [audit, setAudit] = useState<Array<Record<string, unknown>>>([])
+  const visibleQuestions = useMemo(
+    () => questions.filter((question) => (
+      (!questionCategory || question.category === questionCategory)
+      && (!questionDifficulty || question.difficulty === questionDifficulty)
+    )),
+    [questions, questionCategory, questionDifficulty],
+  )
 
   const loadTab = useCallback(async () => {
     setError('')
@@ -231,35 +244,85 @@ export function InterviewStudioAdminPage() {
   const renderQuestions = () => (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
       <section className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          <label className="sr-only" htmlFor="question-search">Search questions</label>
-          <input id="question-search" className={inputClass()} placeholder="Search bank" value={search} onChange={(event) => setSearch(event.target.value)} />
+        <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+          <label className="min-w-52 flex-1 text-xs font-semibold text-slate-600 dark:text-slate-300" htmlFor="question-search">Search questions
+            <input id="question-search" className={inputClass()} placeholder="Prompt or seed key" value={search} onChange={(event) => setSearch(event.target.value)} />
+          </label>
+          <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">Category
+            <select aria-label="Filter questions by category" className={inputClass()} value={questionCategory} onChange={(event) => setQuestionCategory(event.target.value)}>
+              <option value="">All categories</option>{categories.map((value) => <option key={value}>{value}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">Difficulty
+            <select aria-label="Filter questions by difficulty" className={inputClass()} value={questionDifficulty} onChange={(event) => setQuestionDifficulty(event.target.value)}>
+              <option value="">All difficulties</option>{difficulties.map((value) => <option key={value}>{value}</option>)}
+            </select>
+          </label>
+          <p className="pb-2 text-xs font-medium text-slate-500">{visibleQuestions.length} questions</p>
           <label className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700">
             Import CSV
             <input aria-label="Import questions CSV" className="sr-only" type="file" accept=".csv,text/csv" onChange={(event) => void importCsv(event.target.files?.[0])} />
           </label>
         </div>
-        <div className="space-y-3">
-          {questions.map((question) => (
-            <article key={question.id} className="rounded-xl border border-slate-200 p-4 dark:border-slate-800">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <strong>{question.category} · {question.difficulty}</strong>
-                <span className="text-xs">{question.review_status} · {question.active ? 'Active' : 'Inactive'}</span>
-              </div>
-              <p className="mt-2 text-sm">{question.prompt}</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button size="sm" variant="secondary" onClick={() => editQuestion(question)}>Edit</Button>
-                {question.review_status !== 'APPROVED' && <Button size="sm" onClick={() => void runMutation(() => approveAdminInterviewQuestion(question.id), 'Question approved.')}>Approve</Button>}
-                <Button size="sm" variant="secondary" onClick={() => {
+        <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Question bank ({visibleQuestions.length})</h2>
+        <DataList
+          ariaLabel="Interview question bank"
+          rows={visibleQuestions}
+          getRowKey={(question) => question.id}
+          emptyState="No matching questions."
+          columns={[
+            {
+              key: 'question',
+              header: 'Question',
+              render: (question) => (
+                <div className="max-w-3xl">
+                  <p className="font-medium text-slate-900 dark:text-white">{question.prompt}</p>
+                  <p className="mt-1 text-xs text-slate-500">{question.seed_key}</p>
+                </div>
+              ),
+            },
+            {
+              key: 'classification',
+              header: 'Category · difficulty',
+              render: (question) => <span className="text-xs">{question.category.replaceAll('_', ' ')} · {question.difficulty}</span>,
+            },
+            {
+              key: 'status',
+              header: 'State',
+              render: (question) => (
+                <div className="flex flex-wrap gap-1.5">
+                  <Badge>{question.review_status.replaceAll('_', ' ')}</Badge>
+                  <Badge variant={question.active ? 'emerald' : 'slate'}>{question.active ? 'Active' : 'Inactive'}</Badge>
+                </div>
+              ),
+            },
+          ]}
+          actions={(question) => (
+            <>
+              <IconButton icon={Pencil} aria-label={`Edit question ${question.id}`} onClick={() => editQuestion(question)} />
+              {question.review_status !== 'APPROVED' && (
+                <IconButton
+                  icon={Check}
+                  variant="primary"
+                  aria-label={`Approve question ${question.id}`}
+                  disabled={busy}
+                  onClick={() => void runMutation(() => approveAdminInterviewQuestion(question.id), 'Question approved.')}
+                />
+              )}
+              <IconButton
+                icon={Power}
+                aria-label={`${question.active ? 'Deactivate' : 'Reactivate'} question ${question.id}`}
+                title={`${question.active ? 'Deactivate' : 'Reactivate'} question`}
+                disabled={busy}
+                onClick={() => {
                   if (window.confirm(`${question.active ? 'Deactivate' : 'Reactivate'} this question? Active tests using it will also be deactivated.`)) {
                     void runMutation(() => updateAdminInterviewQuestion(question.id, { active: !question.active }), 'Question status updated.')
                   }
-                }}>{question.active ? 'Deactivate' : 'Reactivate'}</Button>
-              </div>
-            </article>
-          ))}
-          {!questions.length && <p className="rounded-xl border border-dashed p-6 text-sm text-slate-500">No matching questions.</p>}
-        </div>
+                }}
+              />
+            </>
+          )}
+        />
       </section>
       <form className="h-fit space-y-3 rounded-xl border border-slate-200 p-4 dark:border-slate-800" onSubmit={(event) => void submitQuestion(event)}>
         <h2 className="font-semibold">{editingQuestion === null ? 'Add question' : 'Edit question'}</h2>
@@ -269,21 +332,46 @@ export function InterviewStudioAdminPage() {
         <label className="block text-sm">Prompt<textarea required minLength={8} maxLength={3000} className={inputClass()} value={questionDraft.prompt} onChange={(event) => setQuestionDraft({ ...questionDraft, prompt: event.target.value })} /></label>
         <label className="block text-sm">Hint<textarea required minLength={3} maxLength={1500} className={inputClass()} value={questionDraft.hint} onChange={(event) => setQuestionDraft({ ...questionDraft, hint: event.target.value })} /></label>
         <label className="block text-sm">Evaluation rubric<textarea required minLength={5} maxLength={2500} className={inputClass()} value={questionDraft.rubric} onChange={(event) => setQuestionDraft({ ...questionDraft, rubric: event.target.value })} /></label>
-        <div className="flex gap-2"><Button disabled={busy}>{editingQuestion === null ? 'Add draft' : 'Save changes'}</Button>{editingQuestion !== null && <Button type="button" variant="secondary" onClick={() => { setEditingQuestion(null); setQuestionDraft(blankQuestion) }}>Cancel</Button>}</div>
+        <div className="flex gap-2"><Button disabled={busy} leftIcon={editingQuestion === null ? <Plus className="h-4 w-4" /> : undefined}>{editingQuestion === null ? 'Add draft' : 'Save changes'}</Button>{editingQuestion !== null && <Button type="button" variant="secondary" onClick={() => { setEditingQuestion(null); setQuestionDraft(blankQuestion) }}>Cancel</Button>}</div>
       </form>
     </div>
   )
 
   const renderTests = () => (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
-      <div className="space-y-3">
-        {tests.map((test) => <article key={test.id} className="rounded-xl border border-slate-200 p-4 dark:border-slate-800">
-          <div className="flex flex-wrap justify-between gap-2"><strong>{test.title}</strong><span>v{test.version} · {test.active ? 'Active' : 'Inactive'}</span></div>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{test.category} · {test.difficulty} · {test.format} · {test.question_count} questions</p>
-          {test.company_style && <p className="mt-1 text-xs text-amber-700">Practice based on public or admin-curated patterns; not an official assessment.</p>}
-          <Button className="mt-3" size="sm" variant="secondary" onClick={() => editTest(test)}>Edit / assign questions</Button>
-        </article>)}
-      </div>
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Mock tests ({tests.length})</h2>
+        <DataList
+          ariaLabel="Mock tests"
+          rows={tests}
+          getRowKey={(test) => test.id}
+          emptyState="No mock tests are configured."
+          columns={[
+            {
+              key: 'test',
+              header: 'Test',
+              render: (test) => (
+                <div>
+                  <p className="font-semibold text-slate-900 dark:text-white">{test.title}</p>
+                  <p className="mt-1 text-xs text-slate-500">{test.description}</p>
+                  {test.company_style && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Public/admin-curated practice; not an official assessment.</p>}
+                </div>
+              ),
+            },
+            {
+              key: 'format',
+              header: 'Format',
+              render: (test) => <span className="text-xs">{test.category} · {test.difficulty} · {test.format} · {test.question_count} questions</span>,
+            },
+            {
+              key: 'status',
+              header: 'Version · state',
+              render: (test) => <div className="flex flex-wrap items-center gap-2"><span>v{test.version}</span><Badge variant={test.active ? 'emerald' : 'slate'}>{test.active ? 'Active' : 'Inactive'}</Badge></div>,
+            },
+          ]}
+          actions={(test) => <IconButton icon={Pencil} aria-label={`Edit mock test ${test.title}`} onClick={() => editTest(test)} />}
+        />
+      </section>
       <form className="h-fit space-y-3 rounded-xl border border-slate-200 p-4 dark:border-slate-800" onSubmit={(event) => void submitTest(event)}>
         <h2 className="font-semibold">{editingTest === null ? 'Create mock test' : 'Edit test (content changes create a version)'}</h2>
         <label className="block text-sm">Slug<input required className={inputClass()} value={testDraft.slug} onChange={(event) => setTestDraft({ ...testDraft, slug: event.target.value })} /></label>
@@ -317,7 +405,7 @@ export function InterviewStudioAdminPage() {
         <strong>Add category</strong>
         <label className="block text-sm">Stable slug<input required pattern="[a-z0-9-]+" minLength={2} maxLength={50} className={inputClass()} value={categoryDraft.slug} onChange={(event) => setCategoryDraft({ ...categoryDraft, slug: event.target.value })} /></label>
         <label className="block text-sm">Label<input required minLength={2} maxLength={100} className={inputClass()} value={categoryDraft.label} onChange={(event) => setCategoryDraft({ ...categoryDraft, label: event.target.value })} /></label>
-        <Button size="sm" disabled={busy}>Create category</Button>
+        <Button size="sm" disabled={busy} leftIcon={<Plus className="h-4 w-4" />}>Create category</Button>
       </form>
       {taxonomy?.categories.map((item) => <form key={item.id} className="space-y-2 rounded-xl border border-slate-200 p-4 dark:border-slate-800" onSubmit={(event) => {
         event.preventDefault()
@@ -389,14 +477,23 @@ export function InterviewStudioAdminPage() {
     </div>
   )
 
-  const renderAudit = () => <div className="space-y-3">
-    {audit.map((entry) => <article key={String(entry.id)} className="rounded-xl border border-slate-200 p-4 text-sm dark:border-slate-800">
-      <div className="flex flex-wrap justify-between gap-2"><strong>{String(entry.action)} · {String(entry.entity_type)}</strong><time>{String(entry.created_at)}</time></div>
-      <p className="text-xs text-slate-500">Admin actor ID: {String(entry.actor_id ?? 'removed')} · Entity: {String(entry.entity_id ?? 'global')}</p>
-      <pre className="mt-2 overflow-auto text-xs">{JSON.stringify(entry.summary, null, 2)}</pre>
-    </article>)}
-    {!audit.length && <p className="text-sm text-slate-500">No changes recorded yet.</p>}
-  </div>
+  const renderAudit = () => (
+    <section className="space-y-3">
+      <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Audit log ({audit.length})</h2>
+      <DataList
+        ariaLabel="Interview Studio audit log"
+        rows={audit}
+        getRowKey={(entry) => String(entry.id)}
+        emptyState="No changes recorded yet."
+        columns={[
+          { key: 'when', header: 'When', render: (entry) => typeof entry.created_at === 'string' ? new Date(entry.created_at).toLocaleString() : '—' },
+          { key: 'action', header: 'Action', render: (entry) => <strong>{String(entry.action)} · {String(entry.entity_type)}</strong> },
+          { key: 'entity', header: 'Entity', render: (entry) => <span>#{String(entry.entity_id ?? 'global')} · Admin #{String(entry.actor_id ?? 'removed')}</span> },
+          { key: 'summary', header: 'Summary', render: (entry) => <pre className="max-w-xl whitespace-pre-wrap break-words text-xs">{JSON.stringify(entry.summary, null, 2)}</pre> },
+        ]}
+      />
+    </section>
+  )
 
   return (
     <main className="mx-auto w-full max-w-7xl space-y-5 px-4 py-8 sm:px-6 lg:px-8">

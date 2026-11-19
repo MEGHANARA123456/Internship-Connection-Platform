@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Archive, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { Archive, Clock3, Eye, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { api } from '../../api/client'
 import { Button } from '../../components/ui/Button'
+import { DataList } from '../../components/ui/DataList'
 import { DropdownSelect } from '../../components/ui/DropdownSelect'
+import { IconButton } from '../../components/ui/IconButton'
 import { Modal } from '../../components/ui/Modal'
 
 interface Topic {
@@ -535,7 +537,7 @@ export function AdminSkillTopicsPanel({
     <section aria-labelledby="admin-skill-topics-heading" className="glass-strong space-y-4 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:p-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 id="admin-skill-topics-heading" className="text-lg font-bold text-slate-900 dark:text-white">Skill assessment topics</h2>
+          <h2 id="admin-skill-topics-heading" className="text-lg font-bold text-slate-900 dark:text-white">Skill assessment topics ({visibleTopics.length})</h2>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Create and manage topics, check readiness, and review student results.</p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -589,17 +591,17 @@ export function AdminSkillTopicsPanel({
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-1">
-                  <Button size="sm" variant={selectedTopic === item.topic ? 'primary' : 'outline'} onClick={() => changeTopic(item.topic)}>Open analytics</Button>
+                  <IconButton icon={Eye} variant={selectedTopic === item.topic ? 'primary' : 'default'} onClick={() => changeTopic(item.topic)} aria-label={`Open analytics for ${item.name}`} />
                   {item.archived_at ? (
                     <>
-                      <Button size="sm" variant="outline" onClick={() => void restoreTopic(item)}><RotateCcw className="mr-1 h-3.5 w-3.5" />Restore</Button>
-                      <Button size="sm" variant="outline" onClick={() => void openHistory(item)}>History</Button>
-                      <Button size="sm" variant="outline" onClick={() => void openLifecycleDialog(item, 'delete')} aria-label={`Delete ${item.name}`}><Trash2 className="mr-1 h-3.5 w-3.5 text-rose-600" />Delete</Button>
+                      <IconButton icon={RotateCcw} onClick={() => void restoreTopic(item)} aria-label={`Restore ${item.name}`} />
+                      <IconButton icon={Clock3} onClick={() => void openHistory(item)} aria-label={`View history for ${item.name}`} />
+                      <IconButton icon={Trash2} variant="danger" onClick={() => void openLifecycleDialog(item, 'delete')} aria-label={`Delete ${item.name}`} />
                     </>
                   ) : (
                     <>
-                      <Button size="sm" variant="outline" onClick={() => openTopicEditor(item)} aria-label={`Edit ${item.name}`}><Pencil className="mr-1 h-3.5 w-3.5" />Edit</Button>
-                      <Button size="sm" variant="outline" onClick={() => void openLifecycleDialog(item, 'archive')} aria-label={`Archive ${item.name}`}><Archive className="mr-1 h-3.5 w-3.5" />Archive</Button>
+                      <IconButton icon={Pencil} onClick={() => openTopicEditor(item)} aria-label={`Edit ${item.name}`} />
+                      <IconButton icon={Archive} onClick={() => void openLifecycleDialog(item, 'archive')} aria-label={`Archive ${item.name}`} />
                     </>
                   )}
                 </div>
@@ -681,21 +683,31 @@ export function AdminSkillTopicsPanel({
                   </Button>
                 ))}
               </div>
-              {loadingAttempts && attempts.length === 0 ? <p role="status" className="mt-4 text-sm text-slate-500">Loading attempts…</p> : attemptsLoadError && attempts.length === 0 ? <p role="status" className="mt-4 text-sm text-slate-500">Attempts could not be loaded. Use Retry above to try again.</p> : attempts.length === 0 ? <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-500 dark:bg-slate-950">No {attemptFilter === 'ALL' ? '' : `${displayStatus(attemptFilter).toLowerCase()} `}attempts for this topic.</p> : (
-                <ul className="mt-3 divide-y divide-slate-200 dark:divide-slate-700">
-                  {attempts.map((attempt) => {
-                    const status = attempt.status === 'SUBMITTED' ? 'COMPLETED' : attempt.status
-                    const score = status === 'EXPIRED' || attempt.score == null ? '—' : `${attempt.score}%`
-                    return <li key={attempt.id} className="flex items-center justify-between gap-2 py-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{attempt.student_email}</p>
-                        <p className="text-xs text-slate-500">{displayStatus(status)} · {score}</p>
-                        <p className="text-[11px] text-slate-500">{new Date(attempt.submitted_at ?? attempt.started_at).toLocaleString()}</p>
-                      </div>
-                      <Button size="sm" variant="outline" onClick={() => void loadAttempt(attempt.id)}>View</Button>
-                    </li>
-                  })}
-                </ul>
+              {attemptsLoadError && attempts.length === 0 ? <p role="status" className="mt-4 text-sm text-slate-500">Attempts could not be loaded. Use Retry above to try again.</p> : (
+                <DataList
+                  ariaLabel="Recent assessment attempts"
+                  rows={attempts}
+                  getRowKey={(attempt) => attempt.id}
+                  loading={loadingAttempts}
+                  emptyState={`No ${attemptFilter === 'ALL' ? '' : `${displayStatus(attemptFilter).toLowerCase()} `}attempts for this topic.`}
+                  columns={[
+                    {
+                      key: 'student',
+                      header: 'Student',
+                      render: (attempt) => <div><p className="truncate font-medium">{attempt.student_email}</p><p className="mt-1 text-xs text-slate-500">{new Date(attempt.submitted_at ?? attempt.started_at).toLocaleString()}</p></div>,
+                    },
+                    {
+                      key: 'result',
+                      header: 'Result',
+                      render: (attempt) => {
+                        const status = attempt.status === 'SUBMITTED' ? 'COMPLETED' : attempt.status
+                        const score = status === 'EXPIRED' || attempt.score == null ? '—' : `${attempt.score}%`
+                        return <span>{displayStatus(status)} · {score}</span>
+                      },
+                    },
+                  ]}
+                  actions={(attempt) => <IconButton icon={Eye} onClick={() => void loadAttempt(attempt.id)} aria-label={`View attempt ${attempt.id}`} />}
+                />
               )}
               {attempts.length < filteredAttemptTotal && <Button className="mt-3 w-full" size="sm" variant="outline" disabled={loadingAttempts} onClick={() => setAttemptPage((page) => page + 1)}>Load more</Button>}
               {details && details.topic === selectedTopic && <div role="dialog" aria-label="Assessment attempt details" className="glass-strong mt-4 rounded-lg bg-indigo-50 p-3 text-sm dark:bg-indigo-950/30"><div className="flex items-center justify-between"><h4 className="font-semibold">Attempt #{details.id}</h4><Button size="sm" variant="ghost" aria-label="Close attempt details" onClick={() => setDetails(null)}>Close</Button></div><p className="mt-2">{details.student_email} · {displayStatus(details.status)} · {details.status === 'EXPIRED' || details.score == null ? '—' : `${details.score}%`}</p><p className="text-xs text-slate-600 dark:text-slate-300">{details.passed ? 'Passed' : details.passed === false ? 'Not passed' : 'Result unavailable'} · {details.level ?? 'No level'} · Percentile {details.percentile ?? '—'}</p><ul className="mt-2 space-y-1 text-xs">{Object.entries(details.subtopic_scores).map(([key, value]) => <li key={key} className="flex justify-between"><span>{key}</span><span>{value.percentage}%</span></li>)}</ul></div>}

@@ -73,3 +73,6 @@ backend/.env
 
 backup.dump
 backend/storage/
+
+pytest.log
+vitest.log

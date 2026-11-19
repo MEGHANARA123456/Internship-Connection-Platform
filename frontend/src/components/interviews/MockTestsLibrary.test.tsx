@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -134,7 +134,7 @@ beforeEach(() => {
 describe('MockTestsLibrary', () => {
   it('filters catalog tests using the selected criteria', async () => {
     renderLibrary()
-    await screen.findByText('HR Foundations: Quick Practice')
+    await screen.findAllByText('HR Foundations: Quick Practice')
 
     fireEvent.change(screen.getByLabelText('Filter by category'), { target: { value: 'DATA_ANALYST' } })
     fireEvent.change(screen.getByLabelText('Filter by difficulty'), { target: { value: 'BEGINNER' } })
@@ -151,7 +151,7 @@ describe('MockTestsLibrary', () => {
 
   it('requires AI consent and starts the chosen mode in a new session', async () => {
     renderLibrary()
-    fireEvent.click(await screen.findByRole('button', { name: 'Test details and attempts' }))
+    fireEvent.click((await screen.findAllByRole('button', { name: 'View HR Foundations: Quick Practice details and attempts' }))[0])
     expect(await screen.findByText('Tell me about yourself.')).toBeInTheDocument()
     const startButton = screen.getByRole('button', { name: 'Start mock test' })
     expect(startButton).toBeDisabled()
@@ -174,18 +174,18 @@ describe('MockTestsLibrary', () => {
 
   it('compares completed attempts and allows a retake to create a fresh session', async () => {
     renderLibrary()
-    fireEvent.click(await screen.findByRole('button', { name: 'Test details and attempts' }))
+    fireEvent.click((await screen.findAllByRole('button', { name: 'View HR Foundations: Quick Practice details and attempts' }))[0])
     await screen.findByText('Your attempts')
-    const attemptCheckboxes = screen.getAllByRole('checkbox')
-    expect(attemptCheckboxes).toHaveLength(3)
+    const attemptCheckboxes = within(screen.getByRole('table', { name: 'Mock test attempts' })).getAllByRole('checkbox')
+    expect(attemptCheckboxes).toHaveLength(2)
+    fireEvent.click(attemptCheckboxes[0])
     fireEvent.click(attemptCheckboxes[1])
-    fireEvent.click(attemptCheckboxes[2])
     fireEvent.click(screen.getByRole('button', { name: 'Compare selected attempts' }))
     expect(await screen.findByText(/Comparison · test version 1/)).toBeInTheDocument()
     await waitFor(() => expect(compareMockTestAttempts).toHaveBeenCalledWith(8, [18, 19]))
 
     fireEvent.click(screen.getByRole('checkbox', { name: /answers are sent to an external AI provider/i }))
-    fireEvent.click(screen.getAllByRole('button', { name: 'Retake' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retake attempt 18' })[0])
     await waitFor(() => expect(createMockTestAttempt).toHaveBeenCalledWith(8, {
       session_type: 'PRACTICE',
       interview_mode: 'TEXT',

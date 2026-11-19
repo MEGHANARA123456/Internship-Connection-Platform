@@ -57,8 +57,8 @@ describe('AdminLearningLibraryPage', () => {
   it('distinguishes unverified resources and provides an explicit verification action', async () => {
     render(<AdminLearningLibraryPage />)
 
-    expect(await screen.findByText(/Unverified/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Verify' }))
+    expect((await screen.findAllByText(/Unverified/)).length).toBeGreaterThan(0)
+    fireEvent.click(screen.getAllByRole('button', { name: `Verify resource ${resource.title}` })[0])
 
     await waitFor(() => expect(verifyAdminLearningResource).toHaveBeenCalledWith(resource.id))
     expect(await screen.findByRole('status')).toHaveTextContent('Resource verified and available to students.')
@@ -68,7 +68,7 @@ describe('AdminLearningLibraryPage', () => {
     render(<AdminLearningLibraryPage />)
     fireEvent.click(screen.getByRole('button', { name: 'Audit log' }))
 
-    expect(await screen.findByText('learning_resource_created')).toBeInTheDocument()
+    expect((await screen.findAllByText('learning_resource_created')).length).toBeGreaterThan(0)
     expect(screen.queryByText(/answer_text|transcript|student answer/i)).not.toBeInTheDocument()
   })
 })

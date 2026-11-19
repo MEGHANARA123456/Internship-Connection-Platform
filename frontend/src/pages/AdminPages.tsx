@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, downloadAuthenticatedFile } from '../api/client'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
+import { DataList } from '../components/ui/DataList'
 import { DropdownSelect } from '../components/ui/DropdownSelect'
 import { Card } from '../components/ui/Card'
 import { EmptyState } from '../components/ui/EmptyState'
@@ -12,6 +13,7 @@ import { ErrorState } from '../components/ui/ErrorState'
 import { Modal } from '../components/ui/Modal'
 import { Textarea } from '../components/ui/Textarea'
 import { SearchBox } from '../components/ui/SearchBox'
+import { IconButton } from '../components/ui/IconButton'
 import { searchTextMatches, stripMarkdownPreview } from '../lib/search'
 import {
   Users,
@@ -2587,28 +2589,45 @@ export function AdminSkillAssessmentsPage() {
           <p className="rounded-lg border border-dashed border-rose-200 p-4 text-sm text-rose-700 dark:border-rose-900 dark:text-rose-300">Question bank is unavailable until it can be loaded.</p>
         ) : !selectedTopic ? (
           <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700">Select a topic to view its question bank.</p>
-        ) : visibleQuestions.length === 0 ? (
-          <EmptyState icon={Award} title="No questions found" description={`Add a question to ${selectedTopic || 'this'} topic.`} />
         ) : (
-          <div className="glass-strong overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-            <table className="w-full min-w-[760px] text-left text-xs">
-              <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800 dark:text-slate-300"><tr><th className="p-3">Topic / prompt</th><th className="p-3">Options</th><th className="p-3">Type / difficulty</th><th className="p-3">State</th><th className="p-3 text-right">Actions</th></tr></thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {visibleQuestions.map((question) => (
-                  <tr key={question.id}>
-                    <td className="max-w-lg p-3"><span className="font-semibold text-indigo-700 dark:text-indigo-300">{question.topic}</span><p className="mt-1 text-slate-800 dark:text-slate-200">{question.prompt}</p></td>
-                    <td className="p-3 text-slate-600 dark:text-slate-300">{question.options.length} options · Correct:{' '}{(question.question_type === 'MULTI' ? question.correct_answers ?? [question.correct_index] : [question.correct_index]).map((index) => index + 1).join(', ')}</td>
-                    <td className="p-3 text-slate-600 dark:text-slate-300">{question.question_type} · {question.difficulty}</td>
-                    <td className="p-3"><Badge variant={question.active ? 'emerald' : 'slate'}>{question.active ? 'Active' : 'Inactive'}</Badge></td>
-                    <td className="p-3"><div className="flex justify-end gap-2">
-                      <Button size="sm" variant="outline" onClick={() => beginEdit(question)}>Edit</Button>
-                      <Button size="sm" variant="ghost" onClick={() => void deleteQuestion(question)} aria-label={`Delete question ${question.id}`}><Trash2 className="h-4 w-4 text-rose-600" /></Button>
-                    </div></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataList
+            ariaLabel="Skill assessment question bank"
+            rows={visibleQuestions}
+            getRowKey={(question) => question.id}
+            emptyState={<EmptyState icon={Award} title="No questions found" description={`Add a question to ${selectedTopic || 'this'} topic.`} />}
+            columns={[
+              {
+                key: 'prompt',
+                header: 'Topic / prompt',
+                render: (question) => <div><span className="font-semibold text-indigo-700 dark:text-indigo-300">{question.topic}</span><p className="mt-1 text-slate-800 dark:text-slate-200">{question.prompt}</p></div>,
+              },
+              {
+                key: 'options',
+                header: 'Options',
+                render: (question) => {
+                  const correctAnswers = question.question_type === 'MULTI' ? question.correct_answers ?? [question.correct_index] : [question.correct_index]
+                  const answerLabels = correctAnswers.map((index) => `${index + 1} - '${question.options[index]}'`).join(', ')
+                  return <span className="text-slate-600 dark:text-slate-300">{question.options.length} options · Correct: {answerLabels}</span>
+                },
+              },
+              {
+                key: 'type',
+                header: 'Type / difficulty',
+                render: (question) => <span className="text-slate-600 dark:text-slate-300">{question.question_type} · {question.difficulty}</span>,
+              },
+              {
+                key: 'state',
+                header: 'State',
+                render: (question) => <Badge variant={question.active ? 'emerald' : 'slate'}>{question.active ? 'Active' : 'Inactive'}</Badge>,
+              },
+            ]}
+            actions={(question) => (
+              <>
+                <IconButton icon={Pencil} onClick={() => beginEdit(question)} aria-label={`Edit question ${question.id}`} />
+                <IconButton icon={Trash2} variant="danger" onClick={() => void deleteQuestion(question)} aria-label={`Delete question ${question.id}`} />
+              </>
+            )}
+          />
         )}
       </section>
 
@@ -2714,30 +2733,29 @@ export function AdminSkillAssessmentsPage() {
         ) : !selectedTopic ? (
           <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700">Select a topic to view its study resources.</p>
         ) : (
-          <>
-            <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-              {visibleResources.map((resource) => (
-                <li key={resource.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="font-semibold text-slate-900 dark:text-white">{resource.title}</p>
-                    <p className="break-all text-xs text-slate-500 dark:text-slate-400">{resource.topic} / {resource.subtopic} · {resource.url}</p>
-                  </div>
-                  <div className="flex shrink-0 gap-2">
-                    <Button size="sm" variant="outline" onClick={() => {
-                      setEditingResourceId(resource.id)
-                      setResourceDraft({ topic: resource.topic, subtopic: resource.subtopic, title: resource.title, url: resource.url })
-                    }}>Edit</Button>
-                    <Button size="sm" variant="ghost" onClick={() => void deleteResource(resource)} aria-label={`Delete learning resource ${resource.id}`}><Trash2 className="h-4 w-4 text-rose-600" /></Button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            {visibleResources.length === 0 && (
-              <p className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-sm text-slate-500 dark:border-slate-700">
-                {resources.length === 0 ? 'No study resources for this topic.' : 'No resources match this subtopic filter.'}
-              </p>
+          <DataList
+            ariaLabel="Skill assessment study resources"
+            rows={visibleResources}
+            getRowKey={(resource) => resource.id}
+            emptyState={resources.length === 0 ? 'No study resources for this topic.' : 'No resources match this subtopic filter.'}
+            columns={[
+              {
+                key: 'resource',
+                header: 'Resource',
+                render: (resource) => <div><p className="font-semibold text-slate-900 dark:text-white">{resource.title}</p><p className="mt-1 break-all text-xs text-slate-500 dark:text-slate-400">{resource.topic} / {resource.subtopic} · {resource.url}</p></div>,
+              },
+              { key: 'state', header: 'State', render: (resource) => <Badge variant={resource.active ? 'emerald' : 'slate'}>{resource.active ? 'Active' : 'Inactive'}</Badge> },
+            ]}
+            actions={(resource) => (
+              <>
+                <IconButton icon={Pencil} onClick={() => {
+                  setEditingResourceId(resource.id)
+                  setResourceDraft({ topic: resource.topic, subtopic: resource.subtopic, title: resource.title, url: resource.url })
+                }} aria-label={`Edit learning resource ${resource.id}`} />
+                <IconButton icon={Trash2} variant="danger" onClick={() => void deleteResource(resource)} aria-label={`Delete learning resource ${resource.id}`} />
+              </>
             )}
-          </>
+          />
         )}
       </Card>
     </div>

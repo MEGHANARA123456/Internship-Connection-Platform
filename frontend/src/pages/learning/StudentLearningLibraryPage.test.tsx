@@ -84,10 +84,11 @@ describe('StudentLearningLibraryPage', () => {
   it('shows role-based paths and opens verified resources with safe external-link attributes', async () => {
     render(<StudentLearningLibraryPage />)
 
-    expect(await screen.findByRole('button', { name: /Python Developer/ })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /Python Developer/ }))
+    const pathButton = (await screen.findAllByRole('button', { name: /View Python Developer learning path/ }))[0]
+    expect(pathButton).toBeInTheDocument()
+    fireEvent.click(pathButton)
 
-    const link = await screen.findByRole('link', { name: /Open resource/i })
+    const link = (await screen.findAllByRole('link', { name: 'Open The Python Tutorial' }))[0]
     expect(link).toHaveAttribute('href', resource.url)
     expect(link).toHaveAttribute('target', '_blank')
     expect(link).toHaveAttribute('rel', 'noopener noreferrer')
@@ -101,7 +102,7 @@ describe('StudentLearningLibraryPage', () => {
     await waitFor(() => expect(updateLearningPreference).toHaveBeenCalledWith('python-developer'))
 
     fireEvent.click(screen.getByRole('button', { name: 'Coding Practice' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Mark The Python Tutorial complete' }))[0])
     await waitFor(() => expect(updateLearningResourceProgress).toHaveBeenCalledWith(resource.id, 'COMPLETED'))
     expect(await screen.findByRole('status')).toHaveTextContent('Progress saved.')
   })
@@ -109,9 +110,9 @@ describe('StudentLearningLibraryPage', () => {
   it('toggles a bookmark through the student service', async () => {
     render(<StudentLearningLibraryPage />)
     fireEvent.click(screen.getByRole('button', { name: 'Interview Questions' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Bookmark The Python Tutorial' }))
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Bookmark The Python Tutorial' }))[0])
 
     await waitFor(() => expect(setLearningBookmark).toHaveBeenCalledWith(resource.id, true))
-    expect(await screen.findByRole('button', { name: 'Remove The Python Tutorial bookmark' })).toBeInTheDocument()
+    expect((await screen.findAllByRole('button', { name: 'Remove The Python Tutorial bookmark' })).length).toBeGreaterThan(0)
   })
 })
