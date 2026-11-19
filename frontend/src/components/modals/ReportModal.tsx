@@ -66,6 +66,16 @@ export function ReportModal({
       onClose={onClose}
       title="Submit a Dispute / Report"
       description={`Report ${targetTitle ? `"${targetTitle}"` : 'this issue'} to platform moderators.`}
+      footer={!success ? (
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" form="submit-report-form" variant="danger" size="sm" isLoading={isSubmitting}>
+            Submit Report
+          </Button>
+        </div>
+      ) : undefined}
     >
       {success ? (
         <div className="flex flex-col items-center justify-center p-6 text-center text-emerald-700 space-y-2">
@@ -73,7 +83,7 @@ export function ReportModal({
           <p className="text-sm font-medium">Report submitted to administrators. Thank you.</p>
         </div>
       ) : (
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form id="submit-report-form" onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-start gap-2.5 text-xs text-slate-600">
             <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <span>
@@ -90,15 +100,6 @@ export function ReportModal({
           />
 
           {serverError && <p className="text-xs text-rose-600 font-medium">{serverError}</p>}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" size="sm" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="danger" size="sm" isLoading={isSubmitting}>
-              Submit Report
-            </Button>
-          </div>
         </form>
       )}
     </Modal>

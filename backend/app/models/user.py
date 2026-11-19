@@ -80,6 +80,8 @@ class StudentProfile(Base):
     skills: Mapped[str] = mapped_column(Text, default="")
     institution_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    github_username: Mapped[str | None] = mapped_column(String(39), nullable=True)
+    leetcode_username: Mapped[str | None] = mapped_column(String(50), nullable=True)
     show_verified_badges: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
     user: Mapped[User] = relationship(back_populates="student_profile")
 

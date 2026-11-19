@@ -4,9 +4,11 @@ import { AlertTriangle, ArrowLeft, Ban, Download, RotateCcw } from 'lucide-react
 import { api } from '../../api/client'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import { Modal } from '../../components/ui/Modal'
 import { routes } from '../../lib/routes'
 import { showToast } from '../../lib/feedback'
 import type { AdminCompanyDetail } from './types'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 
 export function AdminCompanyDetailPage() {
   const { userId } = useParams()
@@ -18,21 +20,25 @@ export function AdminCompanyDetailPage() {
   const [accountAction, setAccountAction] = useState<'suspend' | 'reactivate' | null>(null)
   const [reason, setReason] = useState('')
 
-  const load = async () => {
+  const load = async (silent = false) => {
     if (!userId) return
-    setLoading(true)
-    setError(null)
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const response = await api.get<AdminCompanyDetail>(`/admin/companies/${userId}`)
       setDetail(response.data)
+      setError(null)
     } catch (requestError) {
       const status = (requestError as { response?: { status?: number } }).response?.status
-      setError(status === 404 ? 'not-found' : 'load')
+      if (!silent) setError(status === 404 ? 'not-found' : 'load')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
   useEffect(() => { void load() }, [userId])
+  useAutoRefresh(() => load(true), 15_000, Boolean(userId) && !busy && !accountAction)
 
   const verify = async (status: 'VERIFIED' | 'REJECTED') => {
     if (!userId) return
@@ -41,7 +47,7 @@ export function AdminCompanyDetailPage() {
     setBusy(true)
     try {
       await api.post(`/admin/companies/${userId}/verification`, { status, ...(reasonText ? { reason: reasonText } : {}) })
-      await load()
+      await load(true)
       showToast(status === 'VERIFIED' ? 'Company verified.' : 'Company verification rejected.', 'success')
     } catch (requestError) {
       const message = (requestError as { response?: { data?: { detail?: string } } }).response?.data?.detail
@@ -58,7 +64,7 @@ export function AdminCompanyDetailPage() {
       await api.post(`/admin/users/${userId}/${accountAction}`, { reason: reason.trim() })
       setAccountAction(null)
       setReason('')
-      await load()
+      await load(true)
       showToast(accountAction === 'suspend' ? 'Company account suspended.' : 'Company account reactivated.', 'success')
     } catch {
       showToast('Could not update this account.', 'error')
@@ -107,7 +113,28 @@ export function AdminCompanyDetailPage() {
       <Card className="p-5 dark:bg-slate-900"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">Metrics</h2><Link to={routes.adminCompanyPostings(detail.account.user_id)} className="text-sm font-semibold text-indigo-700 hover:underline dark:text-indigo-300">Open postings moderation</Link></div><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">{[['Active roles', detail.metrics.active_roles], ['Total internships', detail.metrics.total_internships], ['Applicants', detail.metrics.total_applicants], ['Shortlisted', detail.metrics.shortlisted], ['Interviews', detail.metrics.interviews_scheduled], ['Offers', detail.metrics.offers]].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-xl font-bold">{value}</p></div>)}</div></Card>
       <Card className="p-5 dark:bg-slate-900"><h2 className="font-bold">Postings <span className="text-sm font-normal text-slate-500">({detail.postings_total} total)</span></h2>{detail.postings.length ? <ul className="mt-3 space-y-2">{detail.postings.map((posting) => <li key={posting.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800"><div><Link to={routes.adminCompanyPostings(detail.account.user_id)} className="font-semibold text-indigo-700 hover:underline dark:text-indigo-300">{posting.title}</Link><p className="text-xs text-slate-500">{posting.status} · deadline {posting.deadline} · {posting.applicant_count} applicants</p></div><span className="text-xs text-slate-500">{new Date(posting.created_at).toLocaleDateString()}</span></li>)}</ul> : <p className="mt-3 text-sm text-slate-500">No postings.</p>}</Card>
       <div className="grid gap-4 md:grid-cols-2"><Card className="p-5 dark:bg-slate-900"><h2 className="font-bold">Verification history</h2>{detail.verification_history.length ? <ul className="mt-3 space-y-2">{detail.verification_history.map((event, index) => <li key={`${event.date}-${index}`} className="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800"><p className="font-semibold">{event.action.replaceAll('_', ' ')}</p><p className="text-xs text-slate-500">{event.actor_email || 'Admin'} · {new Date(event.date).toLocaleString()}</p>{event.reason && <p className="mt-1 break-words text-sm">{event.reason}</p>}</li>)}</ul> : <p className="mt-3 text-sm text-slate-500">No verification changes recorded.</p>}</Card><Card className="p-5 dark:bg-slate-900"><h2 className="font-bold">Recent audit events</h2>{detail.recent_audit_events.length ? <ul className="mt-3 space-y-2">{detail.recent_audit_events.map((event) => <li key={event.id} className="text-sm"><span className="font-semibold">{event.action}</span><span className="ml-2 text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span></li>)}</ul> : <p className="mt-3 text-sm text-slate-500">No recent events.</p>}</Card></div>
-      {accountAction && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="presentation"><section role="dialog" aria-modal="true" aria-labelledby="company-action-title" className="glass-strong w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl dark:bg-slate-900"><h2 id="company-action-title" className="text-lg font-bold">{accountAction === 'suspend' ? 'Suspend company' : 'Reactivate company'}</h2><label htmlFor="company-action-reason" className="mt-4 block text-sm font-semibold">Reason</label><textarea id="company-action-reason" value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} rows={3} className="glass-input mt-1 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950" /><div className="mt-4 flex justify-end gap-2"><Button variant="outline" disabled={busy} onClick={() => { setAccountAction(null); setReason('') }}>Cancel</Button><Button variant="primary" disabled={!reason.trim() || busy} isLoading={busy} onClick={() => void updateAccount()}>Confirm</Button></div></section></div>}
+      {accountAction && (
+        <Modal
+          isOpen={Boolean(accountAction)}
+          onClose={() => {
+            if (busy) return
+            setAccountAction(null)
+            setReason('')
+          }}
+          title={accountAction === 'suspend' ? 'Suspend company' : 'Reactivate company'}
+          maxWidth="md"
+          dismissible={false}
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" disabled={busy} onClick={() => { setAccountAction(null); setReason('') }}>Cancel</Button>
+              <Button variant="primary" disabled={!reason.trim() || busy} isLoading={busy} onClick={() => void updateAccount()}>Confirm</Button>
+            </div>
+          }
+        >
+          <label htmlFor="company-action-reason" className="block text-sm font-semibold">Reason</label>
+          <textarea id="company-action-reason" value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} rows={3} className="glass-input mt-1 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950" />
+        </Modal>
+      )}
     </main>
   )
 }

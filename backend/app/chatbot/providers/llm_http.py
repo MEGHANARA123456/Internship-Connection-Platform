@@ -280,7 +280,9 @@ class LLMHTTPProvider:
             if completion is None:
                 raise ValueError("Provider response has no completion.")
             parsed = _extract_json_object(content)
-            if not isinstance(parsed.get("answerable"), bool) or not isinstance(parsed.get("answer"), str):
+            answerable = parsed.get("answerable")
+            answer_text = parsed.get("answer")
+            if not isinstance(answerable, bool) or not isinstance(answer_text, str):
                 raise ValueError("Provider response does not match the required schema.")
             source_values = parsed.get("used_chunk_ids")
             if not isinstance(source_values, list) or not all(isinstance(value, str) for value in source_values):
@@ -292,8 +294,8 @@ class LLMHTTPProvider:
             if needs_clarification is not None and not isinstance(needs_clarification, str):
                 raise ValueError("Provider clarification does not match the required schema.")
             return ProviderResult(
-                parsed["answerable"],
-                parsed["answer"],
+                answerable,
+                answer_text,
                 tuple(source_values),
                 float(confidence),
                 needs_clarification,

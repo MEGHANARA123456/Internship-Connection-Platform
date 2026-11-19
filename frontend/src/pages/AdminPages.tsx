@@ -25,7 +25,6 @@ import {
   RotateCcw,
   RefreshCw,
   Building2,
-  X,
   ClipboardList,
   ChevronDown,
   ChevronUp,
@@ -48,6 +47,7 @@ import { confirmAction, showToast } from '../lib/feedback'
 import { routes } from '../lib/routes'
 import { formatINR } from '../lib/currency'
 import { AdminSkillTopicsPanel } from './admin/AdminSkillTopicsPanel'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
 
 // --- 1. Admin Dashboard ---
 
@@ -69,8 +69,8 @@ export function AdminDashboardPage() {
   const [analysisRefreshKey, setAnalysisRefreshKey] = useState(0)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
-  const fetchDashboardData = async () => {
-    setLoading(true)
+  const fetchDashboardData = async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const [usersResult, companiesResult, jobsResult, reportsResult] = await Promise.allSettled([
         api.get('/admin/users'),
@@ -101,26 +101,34 @@ export function AdminDashboardPage() {
     } catch {
       // handled
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchDashboardData()
+    void fetchDashboardData()
   }, [])
+
+  const refreshDashboard = async (refreshCharts = false) => {
+    await fetchDashboardData(true)
+    if (refreshCharts) setAnalysisRefreshKey((previous) => previous + 1)
+  }
+  useAutoRefresh(() => refreshDashboard(), 15_000, actionLoading === null)
 
   const handleRefresh = async () => {
     setRefreshing(true)
-    setAnalysisRefreshKey((prev) => prev + 1)
-    await fetchDashboardData()
-    setRefreshing(false)
+    try {
+      await refreshDashboard(true)
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   const handleQuickVerify = async (userId: number, status: 'VERIFIED' | 'REJECTED') => {
     setActionLoading(`comp-${userId}`)
     try {
       await api.post(`/admin/companies/${userId}/verification`, { status })
-      await fetchDashboardData()
+      await refreshDashboard(true)
     } catch {
       showToast('Verification status update failed', 'error')
     } finally {
@@ -132,7 +140,7 @@ export function AdminDashboardPage() {
     setActionLoading(`job-${jobId}`)
     try {
       await api.post(`/admin/internships/${jobId}/moderate`, { status })
-      await fetchDashboardData()
+      await refreshDashboard(true)
     } catch {
       showToast('Job moderation status update failed', 'error')
     } finally {
@@ -542,22 +550,26 @@ export function AdminUsersPage() {
   const [deletingUser, setDeletingUser] = useState(false)
   const [successToast, setSuccessToast] = useState('')
 
-  const fetchUsers = async (showLoading = true) => {
-    if (showLoading) setLoading(true)
-    setError(null)
+  const fetchUsers = async (silent = false) => {
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const res = await api.get('/admin/users')
       setUsers(res.data || [])
+      setError(null)
     } catch {
-      setError('Failed to fetch platform users.')
+      if (!silent) setError('Failed to fetch platform users.')
     } finally {
-      if (showLoading) setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchUsers()
+    void fetchUsers()
   }, [])
+  useAutoRefresh(() => fetchUsers(true), 15_000, !selectedUser && !userToDelete && !deletingUser && actionId === null)
 
   const handleToggleSuspend = async (user: any) => {
     setActionId(user.id)
@@ -567,7 +579,7 @@ export function AdminUsersPage() {
       } else {
         await api.post(`/admin/users/${user.id}/reactivate`)
       }
-      fetchUsers()
+      void fetchUsers(false)
     } catch {
       showToast('Failed to update user status.', 'error')
     } finally {
@@ -755,6 +767,31 @@ export function AdminUsersPage() {
         }}
         title="Permanently delete user"
         description="This action cannot be undone."
+        footer={userToDelete ? (
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={deletingUser}
+              onClick={() => {
+                setUserToDelete(null)
+                setDeleteReason('')
+                setConfirmationEmail('')
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              isLoading={deletingUser}
+              disabled={deleteReason.trim().length < 5 || confirmationEmail !== userToDelete.email}
+              onClick={() => void handleDeleteUser()}
+            >
+              Delete permanently
+            </Button>
+          </div>
+        ) : undefined}
       >
         {userToDelete && (
           <div className="space-y-4">
@@ -786,43 +823,23 @@ export function AdminUsersPage() {
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
               />
             </div>
-            <div className="flex justify-end gap-2 border-t border-slate-200 pt-4 dark:border-slate-800">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={deletingUser}
-                onClick={() => {
-                  setUserToDelete(null)
-                  setDeleteReason('')
-                  setConfirmationEmail('')
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="danger"
-                isLoading={deletingUser}
-                disabled={deleteReason.trim().length < 5 || confirmationEmail !== userToDelete.email}
-                onClick={() => void handleDeleteUser()}
-              >
-                Delete permanently
-              </Button>
-            </div>
           </div>
         )}
       </Modal>
 
       {selectedUser && (
-        <div className="fixed inset-0 z-40 bg-slate-950/30" onClick={() => setSelectedUser(null)}>
-          <aside className="absolute right-0 top-0 h-full w-full max-w-xl overflow-y-auto bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+        <Modal
+          isOpen={Boolean(selectedUser)}
+          onClose={() => setSelectedUser(null)}
+          title="User detail"
+          maxWidth="xl"
+        >
+          <div className="space-y-5">
+            <div className="border-b border-slate-200 pb-4">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">User detail</p>
-                <h2 className="mt-1 text-xl font-bold text-slate-900">{selectedUser.email}</h2>
+                <h2 className="text-xl font-bold text-slate-900">{selectedUser.email}</h2>
                 <Badge status={selectedUser.role}>{selectedUser.role}</Badge>
               </div>
-              <Button variant="outline" size="sm" onClick={() => setSelectedUser(null)} leftIcon={<X className="h-4 w-4" />}>Close</Button>
             </div>
             {detailLoading ? <CardSkeleton /> : <div className="space-y-6 py-5">
               {selectedUser.student_profile && <section>
@@ -845,8 +862,8 @@ export function AdminUsersPage() {
                 {selectedUser.recent_audit_events?.length ? <div className="space-y-2">{selectedUser.recent_audit_events.map((item: any) => <div key={item.id} className="border-l-2 border-indigo-200 pl-3"><p className="text-xs font-semibold text-slate-800">{item.action}</p><p className="text-[11px] text-slate-500">{new Date(item.created_at).toLocaleString()}</p></div>)}</div> : <p className="text-xs text-slate-500">No audit events.</p>}
               </section>
             </div>}
-          </aside>
-        </div>
+          </div>
+        </Modal>
       )}
     </div>
   )
@@ -869,22 +886,30 @@ export function AdminVerificationsPage() {
     filename: string
   } | null>(null)
 
-  const fetchCompanies = async () => {
-    setLoading(true)
-    setError(null)
+  const fetchCompanies = async (silent = false) => {
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const res = await api.get('/admin/verifications')
       setCompanies(res.data || [])
+      setError(null)
     } catch {
-      setError('Failed to fetch unverified companies.')
+      if (!silent) setError('Failed to fetch unverified companies.')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchCompanies()
+    void fetchCompanies()
   }, [])
+  useAutoRefresh(
+    () => fetchCompanies(true),
+    15_000,
+    !rejectingCompany && !documentPreview && !openingDocument && actionId === null,
+  )
 
   useEffect(() => () => {
     if (documentPreview) URL.revokeObjectURL(documentPreview.url)
@@ -896,7 +921,7 @@ export function AdminVerificationsPage() {
       await api.post(`/admin/companies/${userId}/verification`, { status, ...(reason ? { reason } : {}) })
       setRejectingCompany(null)
       setRejectionReason('')
-      await fetchCompanies()
+      await fetchCompanies(true)
     } catch {
       setDocumentError('Failed to update company verification status.')
     } finally {
@@ -1096,6 +1121,14 @@ export function AdminVerificationsPage() {
         }}
         title="Reject company verification"
         description="Provide specific feedback so the company knows what to correct."
+        footer={rejectingCompany ? (
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" disabled={actionId !== null} onClick={() => setRejectingCompany(null)}>Cancel</Button>
+            <Button variant="danger" isLoading={actionId === rejectingCompany.user_id} disabled={rejectionReason.trim().length < 5 || actionId !== null} onClick={() => void handleVerify(rejectingCompany.user_id, 'REJECTED', rejectionReason.trim())}>
+              Reject verification
+            </Button>
+          </div>
+        ) : undefined}
       >
         <div className="space-y-4">
           <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{rejectingCompany?.company_name}</p>
@@ -1107,12 +1140,6 @@ export function AdminVerificationsPage() {
             onChange={(event) => setRejectionReason(event.target.value)}
             placeholder="Explain which information or document needs correction."
           />
-          <div className="flex justify-end gap-2 border-t border-slate-200 pt-4 dark:border-slate-800">
-            <Button variant="outline" disabled={actionId !== null} onClick={() => setRejectingCompany(null)}>Cancel</Button>
-            <Button variant="danger" isLoading={actionId === rejectingCompany?.user_id} disabled={rejectionReason.trim().length < 5 || actionId !== null} onClick={() => rejectingCompany && void handleVerify(rejectingCompany.user_id, 'REJECTED', rejectionReason.trim())}>
-              Reject verification
-            </Button>
-          </div>
         </div>
       </Modal>
     </div>
@@ -1127,28 +1154,32 @@ export function AdminModerationPage() {
   const [error, setError] = useState<string | null>(null)
   const [actionId, setActionId] = useState<number | null>(null)
 
-  const fetchJobs = async () => {
-    setLoading(true)
-    setError(null)
+  const fetchJobs = async (silent = false) => {
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const res = await api.get('/admin/internships')
       setJobs(res.data || [])
+      setError(null)
     } catch {
-      setError('Failed to fetch internships queue.')
+      if (!silent) setError('Failed to fetch internships queue.')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchJobs()
+    void fetchJobs()
   }, [])
+  useAutoRefresh(() => fetchJobs(true), 15_000, actionId === null)
 
   const handleModerate = async (jobId: number, status: 'PUBLISHED' | 'REJECTED') => {
     setActionId(jobId)
     try {
       await api.post(`/admin/internships/${jobId}/moderation`, { status })
-      fetchJobs()
+      void fetchJobs(true)
     } catch {
       showToast('Failed to update internship status.', 'error')
     } finally {
@@ -1248,29 +1279,37 @@ export function AdminReportsPage() {
   const [resolutionNotes, setResolutionNotes] = useState('')
   const [submittingResolution, setSubmittingResolution] = useState(false)
 
-  const fetchReports = async () => {
-    setLoading(true)
-    setError(null)
+  const fetchReports = async (silent = false) => {
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const res = await api.get('/admin/reports')
       setReports(res.data || [])
+      setError(null)
     } catch {
-      setError('Failed to fetch platform reports.')
+      if (!silent) setError('Failed to fetch platform reports.')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchReports()
+    void fetchReports()
   }, [])
+  useAutoRefresh(
+    () => fetchReports(true),
+    15_000,
+    !resolutionModalReport && !submittingResolution,
+  )
 
   const handleStartInvestigating = async (reportId: number) => {
     try {
       await api.patch(`/admin/reports/${reportId}`, {
         status: 'INVESTIGATING',
       })
-      fetchReports()
+      void fetchReports(true)
     } catch {
       showToast('Failed to update report status.', 'error')
     }
@@ -1286,7 +1325,7 @@ export function AdminReportsPage() {
       })
       setResolutionModalReport(null)
       setResolutionNotes('')
-      fetchReports()
+      void fetchReports(true)
     } catch {
       showToast('Failed to resolve report.', 'error')
     } finally {
@@ -1421,23 +1460,24 @@ export function AdminCompaniesPage() {
   const [loading, setLoading] = useState(true)
   const [actionId, setActionId] = useState<number | null>(null)
 
-  const fetchCompanies = async () => {
-    setLoading(true)
+  const fetchCompanies = async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const res = await api.get('/admin/companies')
       setCompanies(res.data || [])
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
-  useEffect(() => { fetchCompanies() }, [])
+  useEffect(() => { void fetchCompanies() }, [])
+  useAutoRefresh(() => fetchCompanies(true), 15_000, actionId === null)
 
   const verify = async (userId: number, status: 'VERIFIED' | 'REJECTED') => {
     setActionId(userId)
     try {
       await api.post(`/admin/companies/${userId}/verification`, { status })
-      await fetchCompanies()
+      await fetchCompanies(true)
     } catch {
       showToast('Failed to update company verification status.', 'error')
     } finally {
@@ -1460,16 +1500,17 @@ export function AdminCompanyPostingsPage() {
   const [postings, setPostings] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
-  const fetchPostings = async () => {
+  const fetchPostings = async (silent = false) => {
     if (!companyId) return
-    setLoading(true)
-    try { const res = await api.get(`/admin/companies/${companyId}/postings`); setPostings(res.data || []) } finally { setLoading(false) }
+    if (!silent) setLoading(true)
+    try { const res = await api.get(`/admin/companies/${companyId}/postings`); setPostings(res.data || []) } finally { if (!silent) setLoading(false) }
   }
-  useEffect(() => { fetchPostings() }, [companyId])
+  useEffect(() => { void fetchPostings() }, [companyId])
+  useAutoRefresh(() => fetchPostings(true), 15_000, Boolean(companyId))
 
   const moderate = async (id: number, status: 'PUBLISHED' | 'REJECTED' | 'CLOSED') => {
     await api.post(`/admin/companies/${companyId}/postings/${id}/moderate`, { status })
-    fetchPostings()
+    void fetchPostings(true)
   }
 
   return (
@@ -1503,7 +1544,8 @@ export function AdminAuditLogsPage() {
     setLogs(res.data.items || [])
     setTotal(res.data.total || 0)
   }
-  useEffect(() => { fetchLogs() }, [page, actor, action, range, targetType, targetSearch, dateFrom, dateTo])
+  useEffect(() => { void fetchLogs() }, [page, actor, action, range, targetType, targetSearch, dateFrom, dateTo])
+  useAutoRefresh(() => fetchLogs(), 15_000, expanded === null)
 
   useEffect(() => {
     setRange(searchParams.get('range') || '')

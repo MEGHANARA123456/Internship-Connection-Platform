@@ -6,6 +6,7 @@ import { MessageList } from './MessageList'
 import { greetingForRole, suggestedQuestionsForPage } from './suggestions'
 import type { ChatFeedbackSourceType, ChatMessage, ChatPage } from './types'
 import { routes } from '../lib/routes'
+import { Z_INDEX } from '../lib/zIndex'
 
 function resizeComposer(input: HTMLTextAreaElement) {
   input.style.height = 'auto'
@@ -104,7 +105,7 @@ export function ChatWindow({ messages, typing, error, role, page, mode, retrieva
       role="dialog"
       aria-modal="true"
       aria-labelledby="chatbot-title"
-      className="chat-window-surface chatbot-window-enter fixed inset-x-0 bottom-[env(safe-area-inset-bottom)] z-[70] flex h-[calc(100dvh-env(safe-area-inset-bottom))] flex-col rounded-none border-0 bg-white pb-[env(safe-area-inset-bottom)] text-slate-900 shadow-2xl dark:bg-slate-950 dark:text-white sm:inset-auto sm:bottom-6 sm:right-6 sm:h-[min(38rem,calc(100dvh-3rem))] sm:w-[min(24rem,calc(100vw-3rem))] sm:rounded-2xl sm:border sm:border-slate-200 sm:pb-0 sm:dark:border-slate-800"
+      className={`chat-window-surface chatbot-window-enter fixed inset-x-0 bottom-[env(safe-area-inset-bottom)] ${Z_INDEX.chatbotWindow} flex h-[calc(100dvh-env(safe-area-inset-bottom))] flex-col rounded-none border-0 bg-white pb-[env(safe-area-inset-bottom)] text-slate-900 shadow-2xl dark:bg-slate-950 dark:text-white sm:inset-auto sm:bottom-6 sm:right-6 sm:h-[min(38rem,calc(100dvh-3rem))] sm:w-[min(24rem,calc(100vw-3rem))] sm:rounded-2xl sm:border sm:border-slate-200 sm:pb-0 sm:dark:border-slate-800`}
     >
       <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
         <div className="flex items-center gap-2">
@@ -196,7 +197,7 @@ export function ChatWindow({ messages, typing, error, role, page, mode, retrieva
           <button type="submit" disabled={!draft.trim() || typing || !online || statusDisabled} aria-label="Send question" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"><ArrowUp className="h-4 w-4" /></button>
         </div>
         <div className="mt-1 flex justify-between px-1 text-[10px] text-slate-400">
-          <span>Never include passwords, codes, or personal details.</span><span>{draft.length}/500</span>
+          <span>{draft.length}/500</span>
         </div>
         {!session && <p className="mt-2 text-[10px] text-slate-500 dark:text-slate-400">Sign in for role-specific help. <Link to={routes.login()} className="font-semibold text-indigo-600 underline dark:text-indigo-300">Sign in</Link></p>}
       </form>

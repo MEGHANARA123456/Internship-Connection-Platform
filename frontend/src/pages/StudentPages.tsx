@@ -35,6 +35,7 @@ import { formatINR } from '../lib/currency'
 import { confirmAction, showToast } from '../lib/feedback'
 import { parseGithubHandle, parseLeetCodeHandle } from '../lib/handles'
 import { stripMarkdownPreview } from '../lib/search'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import {
   Search,
   MapPin,
@@ -94,16 +95,6 @@ function assessmentTopicForSkill(skill: string): string | null {
       ? new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(normalized)
       : normalized.includes(term)
   )))?.[0] ?? null
-}
-
-function readNormalizedHandle(key: string, parse: (value: string) => string | null): string {
-  const stored = localStorage.getItem(key) || ''
-  const normalized = stored ? parse(stored) : null
-  if (stored !== (normalized || '')) {
-    if (normalized) localStorage.setItem(key, normalized)
-    else localStorage.removeItem(key)
-  }
-  return normalized || ''
 }
 
 // --- 1. Opportunities Page (Browse Internships) ---
@@ -266,12 +257,13 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
 
   const requestIdRef = useRef(0)
 
-  useEffect(() => {
-    const requestId = ++requestIdRef.current
-    const run = async () => {
+  const refreshOpportunityData = async (silent = false) => {
+      const requestId = ++requestIdRef.current
       if (activeTab === 'applied') {
-        setApplicationsLoading(true)
-        setApplicationsError(null)
+        if (!silent) {
+          setApplicationsLoading(true)
+          setApplicationsError(null)
+        }
         try {
           const params = new URLSearchParams()
           if (debouncedSearch) params.set('search', debouncedSearch)
@@ -283,17 +275,19 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
           setTotal(res.data?.total ?? items.length)
           setApplicationsLoaded(true)
         } catch (err) {
-          if (requestId !== requestIdRef.current) return
+          if (requestId !== requestIdRef.current || silent) return
           console.error('Failed to fetch applications:', err)
           setApplicationsError('Unable to load your applications. Please try again.')
         } finally {
-          if (requestId === requestIdRef.current) setApplicationsLoading(false)
+          if (requestId === requestIdRef.current && !silent) setApplicationsLoading(false)
         }
         return
       }
 
-      setLoading(true)
-      setError(null)
+      if (!silent) {
+        setLoading(true)
+        setError(null)
+      }
       try {
         if (activeTab === 'saved') {
           const params = new URLSearchParams()
@@ -328,18 +322,30 @@ export function OpportunitiesPage({ initialTab = 'all' }: { initialTab?: 'all' |
           setTotal(total || items.length)
         }
       } catch (err) {
-        if (requestId !== requestIdRef.current) return
+        if (requestId !== requestIdRef.current || silent) return
         console.error('Failed to fetch internships:', err)
         setError('Failed to fetch internships. Please check your connection and try again.')
       } finally {
-        if (requestId === requestIdRef.current) setLoading(false)
+        if (requestId === requestIdRef.current && !silent) setLoading(false)
       }
-    }
-    void run()
+  }
+
+  useEffect(() => {
+    void refreshOpportunityData()
     return () => {
       requestIdRef.current += 1
     }
   }, [page, location, industry, workMode, minStipend, skills, activeTab, sortBy, debouncedSearch])
+  useAutoRefresh(
+    () => refreshOpportunityData(true),
+    15_000,
+    !loading
+      && !applicationsLoading
+      && !selectedJob
+      && !applyModalJob
+      && !reportModalJob
+      && !mockInterviewJob,
+  )
 
   const chooseOpportunityTab = (tab: 'all' | 'saved' | 'applied') => {
     setActiveTab(tab)
@@ -1316,9 +1322,11 @@ export function ApplicationsPage() {
     { key: 'WITHDRAWN', label: 'Withdrawn', statuses: ['WITHDRAWN'] },
   ]
 
-  const fetchApplications = async () => {
-    setLoading(true)
-    setError(null)
+  const fetchApplications = async (silent = false) => {
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const res = await api.get('/applications/student')
       const rows = Array.isArray(res.data) ? res.data : res.data?.applications || []
@@ -1327,16 +1335,22 @@ export function ApplicationsPage() {
         (left: any, right: any) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
       )
       setApplications(items)
+      setError(null)
     } catch {
-      setError('Unable to load your applications. Please try again.')
+      if (!silent) setError('Unable to load your applications. Please try again.')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchApplications()
+    void fetchApplications()
   }, [])
+  useAutoRefresh(
+    () => fetchApplications(true),
+    15_000,
+    !withdrawTarget && !selectedOfferApp && !selectedReviewApp && withdrawingId === null,
+  )
 
   useEffect(() => {
     void api.get('/notifications').then(async (response) => {
@@ -1417,6 +1431,7 @@ export function ApplicationsPage() {
         ? { ...item, status: 'WITHDRAWN' }
         : item))
       setWithdrawTarget(null)
+      await fetchApplications(true)
       showToast(`Your application for ${application.internship_title || `Internship #${application.internship_id}`} at ${application.company_name} has been withdrawn`, 'success')
     } catch (requestError: any) {
       setWithdrawError(requestError.response?.data?.detail || 'Unable to withdraw this application. Please try again.')
@@ -1618,7 +1633,7 @@ export function ApplicationsPage() {
           isOpen={!!selectedOfferApp}
           onClose={() => setSelectedOfferApp(null)}
           applicationId={selectedOfferApp.id}
-          onSigned={() => { void fetchApplications() }}
+          onSigned={() => { void fetchApplications(true) }}
           candidateName={selectedOfferApp.student_name || 'Candidate'}
           companyName={selectedOfferApp.company_name || selectedOfferApp.internship_title || 'Enterprise Partner'}
           roleTitle={selectedOfferApp.internship_title || 'Software Engineering Intern'}
@@ -1860,6 +1875,9 @@ export function StudentProfilePage() {
   const [uploading, setUploading] = useState(false)
   const [profileSaved, setProfileSaved] = useState(false)
   const [profileError, setProfileError] = useState('')
+  const [handlesLoaded, setHandlesLoaded] = useState(false)
+  const [handlesError, setHandlesError] = useState(false)
+  const [handlesSaving, setHandlesSaving] = useState(false)
   const [isParsingResume, setIsParsingResume] = useState(false)
   const [parseSuccessMsg, setParseSuccessMsg] = useState('')
 
@@ -1887,8 +1905,8 @@ export function StudentProfilePage() {
   }
 
   // Developer Social Proof & Badges State
-  const [githubHandle, setGithubHandle] = useState(() => readNormalizedHandle('student_github_handle', parseGithubHandle))
-  const [leetcodeHandle, setLeetcodeHandle] = useState(() => readNormalizedHandle('student_leetcode_handle', parseLeetCodeHandle))
+  const [githubHandle, setGithubHandle] = useState('')
+  const [leetcodeHandle, setLeetcodeHandle] = useState('')
 
   const [editingHandles, setEditingHandles] = useState(false)
   const [tempGithub, setTempGithub] = useState(githubHandle)
@@ -2036,6 +2054,17 @@ export function StudentProfilePage() {
       setValue('graduation_year', data.graduation_year || 2026)
       setValue('skills', data.skills || '')
       setValue('bio', data.bio || '')
+      if (
+        Object.prototype.hasOwnProperty.call(data, 'github_username')
+        && Object.prototype.hasOwnProperty.call(data, 'leetcode_username')
+      ) {
+        setGithubHandle(typeof data.github_username === 'string' ? parseGithubHandle(data.github_username) || '' : '')
+        setLeetcodeHandle(typeof data.leetcode_username === 'string' ? parseLeetCodeHandle(data.leetcode_username) || '' : '')
+        setHandlesLoaded(true)
+        setHandlesError(false)
+      } else {
+        setHandlesError(true)
+      }
       if (data.avatar_url) {
         setAvatarUrl(data.avatar_url)
         useAuthStore.getState().updateAvatar(data.avatar_url)
@@ -2045,6 +2074,7 @@ export function StudentProfilePage() {
       const currentIdentity = `${currentSession?.userId ?? ''}:${currentSession?.email?.trim().toLowerCase() ?? ''}`
       if (currentIdentity === requestedIdentity) {
         setProfileError('Failed to load profile details.')
+        setHandlesError(true)
       }
     } finally {
       const currentSession = useAuthStore.getState().session
@@ -2087,6 +2117,8 @@ export function StudentProfilePage() {
       setLeetcodeHandle('')
       setTempGithub('')
       setTempLeetcode('')
+      setHandlesLoaded(false)
+      setHandlesError(false)
       setVerifiedBadges([])
       setAvatarUrl(null)
       setValue('full_name', '')
@@ -2133,7 +2165,16 @@ export function StudentProfilePage() {
   const onProfileSubmit = async (data: z.infer<typeof profileSchema>) => {
     setProfileError('')
     try {
-      await api.put('/profiles/student', data)
+      const response = await api.put('/profiles/student', data)
+      if (
+        Object.prototype.hasOwnProperty.call(response.data, 'github_username')
+        && Object.prototype.hasOwnProperty.call(response.data, 'leetcode_username')
+      ) {
+        setGithubHandle(typeof response.data.github_username === 'string' ? parseGithubHandle(response.data.github_username) || '' : '')
+        setLeetcodeHandle(typeof response.data.leetcode_username === 'string' ? parseLeetCodeHandle(response.data.leetcode_username) || '' : '')
+        setHandlesLoaded(true)
+        setHandlesError(false)
+      }
       setProfileSaved(true)
       setTimeout(() => setProfileSaved(false), 2000)
     } catch {
@@ -2202,17 +2243,54 @@ export function StudentProfilePage() {
     }
   }
 
-  const handleSaveHandles = () => {
+  const openHandlesEditor = () => {
+    setTempGithub(githubHandle)
+    setTempLeetcode(leetcodeHandle)
+    setEditingHandles(true)
+  }
+
+  const handleSaveHandles = async () => {
     const normalizedGithub = tempGithub.trim() ? parseGithubHandle(tempGithub) : ''
     const normalizedLeetcode = tempLeetcode.trim() ? parseLeetCodeHandle(tempLeetcode) : ''
     if ((tempGithub.trim() && !normalizedGithub) || (tempLeetcode.trim() && !normalizedLeetcode)) return
-    setGithubHandle(normalizedGithub || '')
-    setLeetcodeHandle(normalizedLeetcode || '')
-    if (normalizedGithub) localStorage.setItem('student_github_handle', normalizedGithub)
-    else localStorage.removeItem('student_github_handle')
-    if (normalizedLeetcode) localStorage.setItem('student_leetcode_handle', normalizedLeetcode)
-    else localStorage.removeItem('student_leetcode_handle')
-    setEditingHandles(false)
+    setHandlesSaving(true)
+    showToast('Saving developer handles...', 'info')
+    try {
+      const response = await api.put('/profiles/student/handles', {
+        github_username: normalizedGithub || null,
+        leetcode_username: normalizedLeetcode || null,
+      })
+      const savedGithubUsername = response.data.github_username
+      const savedLeetcodeUsername = response.data.leetcode_username
+      if (savedGithubUsername === undefined || savedLeetcodeUsername === undefined) {
+        throw new Error('The saved profile response did not include both handles.')
+      }
+      const savedGithub = savedGithubUsername === null
+        ? ''
+        : typeof savedGithubUsername === 'string'
+          ? parseGithubHandle(savedGithubUsername)
+          : null
+      const savedLeetcode = savedLeetcodeUsername === null
+        ? ''
+        : typeof savedLeetcodeUsername === 'string'
+          ? parseLeetCodeHandle(savedLeetcodeUsername)
+          : null
+      if (savedGithub === null || savedLeetcode === null) {
+        throw new Error('The saved profile response contained invalid handles.')
+      }
+      setGithubHandle(savedGithub)
+      setLeetcodeHandle(savedLeetcode)
+      setTempGithub(savedGithub)
+      setTempLeetcode(savedLeetcode)
+      setHandlesLoaded(true)
+      setHandlesError(false)
+      setEditingHandles(false)
+      showToast('Developer handles saved successfully.', 'success')
+    } catch {
+      showToast('Unable to save developer handles. Please try again.', 'error')
+    } finally {
+      setHandlesSaving(false)
+    }
   }
 
   const githubInputError = tempGithub.trim() && !parseGithubHandle(tempGithub)
@@ -2377,18 +2455,31 @@ export function StudentProfilePage() {
                 <CardDescription>Live synced technical profiles from GitHub and LeetCode.</CardDescription>
               </div>
               <button
-                onClick={() => {
-                  setEditingHandles(!editingHandles)
-                  setTempGithub(githubHandle)
-                  setTempLeetcode(leetcodeHandle)
-                }}
+                onClick={() => editingHandles ? setEditingHandles(false) : openHandlesEditor()}
+                disabled={!handlesLoaded || handlesSaving}
                 className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
               >
                 {editingHandles ? 'Cancel' : 'Edit Handles'}
               </button>
             </CardHeader>
             <CardContent className="space-y-4">
-              {editingHandles ? (
+              {handlesLoaded && !editingHandles && (
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <span className="font-semibold text-slate-700 dark:text-slate-300">GitHub</span>
+                    <p className="mt-0.5 text-slate-500 dark:text-slate-400">{githubHandle ? `Linked: ${githubHandle}` : 'Unlinked'}</p>
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-700 dark:text-slate-300">LeetCode</span>
+                    <p className="mt-0.5 text-slate-500 dark:text-slate-400">{leetcodeHandle ? `Linked: ${leetcodeHandle}` : 'Unlinked'}</p>
+                  </div>
+                </div>
+              )}
+              {!handlesLoaded ? (
+                <div role="status" className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-center text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-400">
+                  {handlesError ? 'Developer handles could not be loaded.' : 'Loading developer handles...'}
+                </div>
+              ) : editingHandles ? (
                 <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl space-y-3 border border-slate-200 dark:border-slate-700">
                   <div>
                     <Input
@@ -2411,7 +2502,7 @@ export function StudentProfilePage() {
                     <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Paste your username or profile link</p>
                   </div>
                   <div className="flex justify-end gap-2 pt-1">
-                    <Button size="sm" variant="primary" onClick={handleSaveHandles} disabled={Boolean(githubInputError || leetcodeInputError)}>
+                    <Button type="button" size="sm" variant="primary" onClick={handleSaveHandles} isLoading={handlesSaving} disabled={handlesSaving || Boolean(githubInputError || leetcodeInputError)}>
                       Save Handles
                     </Button>
                   </div>
@@ -2423,10 +2514,11 @@ export function StudentProfilePage() {
                     <div className="p-4 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/30 dark:bg-slate-800/20 text-center space-y-2 flex flex-col justify-center items-center">
                       <Github className="w-6 h-6 text-slate-400" />
                       <div>
-                        <h4 className="text-xs font-bold text-slate-900 dark:text-white">GitHub Unlinked</h4>
+                        <h4 className="text-xs font-bold text-slate-900 dark:text-white">GitHub</h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">Unlinked</p>
                         <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Connect your GitHub to showcase public repositories and activity.</p>
                       </div>
-                      <Button size="sm" variant="outline" onClick={() => setEditingHandles(true)}>
+                      <Button size="sm" variant="outline" onClick={openHandlesEditor}>
                         Connect GitHub
                       </Button>
                     </div>
@@ -2450,7 +2542,7 @@ export function StudentProfilePage() {
                             : "Couldn't reach GitHub"}
                       </p>
                       {githubError === 'not-found' && (
-                        <Button size="sm" variant="outline" onClick={() => setEditingHandles(true)}>Edit handle</Button>
+                        <Button size="sm" variant="outline" onClick={openHandlesEditor}>Edit handle</Button>
                       )}
                       {githubError === 'network' && (
                         <Button size="sm" variant="outline" onClick={() => setGithubRetry((retry) => retry + 1)}>Retry</Button>
@@ -2510,10 +2602,11 @@ export function StudentProfilePage() {
                         LC
                       </div>
                       <div>
-                        <h4 className="text-xs font-bold text-slate-900 dark:text-white">LeetCode Unlinked</h4>
+                        <h4 className="text-xs font-bold text-slate-900 dark:text-white">LeetCode</h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">Unlinked</p>
                         <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Link your profile to display verified competitive problem solving.</p>
                       </div>
-                      <Button size="sm" variant="outline" onClick={() => setEditingHandles(true)}>
+                      <Button size="sm" variant="outline" onClick={openHandlesEditor}>
                         Connect LeetCode
                       </Button>
                     </div>

@@ -14,7 +14,7 @@ from sqlalchemy import delete, select
 from app.api.v1.dependencies import DbSession, require_roles
 from app.core.config import get_settings
 from app.models import Application, CompanyProfile, Internship, Resume, StudentProfile, User, UserRole
-from app.schemas.profile import CompanyProfileUpdate, ProfileResponse, ResumeResponse, StudentProfileUpdate
+from app.schemas.profile import CompanyProfileUpdate, ProfileResponse, ResumeResponse, StudentHandlesUpdate, StudentProfileUpdate
 from app.services.application_events import record_event
 
 router = APIRouter(prefix="/profiles", tags=["profiles"])
@@ -54,8 +54,21 @@ async def update_student_profile(data: StudentProfileUpdate, user: student_only,
         profile = StudentProfile(user_id=user.id, **data.model_dump())
         db.add(profile)
     else:
-        for key, value in data.model_dump().items():
+        for key, value in data.model_dump(exclude_unset=True).items():
             setattr(profile, key, value)
+    await db.commit()
+    await db.refresh(profile)
+    return profile_response(profile)
+
+
+@router.put("/student/handles", response_model=ProfileResponse)
+async def update_student_handles(data: StudentHandlesUpdate, user: student_only, db: DbSession) -> ProfileResponse:
+    """Persist the authenticated student's GitHub and LeetCode usernames."""
+    profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+    if profile is None:
+        raise HTTPException(404, "Student profile not found")
+    profile.github_username = data.github_username
+    profile.leetcode_username = data.leetcode_username
     await db.commit()
     await db.refresh(profile)
     return profile_response(profile)

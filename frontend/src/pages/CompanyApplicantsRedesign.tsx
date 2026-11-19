@@ -23,6 +23,7 @@ import { SearchBox } from '../components/ui/SearchBox'
 import { showToast } from '../lib/feedback'
 import { confirmAction } from '../lib/feedback'
 import { invalidateCompanyMetrics } from '../hooks/useCompanyMetrics'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
 
 interface CompanyApplicant {
   id: number
@@ -380,9 +381,11 @@ export function CompanyApplicantsRedesign({
     window.setTimeout(() => setToast(''), 5000)
   }
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+  const load = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const params = Object.fromEntries(new URLSearchParams(queryString).entries())
       if (pipeline) {
@@ -404,15 +407,29 @@ export function CompanyApplicantsRedesign({
       }
       setItems(loadedItems)
       setTotal(firstData?.total ?? 0)
+      setError(null)
     } catch (requestError) {
-      console.error('Unable to load company applicants.', requestError)
-      setError('Could not load applicants for this company.')
+      if (!silent) {
+        console.error('Unable to load company applicants.', requestError)
+        setError('Could not load applicants for this company.')
+      }
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [page, pipeline, queryString, view])
 
   useEffect(() => { void load() }, [load])
+  useAutoRefresh(
+    () => load(true),
+    60_000,
+    processingId === null
+      && downloadingResumeId === null
+      && draggedId === null
+      && !activeInterview
+      && !notesApplicant
+      && !reviewApplicant
+      && !savingNote,
+  )
   useEffect(() => {
     const params = new URLSearchParams(queryString)
     setSearch(params.get('search') ?? '')
@@ -498,7 +515,7 @@ export function CompanyApplicantsRedesign({
     try {
       await api.patch(`/applications/${item.id}/status`, { status: nextStatus })
       invalidateCompanyMetrics()
-      await load()
+      await load(true)
     } catch (requestError) {
       console.error(`Unable to move applicant ${item.id} to ${nextStatus}.`, requestError)
       setItems(originalItems)
@@ -788,7 +805,7 @@ export function CompanyApplicantsRedesign({
       )}
 
       {toast && <div role="status" className="fixed bottom-4 right-4 z-50 flex max-w-sm items-start gap-3 rounded-xl bg-slate-900 px-4 py-3 text-sm text-white shadow-xl"><span>{toast}</span><button type="button" aria-label="Dismiss notification" onClick={() => setToast('')}><X className="h-4 w-4" /></button></div>}
-      {activeInterview && <ScheduleInterviewModal isOpen onClose={() => setActiveInterview(null)} applicationId={activeInterview.id} candidateName={activeInterview.student_name ?? undefined} jobTitle={activeInterview.internship_title ?? undefined} onScheduled={() => { setActiveInterview(null); invalidateCompanyMetrics(); void load() }} />}
+      {activeInterview && <ScheduleInterviewModal isOpen onClose={() => setActiveInterview(null)} applicationId={activeInterview.id} candidateName={activeInterview.student_name ?? undefined} jobTitle={activeInterview.internship_title ?? undefined} onScheduled={() => { setActiveInterview(null); invalidateCompanyMetrics(); void load(true) }} />}
       <Modal isOpen={notesApplicant !== null} onClose={() => setNotesApplicant(null)} title="Private recruiter notes" description={`${notesApplicant?.student_name || 'Candidate'} · only visible to your company`}>
         <div className="space-y-3">
           {noteError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-300">{noteError}</p>}

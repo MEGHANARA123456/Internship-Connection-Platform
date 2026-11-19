@@ -22,6 +22,7 @@ from ..chatbot.guardrails import (
     _output_safety_failure,
     contains_markup,
     credential_question_guidance,
+    is_admin_user_directory_summary,
     is_role_capability_question,
     output_is_safe,
     requests_credential_value,
@@ -1179,6 +1180,41 @@ class ChatbotService:
         )
         retrieval_query = normalized_message
         preflight = decide_scope(retrieval_query, [], score_threshold, role_name)
+        if (
+            not preflight.refused
+            and is_admin_user_directory_summary(normalized_message, role_name)
+            and not secret_in_request
+            and not noisy_message
+        ):
+            answer = (
+                "The admin Users page provides the authorized, searchable, paginated "
+                "user directory. Chat can summarize platform information but won’t dump "
+                "users’ personal details."
+            )
+            self.metrics["curated"] += 1
+            self.metrics["answered"] += 1
+            logger.info(
+                "chatbot_request",
+                extra={
+                    "chatbot_meta": {
+                        "path": "curated",
+                        "category": "in_scope",
+                        "latency_ms": round((time.monotonic() - started) * 1000),
+                        "retrieval": "hybrid" if self.vector_available else "bm25",
+                    }
+                },
+            )
+            return ChatResult(
+                answer=answer,
+                links=(("Platform Users", "/admin/users"),),
+                sources=(),
+                source_type="docs",
+                suggested_followups=(),
+                category="in_scope",
+                refused=False,
+                matched_ids=(),
+                refusal_reason=None,
+            )
         curated_matches = (
             _match_curated_question(normalized_message, role_name, self.curated_answers)
             if (
@@ -1237,7 +1273,7 @@ class ChatbotService:
             ):
                 passages = []
         decision = decide_scope(normalized_message, passages, score_threshold, role_name)
-        if secret_in_request:
+        if secret_in_request and decision.category != "injection":
             decision = ScopeDecision("credential", False, True, "credential_detected")
         elif (
             live_answer is not None

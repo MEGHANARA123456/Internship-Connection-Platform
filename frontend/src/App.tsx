@@ -64,7 +64,7 @@ function SessionChangedBanner() {
 
   if (!changed) return null
   return (
-    <div role="alert" className="fixed top-3 left-1/2 z-[100] -translate-x-1/2 rounded-lg bg-amber-100 px-4 py-3 text-sm font-medium text-amber-950 shadow-lg">
+    <div role="alert" className={`fixed top-3 left-1/2 ${Z_INDEX.notifications} -translate-x-1/2 rounded-lg bg-amber-100 px-4 py-3 text-sm font-medium text-amber-950 shadow-lg`}>
       Your session changed in another tab. This tab has been reloaded.
     </div>
   )
@@ -93,7 +93,7 @@ function RateLimitNotice() {
 
   if (!message) return null
   return (
-    <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-[100] max-w-sm rounded-lg bg-amber-100 px-4 py-3 text-sm font-medium text-amber-950 shadow-lg">
+    <div role="status" aria-live="polite" className={`fixed bottom-4 right-4 ${Z_INDEX.notifications} max-w-sm rounded-lg bg-amber-100 px-4 py-3 text-sm font-medium text-amber-950 shadow-lg`}>
       {message}
     </div>
   )
@@ -128,6 +128,13 @@ const ApplicationsPage = lazy(async () => ({ default: (await studentPages()).App
 const ApplicationTimelinePage = lazy(async () => ({ default: (await studentPages()).ApplicationTimelinePage }))
 const StudentProfilePage = lazy(async () => ({ default: (await studentPages()).StudentProfilePage }))
 const StudentAnalyticsPage = lazy(async () => ({ default: (await studentPages()).StudentAnalyticsPage }))
+const interviewStudioPages = () => import('./pages/interviews/InterviewStudioPage')
+const InterviewStudioPage = lazy(async () => ({ default: (await interviewStudioPages()).InterviewStudioPage }))
+const InterviewSetupPage = lazy(async () => ({ default: (await import('./pages/interviews/InterviewSetupPage')).InterviewSetupPage }))
+const InterviewSessionPage = lazy(async () => ({ default: (await import('./pages/interviews/InterviewSessionPage')).InterviewSessionPage }))
+const InterviewReportPage = lazy(async () => ({ default: (await import('./pages/interviews/InterviewReportPage')).InterviewReportPage }))
+const InterviewHistoryPage = lazy(async () => ({ default: (await import('./pages/interviews/InterviewHistoryPage')).InterviewHistoryPage }))
+const StudentLearningLibraryPage = lazy(async () => ({ default: (await import('./pages/learning/StudentLearningLibraryPage')).StudentLearningLibraryPage }))
 const skillAssessmentPages = () => import('./pages/SkillAssessmentPages')
 const SkillAssessmentResultPage = lazy(async () => ({ default: (await skillAssessmentPages()).SkillAssessmentResultPage }))
 const SkillAssessmentHistoryPage = lazy(async () => ({ default: (await skillAssessmentPages()).SkillAssessmentHistoryPage }))
@@ -157,11 +164,14 @@ const AdminReportsPage = lazy(async () => ({ default: (await adminPages()).Admin
 const AdminCompanyPostingsPage = lazy(async () => ({ default: (await adminPages()).AdminCompanyPostingsPage }))
 const AdminAuditLogsPage = lazy(async () => ({ default: (await adminPages()).AdminAuditLogsPage }))
 const AdminSkillAssessmentsPage = lazy(async () => ({ default: (await adminPages()).AdminSkillAssessmentsPage }))
+const AdminInterviewStudioPage = lazy(async () => ({ default: (await import('./pages/admin/InterviewStudioAdminPage')).InterviewStudioAdminPage }))
+const AdminLearningLibraryPage = lazy(async () => ({ default: (await import('./pages/admin/AdminLearningLibraryPage')).AdminLearningLibraryPage }))
 const AdminStudentsPage = lazy(async () => ({ default: (await import('./pages/admin/AdminStudentsPage')).AdminStudentsPage }))
 const AdminStudentDetailPage = lazy(async () => ({ default: (await import('./pages/admin/AdminStudentDetailPage')).AdminStudentDetailPage }))
 const AdminCompanyDirectoryPage = lazy(async () => ({ default: (await import('./pages/admin/AdminCompaniesPage')).AdminCompaniesPage }))
 const AdminCompanyDetailPage = lazy(async () => ({ default: (await import('./pages/admin/AdminCompanyDetailPage')).AdminCompanyDetailPage }))
 import { MobileViewSimulator } from './components/ui/MobileViewSimulator'
+import { Z_INDEX } from './lib/zIndex'
 const PrivacyPolicyPage = lazy(async () => ({ default: (await import('./pages/PrivacyPolicyPage')).PrivacyPolicyPage }))
 const PrivacySecurityPage = lazy(async () => ({ default: (await import('./pages/PrivacySecurityPage')).PrivacySecurityPage }))
 const ChatbotWidget = lazy(async () => ({ default: (await import('./chatbot/ChatbotWidget')).ChatbotWidget }))
@@ -222,6 +232,12 @@ export default function App() {
               <Route path={routes.studentProfile} element={<StudentProfilePage />} />
               <Route path={routes.skillHistory} element={<SkillAssessmentHistoryPage />} />
               <Route path={routes.skillResultRoute} element={<SkillAssessmentResultPage />} />
+              <Route path={routes.interviewStudio} element={<InterviewStudioPage />} />
+              <Route path={routes.interviewSetup()} element={<InterviewSetupPage />} />
+              <Route path={routes.interviewSessionRoute} element={<InterviewSessionPage />} />
+              <Route path={routes.interviewReportRoute} element={<InterviewReportPage />} />
+              <Route path={routes.interviewHistory} element={<InterviewHistoryPage />} />
+              <Route path={routes.learningLibrary} element={<StudentLearningLibraryPage />} />
             </Route>
 
             {/* Company Dedicated Routes */}
@@ -275,6 +291,8 @@ export default function App() {
               <Route path={routes.adminCompanyPostingsRoute} element={<AdminCompanyPostingsPage />} />
               <Route path={routes.adminAuditLogsRoute} element={<AdminAuditLogsPage />} />
               <Route path={routes.adminSkills} element={<AdminSkillAssessmentsPage />} />
+              <Route path={routes.adminInterviewStudio} element={<AdminInterviewStudioPage />} />
+              <Route path={routes.adminLearningLibrary} element={<AdminLearningLibraryPage />} />
             </Route>
 
             {/* Privacy & Regulatory Compliance (GDPR / CCPA) */}

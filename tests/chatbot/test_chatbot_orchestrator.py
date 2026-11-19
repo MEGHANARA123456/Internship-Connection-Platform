@@ -3,10 +3,13 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.chatbot.orchestrator import classify_intent, resolve_followup
+from app.chatbot.orchestrator import (
+    INTENT_TOOL_ROLE_TABLE,
+    classify_intent,
+    resolve_followup,
+)
 from app.chatbot.guardrails import detect_cross_account_request
-from app.chatbot.tools.read_only import ToolResult
-from app.chatbot.tools.read_only import execute_read_tool
+from app.chatbot.tools.read_only import TOOL_ROLES, ToolResult, execute_read_tool
 from app.models import Application, CompanyProfile, Internship, StudentProfile, User, UserRole
 
 
@@ -257,7 +260,7 @@ async def test_live_admin_and_public_counts_use_dashboard_rules() -> None:
     ("role", "page", "message", "tool"),
     [
         ("student", "applications", "What is my application status?", "student_applications"),
-        ("company", "company-shortlisted", "Who applied to my internship?", "company_applicants"),
+        ("company", "company-shortlisted", "Who applied to posting 12?", "company_applicants"),
         ("admin", "admin-audit-logs", "Explain recent audit events.", "admin_audit_events"),
     ],
 )
@@ -279,10 +282,10 @@ async def test_frontend_request_payload_is_accepted_for_each_role(
     from app.services.chatbot_service import ChatResult
 
     user = User(id=700 + len(role), email=f"{role}@example.test", role=UserRole(role.upper()))
-    calls: list[tuple[str, int]] = []
+    calls: list[tuple[str, dict, int]] = []
 
-    async def execute(name, _args, authenticated_user, _db):
-        calls.append((name, authenticated_user.id))
+    async def execute(name, args, authenticated_user, _db):
+        calls.append((name, args, authenticated_user.id))
         return ToolResult(name, "A bounded live-data result.", "/applications")
 
     async def answer(_message, _history, _role, _page, **_kwargs):
@@ -322,7 +325,7 @@ async def test_frontend_request_payload_is_accepted_for_each_role(
         ) as client:
             response = await client.post("/api/v1/chatbot/ask", json=payload)
         assert response.status_code == 200, response.text
-        assert calls == [(tool, user.id)]
+        assert calls == [(tool, {}, user.id)]
     finally:
         app.dependency_overrides.pop(get_current_user_optional, None)
         app.dependency_overrides.pop(get_db, None)
@@ -448,6 +451,71 @@ def test_at_least_thirty_role_routing_examples(
         assert intent.tool_name == tool, (role, question, intent)
 
 
+@pytest.mark.parametrize(
+    ("role", "question", "tool"),
+    [
+        ("student", "How can I view my profile completion status?", "student_profile_completeness"),
+        ("student", "How can I check my application status?", "student_applications"),
+        ("student", "How can I see my assessment results?", "student_skill_assessments"),
+        ("student", "How can I check my interview schedule?", "student_interviews"),
+        ("student", "Where can I find my interview meeting link?", "student_interviews"),
+        ("student", "I applied for an internship yesterday. How can I check its progress?", "student_applications"),
+        ("student", "I have Python and SQL skills. How can I find suitable internships?", "student_recommended_internships"),
+        ("student", "Why is my internship application showing pending?", "student_applications"),
+        ("student", "I received a notification but cannot find the related application.", "student_applications"),
+        ("company", "How can I view all my active internships?", "company_internships"),
+        ("company", "How can I view students who applied?", "company_applicants"),
+        ("company", "How can I view upcoming interviews?", "company_interviews"),
+        ("company", "How many students applied to my internships?", "company_analytics"),
+        ("company", "How can I view my hiring statistics?", "company_analytics"),
+        ("company", "Which internship has the most applications?", "company_most_applied_internship"),
+        ("company", "How many applicants are shortlisted?", "company_shortlisted"),
+        ("company", "How can I track my recruitment progress?", "company_pipeline"),
+        ("admin", "How many students were successfully selected?", "admin_selected_student_counts"),
+        ("admin", "Which internships receive the most applications?", "admin_most_applied_internships"),
+    ],
+)
+def test_acceptance_live_data_routes_use_role_scoped_tools(
+    role: str,
+    question: str,
+    tool: str,
+) -> None:
+    intent = classify_intent(question, role)
+
+    assert intent.category == "live_data"
+    assert intent.tool_name == tool
+    assert intent.args == ()
+
+
+def test_explicit_intent_tool_role_table_matches_tool_authorization() -> None:
+    for intent_name, route in INTENT_TOOL_ROLE_TABLE.items():
+        assert intent_name == route.tool_name
+        if route.tool_name == "public_open_internships_count":
+            assert route.required_roles == ("guest", "student")
+        else:
+            assert route.tool_name in TOOL_ROLES
+            assert route.required_roles == (TOOL_ROLES[route.tool_name].value.lower(),)
+
+
+def test_ambiguous_student_internship_check_asks_for_clarification() -> None:
+    intent = classify_intent("How can I check internship?", "student")
+
+    assert intent.category == "rag_help"
+    assert intent.tool_name is None
+    assert intent.needs_clarification
+    assert "application status" in intent.needs_clarification
+
+
+def test_company_resume_help_question_is_not_routed_to_company_analytics() -> None:
+    intent = classify_intent(
+        "A student has applied to my internship but I cannot see their resume. What should I check?",
+        "company",
+    )
+
+    assert intent.category == "rag_help"
+    assert intent.tool_name is None
+
+
 @pytest.mark.anyio
 async def test_live_tool_results_are_not_persisted_or_logged(caplog) -> None:
     from app.chatbot.chatbot_config import ChatbotConfig
@@ -494,6 +562,25 @@ async def test_live_tool_executes_read_only_query_without_writing() -> None:
 
     result = await execute_read_tool("student_applications", {}, student, ReadOnlyDb())
     assert result.answer == "You have no applications."
+
+
+@pytest.mark.anyio
+async def test_recommendations_without_profile_skills_still_point_to_opportunities() -> None:
+    student = SimpleNamespace(id=828, role=UserRole.STUDENT)
+
+    class NoProfileDb:
+        async def scalar(self, *_args, **_kwargs):
+            return None
+
+    result = await execute_read_tool(
+        "student_recommended_internships",
+        {},
+        student,
+        NoProfileDb(),
+    )
+
+    assert "internships" in result.answer
+    assert result.route == "/opportunities"
 
 
 @pytest.mark.anyio
@@ -579,13 +666,152 @@ async def test_student_application_count_tool_uses_own_database_rows() -> None:
 
         result = await execute_read_tool("student_application_counts", {}, student, db)
 
+        assert result.answer.startswith(
+            "You have 7 applications (1 applied, 1 under review, 1 shortlisted, "
+            "1 interview, 2 offers, 1 rejected). Latest:"
+        )
+        assert "+2 more." in result.answer
+        assert result.route == "/applications"
+
     await engine.dispose()
-    assert result.answer.startswith(
-        "You have 7 applications (1 applied, 1 under review, 1 shortlisted, "
-        "1 interview, 2 offers, 1 rejected). Latest:"
-    )
-    assert "+2 more." in result.answer
-    assert result.route == "/applications"
+
+
+@pytest.mark.anyio
+async def test_selected_and_most_applied_tools_return_database_aggregates() -> None:
+    from datetime import date, timedelta
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.models.base import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with sessions() as db:
+        company = User(
+            email="owner@example.test",
+            password_hash="unused",
+            role=UserRole.COMPANY,
+        )
+        other_company = User(
+            email="other-owner@example.test",
+            password_hash="unused",
+            role=UserRole.COMPANY,
+        )
+        selected_student = User(
+            email="selected@example.test",
+            password_hash="unused",
+            role=UserRole.STUDENT,
+        )
+        applicant_student = User(
+            email="applicant@example.test",
+            password_hash="unused",
+            role=UserRole.STUDENT,
+        )
+        other_applicants = [
+            User(
+                email=f"other-applicant-{index}@example.test",
+                password_hash="unused",
+                role=UserRole.STUDENT,
+            )
+            for index in range(3)
+        ]
+        db.add_all((company, other_company, selected_student, applicant_student, *other_applicants))
+        await db.flush()
+        owner_posting = Internship(
+            company_id=company.id,
+            title="Owner Posting",
+            description="A test posting",
+            location="Remote",
+            industry="Technology",
+            duration_months=3,
+            work_mode="REMOTE",
+            deadline=date.today() + timedelta(days=10),
+            status="PUBLISHED",
+        )
+        owner_second_posting = Internship(
+            company_id=company.id,
+            title="Owner Second Posting",
+            description="A second test posting",
+            location="Remote",
+            industry="Technology",
+            duration_months=3,
+            work_mode="REMOTE",
+            deadline=date.today() + timedelta(days=10),
+            status="PUBLISHED",
+        )
+        other_posting = Internship(
+            company_id=other_company.id,
+            title="Other Company Posting",
+            description="A different company's posting",
+            location="Remote",
+            industry="Technology",
+            duration_months=3,
+            work_mode="REMOTE",
+            deadline=date.today() + timedelta(days=10),
+            status="PUBLISHED",
+        )
+        db.add_all((owner_posting, owner_second_posting, other_posting))
+        await db.flush()
+        db.add_all((
+            Application(
+                internship_id=owner_posting.id,
+                student_id=selected_student.id,
+                status="SELECTED",
+            ),
+            Application(
+                internship_id=owner_second_posting.id,
+                student_id=selected_student.id,
+                status="ACCEPTED",
+            ),
+            Application(
+                internship_id=owner_posting.id,
+                student_id=applicant_student.id,
+                status="APPLIED",
+            ),
+            *(
+                Application(
+                    internship_id=other_posting.id,
+                    student_id=student.id,
+                    status="APPLIED",
+                )
+                for student in other_applicants
+            ),
+        ))
+        await db.commit()
+
+        admin = SimpleNamespace(role=UserRole.ADMIN)
+        company_user = SimpleNamespace(id=company.id, role=UserRole.COMPANY)
+        selected = await execute_read_tool("admin_selected_student_counts", {}, admin, db)
+        admin_most_applied = await execute_read_tool(
+            "admin_most_applied_internships",
+            {},
+            admin,
+            db,
+        )
+        company_most_applied = await execute_read_tool(
+            "company_most_applied_internship",
+            {},
+            company_user,
+            db,
+        )
+        company_analytics = await execute_read_tool(
+            "company_analytics",
+            {},
+            company_user,
+            db,
+        )
+
+        assert "1 student has been selected or accepted" in selected.answer
+        assert "Other Company Posting (3 applications)" in admin_most_applied.answer
+        assert "Owner Posting with 2 applications" in company_most_applied.answer
+        assert "Other Company Posting" not in company_most_applied.answer
+        assert "3 active applications" in company_analytics.answer
+        assert company_analytics.route == "/company/analytics"
+
+    await engine.dispose()
 
 
 @pytest.mark.anyio

@@ -9,6 +9,14 @@
 !**/.env.*.example
 *.md
 !/README.md
+!/backend/kb/overview.md
+!/backend/kb/roles.md
+!/backend/kb/privacy-cookies-data-rights.md
+!/backend/kb/troubleshooting.md
+!/backend/kb/search-filters.md
+!/backend/kb/spotting-internship-scams.md
+!/backend/kb/company-posting-closing.md
+!/backend/kb/admin-analytics-reports.md
 
 
 # Python
@@ -46,6 +54,8 @@ backend/storage/resumes/*
 !backend/storage/resumes/.gitkeep
 backend/storage/avatars/*
 !backend/storage/avatars/.gitkeep
+backend/storage/interview_recordings/*
+!backend/storage/interview_recordings/.gitkeep
 backend/storage/*.json
 
 # IDEs & System

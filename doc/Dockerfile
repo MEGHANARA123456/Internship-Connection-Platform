@@ -7,6 +7,9 @@ WORKDIR /app
 # Disable bytecode generation and keep Python logs unbuffered
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=.
 
+# ffprobe is used to validate uploaded audio duration without storing the audio.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg
+
 # Install Python dependencies required by the backend
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

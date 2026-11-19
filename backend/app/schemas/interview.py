@@ -1,0 +1,306 @@
+from datetime import datetime
+import re
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
+
+
+InterviewCategory = Literal["HR", "TECHNICAL", "DATA_SCIENCE", "BEHAVIORAL", "MIXED"]
+InterviewDifficulty = Literal["BEGINNER", "INTERMEDIATE", "ADVANCED"]
+InterviewSessionType = Literal["PRACTICE", "ASSESSMENT"]
+InterviewStatus = Literal[
+    "CREATED",
+    "IN_PROGRESS",
+    "EVALUATION_PENDING",
+    "EVALUATION_FAILED",
+    "COMPLETED",
+    "EXPIRED",
+]
+MockTestFormat = Literal["QUICK_PRACTICE", "STANDARD", "FULL", "TOPIC_WISE"]
+MockTestAttemptMode = Literal["TEXT", "VOICE", "VIDEO"]
+
+
+class InterviewSessionCreate(BaseModel):
+    session_type: InterviewSessionType
+    category: InterviewCategory
+    difficulty: InterviewDifficulty
+    question_count: Literal[5, 10] = 5
+    interview_mode: Literal["TEXT", "VOICE", "VIDEO"] = "TEXT"
+    consent_acknowledged: Literal[True]
+    retake_of_session_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_mixed_question_count(self) -> "InterviewSessionCreate":
+        if self.question_count == 10 and self.category != "MIXED":
+            raise ValueError("Ten-question sessions are available only for MIXED interviews")
+        return self
+
+
+class InterviewAnswerSubmit(BaseModel):
+    question_id: int = Field(gt=0)
+    answer_text: str = Field(min_length=1, max_length=5000)
+    audio_duration_token: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("answer_text")
+    @classmethod
+    def trim_answer(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Answer cannot be empty")
+        return value
+
+
+class InterviewSessionView(BaseModel):
+    id: int
+    mock_test_id: int | None = None
+    mock_test_version: int | None = None
+    session_type: InterviewSessionType
+    interview_mode: str
+    category: InterviewCategory
+    difficulty: InterviewDifficulty
+    question_count: int
+    time_limit_seconds: int
+    status: InterviewStatus
+    consent_acknowledged: bool
+    retake_of_session_id: int | None
+    created_at: datetime
+    started_at: datetime | None
+    expires_at: datetime | None
+    completed_at: datetime | None
+
+
+class InterviewQuestionView(BaseModel):
+    id: int
+    position: int
+    prompt: str
+    hint: str | None
+    is_follow_up: bool
+    answer_submitted: bool
+
+
+class InterviewNextQuestionView(BaseModel):
+    session_status: InterviewStatus
+    question: InterviewQuestionView | None
+    question_limit_reached: bool
+
+
+class InterviewEvaluationView(BaseModel):
+    relevance: int
+    technical_correctness: int
+    completeness: int
+    communication: int
+    structure: int
+    feedback: str
+    strengths: list[str]
+    improvements: list[str]
+
+
+class InterviewAnswerView(BaseModel):
+    answer_id: int
+    evaluation_status: Literal["PENDING", "COMPLETED", "FAILED"]
+    failure_code: str | None = None
+    evaluation: InterviewEvaluationView | None = None
+
+
+class InterviewAnswerReview(BaseModel):
+    question_id: int
+    position: int
+    prompt: str
+    answer_text: str
+    skill_tags: list[str] = Field(default_factory=list)
+    evaluation_status: Literal["PENDING", "COMPLETED", "FAILED"]
+    failure_code: str | None = None
+    evaluation: InterviewEvaluationView | None = None
+    duration_seconds: float | None = None
+    word_count: int | None = None
+    speaking_pace_wpm: float | None = None
+    filler_word_count: int | None = None
+
+
+class InterviewVoiceMetrics(BaseModel):
+    total_duration_seconds: float
+    total_word_count: int
+    average_speaking_pace_wpm: float | None
+    total_filler_word_count: int
+
+
+class InterviewAudioTranscriptView(BaseModel):
+    transcript: str
+    duration_seconds: float
+    duration_token: str
+
+
+class InterviewRecordingConsentRequest(BaseModel):
+    acknowledged: Literal[True]
+    consent_version: str = Field(min_length=1, max_length=50)
+
+
+class InterviewRecordingConsentView(BaseModel):
+    acknowledged: bool
+    consent_version: str
+    acknowledged_at: datetime | None = None
+
+
+class InterviewRecordingView(BaseModel):
+    id: int
+    status: Literal["UPLOADING", "AVAILABLE", "DELETED", "EXPIRED", "FAILED"]
+    mime_type: str
+    chunk_count: int
+    next_chunk_index: int
+    total_bytes: int
+    duration_seconds: float | None
+    retention_expires_at: datetime
+    created_at: datetime
+
+
+class InterviewVideoRecordingState(BaseModel):
+    required_consent_version: str
+    consent: InterviewRecordingConsentView | None = None
+    recording: InterviewRecordingView | None = None
+    recordings: list[InterviewRecordingView] = Field(default_factory=list)
+
+
+class InterviewVideoChunkResult(BaseModel):
+    recording_id: int
+    next_chunk_index: int
+
+
+class InterviewVideoMetrics(BaseModel):
+    session_duration_seconds: float
+
+
+class InterviewReportView(BaseModel):
+    session_id: int
+    status: Literal["PENDING", "COMPLETED", "FAILED"]
+    overall_score: float | None = None
+    rubric_scores: dict[str, float] | None = None
+    answer_count: int
+    summary: str | None = None
+    failure_code: str | None = None
+    evaluations: list[InterviewAnswerReview] = Field(default_factory=list)
+    skill_breakdown: dict[str, float] | None = None
+    voice_metrics: InterviewVoiceMetrics | None = None
+    video_metrics: InterviewVideoMetrics | None = None
+
+
+class MockTestAttemptCreate(BaseModel):
+    session_type: InterviewSessionType | None = None
+    interview_mode: MockTestAttemptMode
+    consent_acknowledged: Literal[True]
+    retake_of_session_id: int | None = Field(default=None, gt=0)
+
+
+class MockTestAttemptSummary(BaseModel):
+    session_id: int
+    test_version: int
+    session_type: InterviewSessionType
+    interview_mode: MockTestAttemptMode
+    status: InterviewStatus
+    created_at: datetime
+    completed_at: datetime | None
+    overall_score: float | None
+    skill_breakdown: dict[str, float] | None = None
+
+
+class MockTestQuestionView(BaseModel):
+    position: int
+    prompt: str
+    skill_tags: list[str]
+
+
+class MockTestView(BaseModel):
+    id: int
+    slug: str
+    title: str
+    description: str
+    category: str
+    difficulty: InterviewDifficulty
+    format: MockTestFormat
+    default_mode: InterviewSessionType
+    question_count: int
+    time_limit_seconds: int
+    estimated_duration_minutes: int
+    skill_tags: list[str]
+    company_style: bool
+    version: int
+    attempt_count: int
+    completed_attempt_count: int
+    latest_score: float | None = None
+    latest_status: InterviewStatus | None = None
+    questions: list[MockTestQuestionView] | None = None
+    attempts: list[MockTestAttemptSummary] = Field(default_factory=list)
+
+
+class MockTestComparisonRequest(BaseModel):
+    attempt_ids: list[int] = Field(min_length=2, max_length=10)
+
+    @field_validator("attempt_ids")
+    @classmethod
+    def require_unique_attempts(cls, value: list[int]) -> list[int]:
+        if any(attempt_id < 1 for attempt_id in value) or len(set(value)) != len(value):
+            raise ValueError("Choose distinct valid attempts")
+        return value
+
+
+class MockTestComparisonView(BaseModel):
+    mock_test_id: int
+    test_version: int
+    attempts: list[MockTestAttemptSummary]
+
+
+class MockTestRecommendationView(BaseModel):
+    weakest_skill: str | None
+    recommended_test: MockTestView | None
+
+
+RubricScore = Annotated[StrictInt, Field(ge=0, le=10)]
+FeedbackItem = Annotated[str, Field(min_length=1, max_length=300)]
+
+
+class InterviewLLMEvaluation(BaseModel):
+    relevance: RubricScore
+    technical_correctness: RubricScore
+    completeness: RubricScore
+    communication: RubricScore
+    structure: RubricScore
+    feedback: str = Field(min_length=1, max_length=1200)
+    strengths: list[FeedbackItem] = Field(max_length=5)
+    improvements: list[FeedbackItem] = Field(max_length=5)
+    follow_up_question: str | None = Field(default=None, max_length=400)
+
+    @field_validator("feedback", mode="before")
+    @classmethod
+    def trim_feedback(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("strengths", "improvements", mode="before")
+    @classmethod
+    def trim_feedback_lists(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        return [item.strip() if isinstance(item, str) else item for item in value]
+
+    @field_validator("follow_up_question", mode="before")
+    @classmethod
+    def trim_follow_up(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+    @model_validator(mode="after")
+    def reject_hiring_decisions(self) -> "InterviewLLMEvaluation":
+        content = " ".join(
+            [
+                self.feedback,
+                *self.strengths,
+                *self.improvements,
+                self.follow_up_question or "",
+            ]
+        ).casefold()
+        if re.search(
+            r"\b(?:hire|hiring|reject|rejection|offer|employ|employment)\b",
+            content,
+        ):
+            raise ValueError("Evaluation must not make hiring decisions")
+        return self

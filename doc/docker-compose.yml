@@ -36,6 +36,24 @@ services:
       MAX_RESUME_SIZE_MB: ${MAX_RESUME_SIZE_MB:-5}
       NOTIFY_EMAIL_ON_ROLE_CLOSE: ${NOTIFY_EMAIL_ON_ROLE_CLOSE:-false}
       RESUME_STORAGE_PATH: ${RESUME_STORAGE_PATH:-/var/lib/internship-platform/resumes}
+      INTERVIEW_LLM_BASE_URL: ${INTERVIEW_LLM_BASE_URL:-https://api.groq.com/openai}
+      INTERVIEW_LLM_MODEL: ${INTERVIEW_LLM_MODEL:-openai/gpt-oss-20b}
+      INTERVIEW_LLM_API_KEY: ${INTERVIEW_LLM_API_KEY:-}
+      INTERVIEW_LLM_TIMEOUT_SECONDS: ${INTERVIEW_LLM_TIMEOUT_SECONDS:-12}
+      INTERVIEW_ALLOWED_PROVIDER_HOSTS: '${INTERVIEW_ALLOWED_PROVIDER_HOSTS:-["api.groq.com"]}'
+      INTERVIEW_STT_BASE_URL: ${INTERVIEW_STT_BASE_URL:-https://api.groq.com/openai}
+      INTERVIEW_STT_MODEL: ${INTERVIEW_STT_MODEL:-whisper-large-v3-turbo}
+      INTERVIEW_STT_API_KEY: ${INTERVIEW_STT_API_KEY:-}
+      INTERVIEW_STT_TIMEOUT_SECONDS: ${INTERVIEW_STT_TIMEOUT_SECONDS:-45}
+      INTERVIEW_STT_MAX_AUDIO_BYTES: ${INTERVIEW_STT_MAX_AUDIO_BYTES:-10485760}
+      INTERVIEW_STT_MAX_DURATION_SECONDS: ${INTERVIEW_STT_MAX_DURATION_SECONDS:-180}
+      INTERVIEW_STT_REQUESTS_PER_MINUTE: ${INTERVIEW_STT_REQUESTS_PER_MINUTE:-5}
+      INTERVIEW_FFPROBE_PATH: ${INTERVIEW_FFPROBE_PATH:-ffprobe}
+      INTERVIEW_VIDEO_STORAGE_PATH: /var/lib/internship-platform/interview-recordings
+      INTERVIEW_VIDEO_MAX_CHUNK_BYTES: ${INTERVIEW_VIDEO_MAX_CHUNK_BYTES:-5242880}
+      INTERVIEW_VIDEO_MAX_BYTES: ${INTERVIEW_VIDEO_MAX_BYTES:-262144000}
+      INTERVIEW_VIDEO_MAX_DURATION_SECONDS: ${INTERVIEW_VIDEO_MAX_DURATION_SECONDS:-1200}
+      INTERVIEW_VIDEO_RETENTION_DAYS: ${INTERVIEW_VIDEO_RETENTION_DAYS:-30}
       CHATBOT_ENABLED: ${CHATBOT_ENABLED:-true}
       CHATBOT_MODE: ${CHATBOT_MODE:-retrieval}
       CHATBOT_PROVIDER: ${CHATBOT_PROVIDER:-anthropic}
@@ -72,6 +90,7 @@ services:
     volumes:
       - ../backend:/app
       - resume_storage:/var/lib/internship-platform/resumes
+      - interview_video_storage:/var/lib/internship-platform/interview-recordings
 
   # Mailpit is used to inspect outbound emails during development.
   mailpit:
@@ -87,6 +106,7 @@ services:
     command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8011/api/v1}
+      VITE_INTERVIEW_TTS_PROVIDER: ${VITE_INTERVIEW_TTS_PROVIDER:-browser}
     volumes:
       - ../frontend:/app
       - frontend_node_modules:/app/node_modules
@@ -106,3 +126,4 @@ volumes:
   postgres_data:
   frontend_node_modules:
   resume_storage:
+  interview_video_storage:

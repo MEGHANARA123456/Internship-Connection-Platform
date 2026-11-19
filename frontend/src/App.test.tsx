@@ -258,6 +258,21 @@ describe('platform shell', () => {
     expect(screen.queryByText('Browse Internships')).toBeNull()
   })
 
+  it('keeps the Interview Studio route student-only', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'company-access-token',
+      refreshToken: 'company-refresh-token',
+      userId: 88,
+      role: 'COMPANY',
+      email: 'company@example.com',
+    })
+    vi.spyOn(api, 'get').mockResolvedValue({ data: [] } as never)
+    render(<MemoryRouter initialEntries={['/interview-studio']}><App /></MemoryRouter>)
+
+    expect(await screen.findByRole('heading', { name: "This page isn't available for your account" })).toBeInTheDocument()
+    expect(screen.queryByText('Practice interviews with AI')).not.toBeInTheDocument()
+  })
+
   it('allows admins to use notifications and their personal mailbox without exposing security codes', async () => {
     useAuthStore.getState().setSession({
       accessToken: 'admin-access-token',

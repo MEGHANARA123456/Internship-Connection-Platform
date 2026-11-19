@@ -19,6 +19,7 @@ import { CandidateActions } from '../components/company/CandidateActions'
 import { ScheduleInterviewModal } from '../components/modals/ScheduleInterviewModal'
 import { Modal } from '../components/ui/Modal'
 import { useAuthStore } from '../store/auth'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import { WelcomeGreeting } from '../components/dashboard/WelcomeGreeting'
 import { KpiCard } from '../components/dashboard/KpiCard'
 import { routes } from '../lib/routes'
@@ -89,20 +90,26 @@ export function CompanyOverviewPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const companyMetrics = useCompanyMetrics()
-  const load = async () => {
-    setLoading(true)
-    setError(false)
+  const load = async (silent = false) => {
+    if (!silent) {
+      setLoading(true)
+      setError(false)
+    }
     try {
       const response = await api.get('/company/overview')
       setData(response.data as CompanyOverviewData)
+      setError(false)
     } catch (requestError) {
-      console.error('Unable to load company overview.', requestError)
-      setError(true)
+      if (!silent) {
+        console.error('Unable to load company overview.', requestError)
+        setError(true)
+      }
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
   useEffect(() => { void load() }, [])
+  useAutoRefresh(() => load(true), 15_000)
 
   const cards = [
     ['Active internships', 'active_roles', routes.companyJobs({ status: 'PUBLISHED' }), <Briefcase className="h-4 w-4" />],
@@ -590,23 +597,31 @@ export function CompanyJobsPage() {
   const [rejectPending, setRejectPending] = useState(false)
   const [closureNote, setClosureNote] = useState('')
   const [closing, setClosing] = useState(false)
-  const fetchJobs = async () => {
-    setLoading(true)
-    setError(null)
+  const fetchJobs = async (silent = false) => {
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const res = await api.get('/internships/mine')
       setJobs(res.data || [])
+      setError(null)
     } catch {
-      setError('Failed to fetch your internship listings.')
+      if (!silent) setError('Failed to fetch your internship listings.')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchJobs()
+    void fetchJobs()
     api.get('/profiles/company').then(({ data }) => setCompanyProfile(data)).catch(() => undefined)
   }, [])
+  useAutoRefresh(
+    () => fetchJobs(true),
+    15_000,
+    !schedulingJob && !closingJob && submittingId === null && !closing,
+  )
 
   const jobTabs = [
     { key: 'ALL', label: 'All' },
@@ -633,7 +648,7 @@ export function CompanyJobsPage() {
   const duplicateJob = async (jobId: number) => {
     try {
       await api.post(`/internships/${jobId}/duplicate`)
-      await fetchJobs()
+      await fetchJobs(true)
     } catch (requestError) {
       console.error(`Unable to duplicate internship ${jobId}.`, requestError)
       showToast('Failed to duplicate internship.', 'error')
@@ -644,7 +659,7 @@ export function CompanyJobsPage() {
     if (!await confirmAction({ title: 'Delete draft internship?', message: 'This cannot be undone.', confirmLabel: 'Delete draft', destructive: true })) return
     try {
       await api.delete(`/internships/${jobId}`)
-      await fetchJobs()
+      await fetchJobs(true)
     } catch (requestError) {
       console.error(`Unable to delete internship draft ${jobId}.`, requestError)
       showToast('Only draft internships can be deleted.', 'error')
@@ -655,7 +670,7 @@ export function CompanyJobsPage() {
     setSubmittingId(jobId)
     try {
       await api.post(`/internships/${jobId}/submit`)
-      fetchJobs()
+      void fetchJobs(true)
     } catch {
       showToast('Failed to submit internship for approval,not approved yet.', 'error')
     } finally {
@@ -686,7 +701,7 @@ export function CompanyJobsPage() {
       })
       setClosingJob(null)
       setClosePreview(null)
-      await fetchJobs()
+      await fetchJobs(true)
     } catch {
       showToast('Failed to close internship.', 'error')
     } finally {
@@ -852,7 +867,7 @@ export function CompanyJobsPage() {
           jobTitle={schedulingJob.title}
           onScheduled={() => {
             invalidateCompanyMetrics()
-            fetchJobs()
+            void fetchJobs(true)
           }}
         />
       )}

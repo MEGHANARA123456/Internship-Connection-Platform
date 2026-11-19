@@ -7,8 +7,6 @@ import re
 import asyncio
 import logging
 
-from fastapi import HTTPException
-
 from app.chatbot.guardrails import (
     OUT_OF_SCOPE_PATTERNS,
     detect_cross_account_request,
@@ -82,6 +80,80 @@ class Intent:
     args: tuple[tuple[str, int | str], ...] = ()
     refusal_reason: str | None = None
     needs_clarification: str | None = None
+
+
+@dataclass(frozen=True)
+class IntentRoute:
+    tool_name: str
+    required_roles: tuple[str, ...]
+
+
+INTENT_TOOL_ROLE_TABLE = {
+    "student_applications": IntentRoute("student_applications", ("student",)),
+    "student_application_counts": IntentRoute("student_application_counts", ("student",)),
+    "student_account_summary": IntentRoute("student_account_summary", ("student",)),
+    "student_interviews": IntentRoute("student_interviews", ("student",)),
+    "student_notifications": IntentRoute("student_notifications", ("student",)),
+    "student_profile_completeness": IntentRoute("student_profile_completeness", ("student",)),
+    "student_saved_internships": IntentRoute("student_saved_internships", ("student",)),
+    "student_recommended_internships": IntentRoute("student_recommended_internships", ("student",)),
+    "student_skill_assessments": IntentRoute("student_skill_assessments", ("student",)),
+    "student_unread_messages": IntentRoute("student_unread_messages", ("student",)),
+    "student_skills_improvement": IntentRoute("student_skills_improvement", ("student",)),
+    "student_skill_gap": IntentRoute("student_skill_gap", ("student",)),
+    "student_skill_retake": IntentRoute("student_skill_retake", ("student",)),
+    "company_applicants": IntentRoute("company_applicants", ("company",)),
+    "company_shortlisted": IntentRoute("company_shortlisted", ("company",)),
+    "company_analytics": IntentRoute("company_analytics", ("company",)),
+    "company_most_applied_internship": IntentRoute(
+        "company_most_applied_internship",
+        ("company",),
+    ),
+    "company_pipeline": IntentRoute("company_pipeline", ("company",)),
+    "company_internships": IntentRoute("company_internships", ("company",)),
+    "company_interviews": IntentRoute("company_interviews", ("company",)),
+    "company_unread_messages": IntentRoute("company_unread_messages", ("company",)),
+    "company_verification_status": IntentRoute("company_verification_status", ("company",)),
+    "company_account_summary": IntentRoute("company_account_summary", ("company",)),
+    "admin_audit_events": IntentRoute("admin_audit_events", ("admin",)),
+    "admin_pending_approvals": IntentRoute("admin_pending_approvals", ("admin",)),
+    "admin_verification_counts": IntentRoute("admin_verification_counts", ("admin",)),
+    "admin_analytics": IntentRoute("admin_analytics", ("admin",)),
+    "admin_skill_assessment_stats": IntentRoute("admin_skill_assessment_stats", ("admin",)),
+    "admin_open_reports": IntentRoute("admin_open_reports", ("admin",)),
+    "admin_platform_summary": IntentRoute("admin_platform_summary", ("admin",)),
+    "admin_company_counts": IntentRoute("admin_company_counts", ("admin",)),
+    "admin_student_counts": IntentRoute("admin_student_counts", ("admin",)),
+    "admin_selected_student_counts": IntentRoute(
+        "admin_selected_student_counts",
+        ("admin",),
+    ),
+    "admin_most_applied_internships": IntentRoute(
+        "admin_most_applied_internships",
+        ("admin",),
+    ),
+    "admin_posting_counts": IntentRoute("admin_posting_counts", ("admin",)),
+    "admin_today_activity": IntentRoute("admin_today_activity", ("admin",)),
+    "admin_recent_registrations": IntentRoute("admin_recent_registrations", ("admin",)),
+    "admin_recent_posting_changes": IntentRoute("admin_recent_posting_changes", ("admin",)),
+    "admin_recent_posting_deletions": IntentRoute(
+        "admin_recent_posting_deletions",
+        ("admin",),
+    ),
+    "admin_security_events": IntentRoute("admin_security_events", ("admin",)),
+    "admin_company_and_posting_counts": IntentRoute(
+        "admin_company_and_posting_counts",
+        ("admin",),
+    ),
+    "admin_chatbot_low_confidence_questions": IntentRoute(
+        "admin_chatbot_low_confidence_questions",
+        ("admin",),
+    ),
+    "public_open_internships_count": IntentRoute(
+        "public_open_internships_count",
+        ("guest", "student"),
+    ),
+}
 
 
 def resolve_followup(
@@ -234,21 +306,6 @@ def _intent_examples_vectors(model_name: str) -> tuple[tuple[str, str, tuple[flo
     )
 
 
-def _internship_id(message: str) -> int | None:
-    """Extract a positive signed-32-bit internship/posting/role identifier, if present."""
-    match = re.search(
-        r"\b(?:internship|posting|role)\s*#?\s*(\d+)\b",
-        message,
-        re.IGNORECASE,
-    )
-    if not match:
-        return None
-    value = int(match.group(1))
-    if value < 1 or value > 2_147_483_647:
-        raise HTTPException(status_code=422, detail="Invalid internship identifier.")
-    return value
-
-
 def _requests_public_open_internships(text: str) -> bool:
     """Recognize requests for current public internship inventory, not generic how-to help."""
     inventory = r"\b(?:internships?|opportunities|roles?|postings?|positions?)\b"
@@ -297,36 +354,39 @@ def classify_intent(message: str, role: str) -> Intent:
             "rag_help",
             needs_clarification="Admin accounts don't have applications. Student applications can be reviewed under Students.",
         )
-    if re.match(
-        r"^\s*(?:how do i|how can i|where can i|where do i|can i)\b",
-        message,
-        re.IGNORECASE,
-    ) and not (
-        normalized_role == "student"
-        and re.search(
-            r"\bwhere (?:can i see|do i see|can i find)\b.{0,30}\bmy\b.{0,25}\bappl(?:ied|y) internships?\b",
-            message,
-            re.IGNORECASE,
-        )
-    ):
-        return Intent("rag_help")
-
     text = _normalize_intent_text(message)
     if re.search(r"\b(?:which|what)\s+(?:date )?period\b|\b(?:last|past) period\b", text):
         return Intent(
             "rag_help",
             needs_clarification="Which date range should I use?",
         )
-    if (
-        normalized_role == "company"
-        and _internship_id(message) is None
-        and re.search(r"\b(?:this|that|the)\s+(?:internship|posting)\b", text)
-        and re.search(r"\b(applicants?|candidates?|shortlist(?:ed)?|applications?)\b", text)
-    ):
-        return Intent(
-            "rag_help",
-            needs_clarification="Which internship should I check? Please provide its posting ID.",
+    def live_or_both(
+        name: str,
+        args: tuple[tuple[str, int | str], ...] = (),
+        include_docs: bool = False,
+    ) -> Intent:
+        """Select live-data routing and include docs when the wording asks for explanation too."""
+        route = INTENT_TOOL_ROLE_TABLE.get(name)
+        if route is None:
+            return Intent(
+                "rag_help",
+                needs_clarification=(
+                    "I couldn’t safely match that request to a live-data service. "
+                    "What specific information do you want to check?"
+                ),
+            )
+        if normalized_role not in route.required_roles:
+            return Intent("out_of_scope", refusal_reason="role_restricted")
+        combined = re.search(
+            r"\b(and also|also explain|and explain|and how|and what|what does .* mean|along with)\b",
+            text,
         )
+        return Intent(
+            "both" if combined or include_docs else "live_data",
+            route.tool_name,
+            args,
+        )
+
     if re.search(r"\b(audits?|admin(?:istrator)?[- ]actions?|admin[- ]events?)\b", text):
         requests_events = re.search(
             r"\b(recent|latest|last|explain|summarize|summary|show|what happened|who did)\b",
@@ -335,18 +395,20 @@ def classify_intent(message: str, role: str) -> Intent:
         if requests_events:
             if normalized_role != "admin":
                 return Intent("out_of_scope", refusal_reason="role_restricted")
-            return Intent("live_data", "admin_audit_events")
+            return live_or_both("admin_audit_events")
 
-    def live_or_both(
-        name: str,
-        args: tuple[tuple[str, int | str], ...] = (),
-    ) -> Intent:
-        """Select live-data routing and include docs when the wording asks for explanation too."""
-        combined = re.search(
-            r"\b(and also|also explain|and explain|and how|and what|what does .* mean|along with)\b",
-            text,
+    if (
+        normalized_role == "company"
+        and re.search(r"\b(?:this|that|the)\s+(?:internship|posting)\b", text)
+        and re.search(r"\b(applicants?|candidates?|shortlist(?:ed)?|applications?)\b", text)
+    ):
+        return Intent(
+            "rag_help",
+            needs_clarification=(
+                "Would you like applicant totals across all your company’s postings, "
+                "or help finding a particular posting in Applicants?"
+            ),
         )
-        return Intent("both" if combined else "live_data", name, args)
 
     if normalized_role == "student":
         if re.search(r"\bfollow up (?:and|also|what about|how about) interview\b", text):
@@ -394,7 +456,7 @@ def classify_intent(message: str, role: str) -> Intent:
             r"|\b(when|how soon|how long)\b.{0,40}\b(retake|retry|take again)\b",
             text,
         ):
-            return Intent("both", "student_skill_retake")
+            return live_or_both("student_skill_retake", include_docs=True)
         if re.search(
             r"\bskill gap\b|\bwhat are my skills\b"
             r"|\bwhere\b.{0,45}\b(?:do i need to|i need to|have to|can i)\s+improve\b"
@@ -419,7 +481,8 @@ def classify_intent(message: str, role: str) -> Intent:
         if re.search(
             r"\b(find|recommend|suggest|show|list)\b.{0,50}\b(internships?|roles?|opportunities)\b"
             r".{0,50}\b(match(?:ing)?|fit)\b.{0,30}\b(my profile|my skills|my background)\b"
-            r"|\b(internships?|roles?)\b.{0,40}\b(match(?:ing)?|fit)\b.{0,30}\bmy profile\b",
+            r"|\b(internships?|roles?)\b.{0,40}\b(match(?:ing)?|fit)\b.{0,30}\bmy profile\b"
+            r"|\b(?:find|suggest|recommend)\b.{0,45}\bsuitable internships?\b",
             text,
         ):
             return live_or_both("student_recommended_internships")
@@ -433,7 +496,8 @@ def classify_intent(message: str, role: str) -> Intent:
             return live_or_both("student_saved_internships")
         if re.search(
             r"\b(how many|number of|count)\b.{0,30}\b(saved|save)\b.{0,30}\b(internships?|roles?)\b"
-            r"|\b(my|show my|list my)\b.{0,25}\b(skill )?(assessments?|badges?)\b"
+            r"|\b(my|show my|list my|see my|view my)\b.{0,45}\b"
+            r"(?:skill )?(?:assessments?|assessment results?|results?|attempts?|badges?)\b"
             r"|\b(how many|number of|count)\b.{0,30}\b(assessments?|badges?)\b",
             text,
         ):
@@ -472,8 +536,22 @@ def classify_intent(message: str, role: str) -> Intent:
             text,
         ):
             return live_or_both("student_unread_messages")
-        if re.search(r"\b(profile completeness|how complete is my profile|what is missing from my profile)\b", text):
+        if re.search(
+            r"\b(profile completeness|how complete is my profile|what is missing from my profile)\b"
+            r"|\b(?:profile completion|completion status)\b.{0,35}\bmy profile\b"
+            r"|\bmy profile\b.{0,35}\b(?:completion|complete)\b",
+            text,
+        ):
             return live_or_both("student_profile_completeness")
+        if re.search(
+            r"\b(?:applied|application|applications?)\b.{0,55}"
+            r"\b(?:progress|status|pending|timeline|check|find)\b"
+            r"|\b(?:progress|status|pending|timeline)\b.{0,55}\b(?:my|this|the) application\b"
+            r"|\bnotification\b.{0,50}\bapplication\b.{0,25}\b(?:find|related|which)\b"
+            r"|\bnotification\b.{0,50}\b(?:find|related|which)\b.{0,30}\bapplication\b",
+            text,
+        ):
+            return live_or_both("student_applications")
         if _requests_public_open_internships(text):
             return live_or_both("public_open_internships_count")
 
@@ -500,31 +578,52 @@ def classify_intent(message: str, role: str) -> Intent:
             r"\b(my (?:shortlisted|shortlist)|show (?:shortlisted|shortlist)|who did i shortlist|"
             r"how many candidates did i shortlist|"
             r"(?:shortlisted|shortlist) candidates?|(?:shortlisted|shortlist) applicants?|"
-            r"how many (?:shortlisted|shortlist)|number of (?:shortlisted|shortlist)|shortlist count)\b",
+            r"how many (?:shortlisted|shortlist)|number of (?:shortlisted|shortlist)|shortlist count)\b"
+            r"|\b(?:how many|count|number of)\b.{0,30}\b(?:applicants?|candidates?)\b"
+            r".{0,20}\bshortlist(?:ed)?\b",
             text,
         ):
-            args = (("internship_id", value),) if (value := _internship_id(message)) else ()
-            return live_or_both("company_shortlisted", args)
+            return live_or_both("company_shortlisted")
+        if re.search(
+            r"\bwhich\b.{0,35}\b(?:internship|posting|role)\b.{0,40}"
+            r"\b(?:most|maximum|highest)\b.{0,20}\bapplications?\b"
+            r"|\b(?:most|maximum|highest)\b.{0,25}\bapplications?\b.{0,35}"
+            r"\b(?:internship|posting|role)\b",
+            text,
+        ):
+            return live_or_both("company_most_applied_internship")
         if re.search(
             r"\b(how many|number of|count)\b.{0,35}\b(interviews?|schedule)\b"
-            r"|\b(show|list)\b.{0,25}\bmy upcoming interviews\b",
+            r"|\b(show|list)\b.{0,25}\bmy upcoming interviews\b"
+            r"|\b(?:upcoming|scheduled)\b.{0,25}\binterviews?\b"
+            r"|\b(?:interviews?|interview schedule)\b.{0,35}\b(?:upcoming|scheduled)\b",
             text,
         ):
             return live_or_both("company_interviews")
         if re.search(
             r"\b(my hiring pipeline|pipeline counts|how many in each stage|"
-            r"how many applications? are in each stage)\b",
+            r"how many applications? are in each stage|recruitment progress|"
+            r"track (?:my )?recruitment)\b",
             text,
         ):
             return live_or_both("company_pipeline")
+        if re.search(r"\b(?:hiring|recruitment) statistics\b|\bmy hiring stats\b", text):
+            return live_or_both("company_analytics")
         if re.search(
-            r"\b(my internships|my internship postings|my internship posting statuses?|my postings|how many internships? do i have|how many postings? do i have|"
+            r"\b(?:how many|count|number of|total)\b.{0,45}"
+            r"\b(?:students?|applicants?|candidates?)\b.{0,35}\b(?:applied|applications?)\b"
+            r"|\b(?:how many|count|number of)\b.{0,35}\b(?:students?|applicants?)\b"
+            r".{0,20}\bapplied to\b",
+            text,
+        ):
+            return live_or_both("company_analytics")
+        if re.search(
+            r"\b(my internships|my active internships|my internship postings|my internship posting statuses?|my postings|how many internships? do i have|how many postings? do i have|"
             r"count my postings|my active postings|active postings|status of my (?:internship|posting)|"
             r"status of (?:internship|posting)|internship status)\b",
             text,
         ):
-            args = (("internship_id", value),) if (value := _internship_id(message)) else ()
-            return live_or_both("company_internships", args)
+            return live_or_both("company_internships")
         if re.search(
             r"\b(?:who|which|show|list|how many|total|count|number of|status of|what)\b.{0,40}\b(?:applicant|applicants|candidate|candidates|application|applications)\b"
             r"|\b(?:show|list|summary)\b.{0,25}\b(?:applicant|applicants|candidate|candidates|application|applications)\b.{0,25}\b(?:status|count|summary|by stage)\b"
@@ -533,8 +632,7 @@ def classify_intent(message: str, role: str) -> Intent:
             r"|\b(?:my|this|the)\b.{0,20}\b(?:applicants?|candidates?)\b",
             text,
         ):
-            args = (("internship_id", value),) if (value := _internship_id(message)) else ()
-            return live_or_both("company_applicants", args)
+            return live_or_both("company_applicants")
         if re.search(
             r"\b(?:(?:my|show my)\s+(?:(?:scheduled|schedule|upcoming)\s+)?interviews?|"
             r"which interviews? have i (?:scheduled|schedule))\b",
@@ -618,6 +716,21 @@ def classify_intent(message: str, role: str) -> Intent:
         ):
             return live_or_both("admin_company_counts")
         if re.search(
+            r"\b(?:how many|count|number of|total)\b.{0,45}\bstudents?\b"
+            r".{0,35}\b(?:successfully )?(?:selected|accepted)\b"
+            r"|\b(?:selected|accepted)\b.{0,35}\bstudents?\b",
+            text,
+        ):
+            return live_or_both("admin_selected_student_counts")
+        if re.search(
+            r"\bwhich\b.{0,35}\b(?:internships?|postings?|roles?)\b.{0,40}"
+            r"\b(?:most|maximum|highest)\b.{0,20}\bapplications?\b"
+            r"|\b(?:most|maximum|highest)\b.{0,25}\bapplications?\b.{0,35}"
+            r"\b(?:internships?|postings?|roles?)\b",
+            text,
+        ):
+            return live_or_both("admin_most_applied_internships")
+        if re.search(
             r"\b(how many|count|number of|total)\b.{0,45}\b(students|student accounts)\b"
             r"|\b(students|student accounts)\b.{0,30}\b(active|registered)\b",
             text,
@@ -677,7 +790,21 @@ def classify_intent(message: str, role: str) -> Intent:
             return live_or_both("admin_open_reports")
 
     if normalized_role in {"guest", "student"} and _requests_public_open_internships(text):
-        return Intent("live_data", "public_open_internships_count")
+        return live_or_both("public_open_internships_count")
+    if (
+        normalized_role == "student"
+        and len(text.split()) <= 8
+        and re.search(r"\b(?:check|track|status|progress)\b", text)
+        and re.search(r"\binternships?\b", text)
+        and not re.search(r"\bapplications?\b|\beligibility\b|\bposting\b", text)
+    ):
+        return Intent(
+            "rag_help",
+            needs_clarification=(
+                "What would you like to check: your application status, an internship’s "
+                "eligibility, or whether a posting is legitimate?"
+            ),
+        )
     return Intent("rag_help")
 
 

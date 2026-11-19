@@ -20,11 +20,13 @@ import { useAuthStore } from '../../store/auth'
 import { useThemeStore } from '../../store/theme'
 import { useViewModeStore } from '../../store/viewMode'
 import { useWebSocketChat } from '../../lib/useWebSocketChat'
+import { Z_INDEX } from '../../lib/zIndex'
 import { Badge } from '../ui/Badge'
 import { SearchBox, type SearchSuggestion } from '../ui/SearchBox'
 import { BottomTabBar } from './BottomTabBar'
 import { Logo } from './Logo'
 import { routes } from '../../lib/routes'
+import { createPortal } from 'react-dom'
 
 type StudentCounts = {
   unread_notifications: number
@@ -52,6 +54,7 @@ const quickLinks: Record<Exclude<NavigationRole, 'GUEST'>, Array<{ label: string
   ],
   ADMIN: [
     { label: 'Notifications & Mailbox', url: routes.notifications },
+    { label: 'AI Interview Studio', url: routes.adminInterviewStudio },
     { label: 'Skill assessments', url: routes.adminSkills },
     { label: 'Verifications', url: routes.adminVerifications },
     { label: 'Users', url: routes.adminUsers() },
@@ -125,13 +128,14 @@ function GlobalSearch({ role }: { role: NavigationRole }) {
       <button type="button" onClick={() => setMobileOpen(true)} aria-label="Open search" className="absolute right-0 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 md:hidden">
         <Search className="h-5 w-5" />
       </button>
-      {mobileOpen && (
-        <div className="glass-overlay fixed inset-0 z-[80] bg-white p-4 dark:bg-slate-950 md:hidden">
+      {mobileOpen && typeof document !== 'undefined' && document.body && createPortal(
+        <div className={`glass-overlay fixed inset-0 ${Z_INDEX.mobileNavigation} bg-white p-4 dark:bg-slate-950 md:hidden`}>
           <div className="mb-4 flex items-center gap-3">
             <div className="flex-1">{searchBox()}</div>
             <button type="button" aria-label="Close search" onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
@@ -404,7 +408,7 @@ export function Navbar() {
 
   return (
     <>
-      <header className="glass-header sticky top-0 z-40 w-full border-b border-slate-200 bg-white/95 shadow-2xs backdrop-blur-xs transition-colors dark:border-slate-800 dark:bg-slate-900/95">
+      <header className={`glass-header sticky top-0 ${Z_INDEX.navbar} w-full border-b border-slate-200 bg-white/95 shadow-2xs backdrop-blur-xs transition-colors dark:border-slate-800 dark:bg-slate-900/95`}>
         <div className="mx-auto flex min-h-[4rem] max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
             <Logo size="md" />

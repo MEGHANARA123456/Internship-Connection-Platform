@@ -49,7 +49,7 @@ def test_migration_config_uses_backend_relative_paths(
 
 @pytest.mark.anyio
 async def test_lifespan_cancels_background_workers_on_exit(monkeypatch: pytest.MonkeyPatch) -> None:
-    created_tasks: list[asyncio.Task[object]] = []
+    worker_tasks: list[asyncio.Task[object]] = []
     original_create_task = asyncio.create_task
 
     async def fake_migrations() -> None:
@@ -68,18 +68,21 @@ async def test_lifespan_cancels_background_workers_on_exit(monkeypatch: pytest.M
         coro: asyncio.Future[object] | Coroutine[object, object, object],
     ) -> asyncio.Task[object]:
         task = original_create_task(coro)
-        created_tasks.append(task)
+        if getattr(coro, "cr_code", None) is fake_worker.__code__:
+            worker_tasks.append(task)
         return task
 
     monkeypatch.setattr("app.main.run_database_migrations", fake_migrations)
+    monkeypatch.setattr("app.main.seed_interview_catalog", fake_migrations)
     monkeypatch.setattr("app.chatbot.rag.ingest.ingest_knowledge", fake_knowledge_ingestion)
     monkeypatch.setattr("app.main.is_port_in_use", lambda port: True)
     monkeypatch.setattr("app.main._interview_reminder_worker", fake_worker)
     monkeypatch.setattr("app.main._interview_expiry_worker", fake_worker)
+    monkeypatch.setattr("app.main._interview_video_retention_worker", fake_worker)
     monkeypatch.setattr("app.main.asyncio.create_task", capture_task)
 
     async with lifespan(app):
         pass
 
-    assert len(created_tasks) == 2
-    assert all(task.cancelled() for task in created_tasks)
+    assert len(worker_tasks) == 3
+    assert all(task.cancelled() for task in worker_tasks)

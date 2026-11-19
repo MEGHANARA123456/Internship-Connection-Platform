@@ -22,6 +22,7 @@ import type { AnalyticsChartKind, ChartDatum } from './RechartsAnalyticsCharts'
 import { KpiCard } from '../dashboard/KpiCard'
 import { routes } from '../../lib/routes'
 import { useCompanyMetrics } from '../../hooks/useCompanyMetrics'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 
 const RechartsAnalyticsCharts = lazy(async () => {
   const module = await import('./RechartsAnalyticsCharts')
@@ -390,11 +391,13 @@ export function UnifiedAnalyticsCard({
   const focusTriggerRef = useRef<HTMLButtonElement>(null)
   const requestId = useRef(0)
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (silent = false) => {
     const currentRequest = ++requestId.current
-    setLoading(true)
-    setRefreshing(true)
-    setError(false)
+    if (!silent) {
+      setLoading(true)
+      setRefreshing(true)
+      setError(false)
+    }
     try {
       const path = variant === 'student'
         ? `/students/me/insights?range=${range}`
@@ -407,9 +410,9 @@ export function UnifiedAnalyticsCard({
         onRefreshed?.()
       }
     } catch {
-      if (currentRequest === requestId.current) setError(true)
+      if (currentRequest === requestId.current && !silent) setError(true)
     } finally {
-      if (currentRequest === requestId.current) {
+      if (currentRequest === requestId.current && !silent) {
         setLoading(false)
         setRefreshing(false)
       }
@@ -419,6 +422,15 @@ export function UnifiedAnalyticsCard({
   useEffect(() => {
     void loadData()
   }, [loadData, refreshKey])
+  useAutoRefresh(
+    () => loadData(true),
+    60_000,
+    !loading
+      && !refreshing
+      && !showRangeMenu
+      && !showFocusMenu
+      && !showInternshipMenu,
+  )
 
   useEffect(() => {
     if (!showRangeMenu && !showFocusMenu && !showInternshipMenu) return

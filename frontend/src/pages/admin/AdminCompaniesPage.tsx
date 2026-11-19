@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Building2 } from 'lucide-react'
 import { api } from '../../api/client'
@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/Button'
 import { EmptyState } from '../../components/ui/EmptyState'
 import { SearchBox } from '../../components/ui/SearchBox'
 import { routes } from '../../lib/routes'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import type { AdminCompany, AdminPage } from './types'
 
 const pageSizes = [10, 20, 50, 100]
@@ -19,6 +20,30 @@ export function AdminCompaniesPage() {
   const [actionId, setActionId] = useState<number | null>(null)
   const [retryKey, setRetryKey] = useState(0)
   const requestKey = params.toString()
+  const requestKeyRef = useRef(requestKey)
+  requestKeyRef.current = requestKey
+
+  const fetchCompanies = async (silent = false, signal?: AbortSignal) => {
+    const key = requestKey
+    const query = new URLSearchParams(key)
+    if (!query.has('page')) query.set('page', '1')
+    if (!query.has('page_size')) query.set('page_size', '20')
+    if (!silent) {
+      setLoading(true)
+      setError(false)
+    }
+    try {
+      const response = await api.get<AdminPage<AdminCompany>>(`/admin/companies?${query.toString()}`, { signal })
+      if (requestKeyRef.current === key) {
+        setData(response.data)
+        setError(false)
+      }
+    } catch {
+      if (!signal?.aborted && requestKeyRef.current === key && !silent) setError(true)
+    } finally {
+      if (!signal?.aborted && requestKeyRef.current === key && !silent) setLoading(false)
+    }
+  }
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -41,21 +66,10 @@ export function AdminCompaniesPage() {
 
   useEffect(() => {
     const controller = new AbortController()
-    const query = new URLSearchParams(requestKey)
-    if (!query.has('page')) query.set('page', '1')
-    if (!query.has('page_size')) query.set('page_size', '20')
-    setLoading(true)
-    setError(false)
-    api.get<AdminPage<AdminCompany>>(`/admin/companies?${query.toString()}`, { signal: controller.signal })
-      .then((response) => setData(response.data))
-      .catch(() => {
-        if (!controller.signal.aborted) setError(true)
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
+    void fetchCompanies(false, controller.signal)
     return () => controller.abort()
   }, [requestKey, retryKey])
+  useAutoRefresh(() => fetchCompanies(true), 15_000, actionId === null)
 
   const companies = useMemo(() => data?.items ?? [], [data])
   const page = Number(params.get('page') || '1')
@@ -85,7 +99,7 @@ export function AdminCompaniesPage() {
     setActionId(company.user_id)
     try {
       await api.post(`/admin/companies/${company.user_id}/verification`, { status, ...(reason ? { reason } : {}) })
-      setRetryKey((value) => value + 1)
+      await fetchCompanies(true)
     } catch {
       setError(true)
     } finally {

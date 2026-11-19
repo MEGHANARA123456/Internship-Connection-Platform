@@ -1,6 +1,8 @@
 """Shared account-erasure service used by privacy and administrator endpoints."""
 
 from pathlib import Path
+import asyncio
+import logging
 from typing import Any
 
 from fastapi import HTTPException
@@ -18,6 +20,7 @@ from app.models import (
     EmailMessage,
     EmailVerificationToken,
     Interview,
+    InterviewRecording,
     Internship,
     Message,
     Notification,
@@ -32,6 +35,8 @@ from app.models import (
     UserRole,
 )
 from app.services.company_documents import company_document_path
+
+logger = logging.getLogger(__name__)
 
 
 async def erase_user(
@@ -49,6 +54,7 @@ async def erase_user(
     """
     resume_path: Path | None = None
     company_document_paths: list[Path] = []
+    interview_video_keys: list[str] = []
 
     try:
         if admin_action and actor is not None and actor.id == target.id:
@@ -67,6 +73,14 @@ async def erase_user(
         resume = await db.scalar(select(Resume).where(Resume.student_id == target.id))
         if resume is not None:
             resume_path = Path(get_settings().resume_storage_path) / resume.stored_filename
+        if target.role == UserRole.STUDENT:
+            interview_video_keys = list(
+                await db.scalars(
+                    select(InterviewRecording.storage_key).where(
+                        InterviewRecording.student_id == target.id
+                    )
+                )
+            )
         if target.role == UserRole.COMPANY:
             documents = await db.scalars(
                 select(CompanyDocument).where(CompanyDocument.company_id == target.id)
@@ -249,6 +263,17 @@ async def erase_user(
             document_path.unlink(missing_ok=True)
         except OSError:
             pass
+    if interview_video_keys:
+        from app.services.interview_video_storage import LocalPrivateInterviewVideoStorage
+
+        storage = LocalPrivateInterviewVideoStorage(
+            get_settings().interview_video_storage_path
+        )
+        for storage_key in interview_video_keys:
+            try:
+                await asyncio.to_thread(storage.delete, storage_key)
+            except OSError:
+                logger.warning("Could not remove a deleted student's interview video file.")
 
     return {
         "success": True,
