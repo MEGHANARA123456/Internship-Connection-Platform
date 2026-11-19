@@ -8,6 +8,7 @@ import { InterviewSessionPage } from './InterviewSessionPage'
 import { InterviewSetupPage } from './InterviewSetupPage'
 import { InterviewStudioPage } from './InterviewStudioPage'
 import * as interviewService from '../../services/interviewService'
+import { confirmAction } from '../../lib/feedback'
 import type {
   InterviewEvaluation,
   InterviewQuestion,
@@ -17,6 +18,7 @@ import type {
 } from '../../types/interview'
 
 vi.mock('../../services/interviewService', () => ({
+  acknowledgeInterviewProctoringConsent: vi.fn(),
   completeInterviewSession: vi.fn(),
   createInterviewSession: vi.fn(),
   deleteInterviewSession: vi.fn(),
@@ -25,8 +27,13 @@ vi.mock('../../services/interviewService', () => ({
   getNextInterviewQuestion: vi.fn(),
   listInterviewSessions: vi.fn(),
   retryInterviewEvaluation: vi.fn(),
+  recordInterviewProctoringEvent: vi.fn(),
   startInterviewSession: vi.fn(),
   submitInterviewAnswer: vi.fn(),
+}))
+vi.mock('../../lib/feedback', () => ({
+  confirmAction: vi.fn().mockResolvedValue(true),
+  showToast: vi.fn(),
 }))
 
 const evaluation: InterviewEvaluation = {
@@ -51,6 +58,8 @@ function makeSession(overrides: Partial<InterviewSession> = {}): InterviewSessio
     time_limit_seconds: 1200,
     status: 'IN_PROGRESS',
     consent_acknowledged: true,
+    proctoring_consent_acknowledged: true,
+    proctoring_max_violations: 3,
     retake_of_session_id: null,
     created_at: '2026-11-18T10:00:00Z',
     started_at: '2026-11-18T10:00:00Z',
@@ -101,6 +110,7 @@ function makeReport(overrides: Partial<InterviewReport> = {}): InterviewReport {
       filler_word_count: null,
     }],
     voice_metrics: null,
+    proctoring_summary: { violation_count: 0, types: {}, total_time_away_ms: 0 },
     ...overrides,
   }
 }
@@ -135,6 +145,12 @@ function renderInterviewPage(path: string) {
 beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(interviewService.createInterviewSession).mockResolvedValue(makeSession({ status: 'CREATED' }))
+  vi.mocked(interviewService.acknowledgeInterviewProctoringConsent).mockResolvedValue()
+  vi.mocked(interviewService.recordInterviewProctoringEvent).mockResolvedValue({
+    violation_count: 1,
+    max_violations: 3,
+    terminated: false,
+  })
   vi.mocked(interviewService.listInterviewSessions).mockResolvedValue([])
   vi.mocked(interviewService.getInterviewSession).mockResolvedValue(makeDetail())
   vi.mocked(interviewService.startInterviewSession).mockResolvedValue(makeSession())
@@ -153,6 +169,7 @@ beforeEach(() => {
   vi.mocked(interviewService.getInterviewReport).mockResolvedValue(makeReport())
   vi.mocked(interviewService.retryInterviewEvaluation).mockResolvedValue(makeReport())
   vi.mocked(interviewService.deleteInterviewSession).mockResolvedValue()
+  vi.mocked(confirmAction).mockResolvedValue(true)
   vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 
@@ -177,6 +194,7 @@ describe('Interview Studio setup', () => {
     expect(screen.getByText(/No hints or feedback during the interview/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', { name: /Assessment/ }))
     fireEvent.click(screen.getByLabelText(/sent to an external AI provider/))
+    fireEvent.click(screen.getByLabelText(/I consent to proctoring/))
     expect(startButton).toBeEnabled()
     fireEvent.click(startButton)
 
@@ -190,6 +208,7 @@ describe('Interview Studio setup', () => {
       consent_acknowledged: true,
     })
     expect(interviewService.startInterviewSession).toHaveBeenCalledWith(17)
+    expect(interviewService.acknowledgeInterviewProctoringConsent).toHaveBeenCalledWith(17)
   })
 
   it('shows the daily limit from a 429 response', async () => {
@@ -199,6 +218,7 @@ describe('Interview Studio setup', () => {
     })
     renderInterviewPage('/interview-studio/setup')
     fireEvent.click(screen.getByLabelText(/sent to an external AI provider/))
+    fireEvent.click(screen.getByLabelText(/I consent to proctoring/))
     fireEvent.click(screen.getByRole('button', { name: 'Start interview' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('limit of five interview sessions today')
   })
@@ -221,6 +241,21 @@ describe('Interview Studio setup', () => {
       interview_mode: 'VOICE',
       consent_acknowledged: true,
     })
+  })
+
+  it('requires proctoring consent before starting a direct text session', async () => {
+    vi.mocked(interviewService.getInterviewSession)
+      .mockResolvedValueOnce(makeDetail('CREATED', { proctoring_consent_acknowledged: false }))
+      .mockResolvedValue(makeDetail('IN_PROGRESS'))
+    renderInterviewPage('/interview-studio/session/17')
+
+    expect(await screen.findByText('Proctoring consent')).toBeInTheDocument()
+    expect(interviewService.startInterviewSession).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Accept and start interview' }))
+
+    expect(await screen.findByText('Tell me about a project you contributed to.')).toBeInTheDocument()
+    expect(interviewService.acknowledgeInterviewProctoringConsent).toHaveBeenCalledWith(17)
+    expect(interviewService.startInterviewSession).toHaveBeenCalledWith(17)
   })
 })
 
@@ -364,12 +399,29 @@ describe('Interview session flow', () => {
     expect(screen.queryByRole('region', { name: 'Interview feedback' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Complete Assessment' }))
     await waitFor(() => expect(interviewService.completeInterviewSession).toHaveBeenCalledWith(17))
-    expect(window.confirm).toHaveBeenCalled()
+    expect(confirmAction).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Complete this assessment?',
+    }))
     expect(await screen.findByRole('heading', { name: 'Interview report' })).toBeInTheDocument()
   })
 })
 
 describe('Interview report and history', () => {
+  it('shows actionable provider setup errors without exposing the technical code', async () => {
+    vi.mocked(interviewService.getInterviewSession).mockResolvedValue(
+      makeDetail('EVALUATION_FAILED'),
+    )
+    vi.mocked(interviewService.getInterviewReport).mockResolvedValue(makeReport({
+      status: 'FAILED',
+      failure_code: 'provider_not_configured',
+      evaluations: [],
+    }))
+    renderInterviewPage('/interview-studio/report/17')
+
+    expect(await screen.findByText('Evaluation is temporarily unavailable, please retry later. Your answers are preserved.')).toBeInTheDocument()
+    expect(screen.queryByText(/provider_not_configured/)).not.toBeInTheDocument()
+  })
+
   it('renders only the server score and study suggestions for completed reports', async () => {
     vi.mocked(interviewService.getInterviewSession).mockResolvedValue(makeDetail('COMPLETED'))
     renderInterviewPage('/interview-studio/report/17')

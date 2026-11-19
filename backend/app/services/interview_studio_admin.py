@@ -16,6 +16,7 @@ from app.models import (
     InterviewAnswer,
     InterviewQuestionBank,
     InterviewQuestion,
+    InterviewProctoringEvent,
     InterviewRecording,
     InterviewReport,
     InterviewSession,
@@ -811,6 +812,14 @@ async def get_analytics(db: AsyncSession, days: int = 30) -> dict[str, Any]:
         )
         or 0
     )
+    proctoring_rows = (
+        await db.execute(
+            select(
+                InterviewProctoringEvent.event_type,
+                InterviewProctoringEvent.event_metadata,
+            ).where(InterviewProctoringEvent.created_at >= since)
+        )
+    ).all()
     started_total = sum(int(row.started or 0) for row in session_rows)
     completed_total = sum(int(row.completed or 0) for row in session_rows)
     usage = {
@@ -834,6 +843,16 @@ async def get_analytics(db: AsyncSession, days: int = 30) -> dict[str, Any]:
         usage["audio_seconds"] += float(audio_seconds or 0)
     report_total = int(report_counts[0] or 0)
     report_failures = int(report_counts[1] or 0)
+    proctoring_types: dict[str, int] = {}
+    proctoring_violation_count = 0
+    proctoring_time_away_ms = 0
+    for event_type, metadata in proctoring_rows:
+        proctoring_time_away_ms += int((metadata or {}).get("duration_away_ms") or 0)
+        if event_type == "FOCUS_RETURN":
+            continue
+        else:
+            proctoring_types[event_type] = proctoring_types.get(event_type, 0) + 1
+            proctoring_violation_count += 1
     return {
         "window_days": min(max(days, 1), 90),
         "daily": [
@@ -865,6 +884,11 @@ async def get_analytics(db: AsyncSession, days: int = 30) -> dict[str, Any]:
         "token_total": usage["token_total"],
         "audio_minutes": round(usage["audio_seconds"] / 60, 2),
         "storage_bytes": storage_bytes,
+        "proctoring": {
+            "violation_count": proctoring_violation_count,
+            "types": proctoring_types,
+            "total_time_away_ms": proctoring_time_away_ms,
+        },
     }
 
 

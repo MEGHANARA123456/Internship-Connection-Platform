@@ -82,6 +82,10 @@ export function LoginPage() {
   const [searchParams] = useSearchParams()
   const setSession = useAuthStore((state) => state.setSession)
   const [serverError, setServerError] = useState('')
+  const [sessionExpired] = useState(() => (
+    searchParams.get('session_expired') === 'true'
+    || window.sessionStorage.getItem('session_expired_message') === 'true'
+  ))
   const [resendingVerification, setResendingVerification] = useState(false)
   const [resendStatus, setResendStatus] = useState('')
 
@@ -97,6 +101,10 @@ export function LoginPage() {
   const [postLoginPath, setPostLoginPath] = useState<string>(routes.opportunities)
   const demoMode = import.meta.env.VITE_DEMO_MODE === 'true'
   const mailpitUrl = import.meta.env.VITE_MAILPIT_URL
+
+  useEffect(() => {
+    if (sessionExpired) window.sessionStorage.removeItem('session_expired_message')
+  }, [sessionExpired])
 
   const finishLogin = (role: string, isFirstLogin = false) => {
     const requestedTarget = searchParams.get('next')
@@ -377,6 +385,11 @@ export function LoginPage() {
       }
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        {sessionExpired && (
+          <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+            Your session expired. Sign in again to continue.
+          </p>
+        )}
         {serverError && (
           <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg space-y-2 text-xs text-rose-700 font-medium">
             <div className="flex items-start gap-2">

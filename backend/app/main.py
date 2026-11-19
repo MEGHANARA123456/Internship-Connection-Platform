@@ -44,13 +44,16 @@ async def seed_interview_catalog() -> None:
     from app.services.interview_question_seed import seed_interview_question_bank
     from app.services.learning_library_seed import seed_learning_library
     from app.services.mock_test_seed import seed_mock_test_library
+    from app.services.skill_gap_seed import seed_skill_gap_catalog
 
     async with async_session_factory() as db:
         await seed_interview_question_bank(db)
         seeded_tests = await seed_mock_test_library(db)
         learning_seed = await seed_learning_library(db)
+        skill_gap_seed = await seed_skill_gap_catalog(db)
     logger.info("Interview mock test catalog is ready.", extra={"seeded_tests": seeded_tests})
     logger.info("Student learning library is ready.", extra={"learning_catalog": learning_seed})
+    logger.info("Skill gap catalog is ready.", extra={"skill_gap_catalog": skill_gap_seed})
 
 
 async def _interview_reminder_worker() -> None:
@@ -131,6 +134,21 @@ async def _cancel_tasks(*tasks: asyncio.Task | None) -> None:
 async def lifespan(app: FastAPI):
     """Migrate the database, ingest enabled chatbot knowledge, start workers, and stop them on shutdown."""
     await run_database_migrations()
+    settings = get_settings()
+    missing_interview_settings = [
+        name
+        for name, value in (
+            ("INTERVIEW_LLM_API_KEY", settings.interview_llm_api_key),
+            ("INTERVIEW_LLM_MODEL", settings.interview_llm_model),
+            ("INTERVIEW_LLM_BASE_URL", settings.interview_llm_base_url),
+        )
+        if not value.strip()
+    ]
+    if missing_interview_settings:
+        logger.warning(
+            "AI provider not configured: set %s",
+            ", ".join(missing_interview_settings),
+        )
     await seed_interview_catalog()
     from app.chatbot.chatbot_config import load_config
     from app.chatbot.rag.ingest import ingest_knowledge

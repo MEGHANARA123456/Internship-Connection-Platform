@@ -12,9 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models import (
     InterviewAnswer,
+    InterviewConsent,
     InterviewEvaluation,
     InterviewQuestion,
     InterviewQuestionBank,
+    InterviewProctoringEvent,
     InterviewReport,
     InterviewSession,
     InterviewStudioDifficulty,
@@ -25,12 +27,16 @@ from app.models import (
     User,
 )
 from app.schemas.interview import (
+    InterviewAnswerRecord,
     InterviewAnswerView,
     InterviewAnswerReview,
     InterviewEvaluationView,
     InterviewLLMEvaluation,
     InterviewNextQuestionView,
     InterviewQuestionView,
+    InterviewProctoringEventCreate,
+    InterviewProctoringEventResult,
+    InterviewProctoringSummary,
     InterviewReportView,
     InterviewSessionCreate,
     InterviewSessionView,
@@ -94,6 +100,8 @@ def _session_view(session: InterviewSession) -> InterviewSessionView:
         time_limit_seconds=session.time_limit_seconds,
         status=session.status,
         consent_acknowledged=session.consent_acknowledged,
+        proctoring_consent_acknowledged=session.proctoring_consent_acknowledged,
+        proctoring_max_violations=session.proctoring_max_violations,
         retake_of_session_id=session.retake_of_session_id,
         created_at=session.created_at,
         started_at=session.started_at,
@@ -244,6 +252,7 @@ async def create_session(
         status="CREATED",
         consent_acknowledged=True,
         consent_acknowledged_at=now,
+        proctoring_max_violations=get_settings().interview_proctoring_max_violations,
         retake_of_session_id=request.retake_of_session_id,
         created_at=now,
     )
@@ -350,6 +359,7 @@ async def create_mock_test_session(
         status="CREATED",
         consent_acknowledged=True,
         consent_acknowledged_at=now,
+        proctoring_max_violations=get_settings().interview_proctoring_max_violations,
         retake_of_session_id=retake_of_session_id,
         created_at=now,
     )
@@ -423,6 +433,61 @@ async def get_session_detail(
     }
 
 
+async def get_session_answers(
+    db: AsyncSession,
+    student_id: int,
+    session_id: int,
+) -> list[InterviewAnswerRecord]:
+    session = await _owned_session(db, student_id, session_id)
+    pairs = await _latest_answer_pairs(db, session.id)
+    return [
+        InterviewAnswerRecord(
+            question_id=question.id,
+            position=question.position,
+            answer_text=answer.answer_text,
+            submitted_at=answer.submitted_at,
+        )
+        for answer, question in pairs
+    ]
+
+
+async def acknowledge_proctoring_consent(
+    db: AsyncSession,
+    student_id: int,
+    session_id: int,
+) -> InterviewSessionView:
+    session = await _owned_session(db, student_id, session_id, lock=True)
+    if session.interview_mode not in {"TEXT", "VIDEO"}:
+        raise InterviewStudioError(422, "proctoring_not_enabled_for_mode")
+    if session.status != "CREATED":
+        raise InterviewStudioError(409, "invalid_session_transition")
+
+    now = _now()
+    if not session.proctoring_consent_acknowledged:
+        consent_exists = await db.scalar(
+            select(InterviewConsent.id).where(
+                InterviewConsent.session_id == session.id,
+                InterviewConsent.consent_type == "PROCTORING",
+                InterviewConsent.version == "1",
+            )
+        )
+        if consent_exists is None:
+            db.add(
+                InterviewConsent(
+                    session_id=session.id,
+                    student_id=student_id,
+                    consent_type="PROCTORING",
+                    version="1",
+                    acknowledged_at=now,
+                )
+            )
+        session.proctoring_consent_acknowledged = True
+        session.proctoring_consent_acknowledged_at = now
+        await db.commit()
+        await db.refresh(session)
+    return _session_view(session)
+
+
 async def start_session(
     db: AsyncSession,
     student_id: int,
@@ -431,6 +496,11 @@ async def start_session(
     session = await _owned_session(db, student_id, session_id, lock=True)
     if session.status != "CREATED":
         raise InterviewStudioError(409, "invalid_session_transition")
+    if (
+        session.interview_mode in {"TEXT", "VIDEO"}
+        and not session.proctoring_consent_acknowledged
+    ):
+        raise InterviewStudioError(409, "proctoring_consent_required")
     now = _now()
     session.status = "IN_PROGRESS"
     session.started_at = now
@@ -991,6 +1061,7 @@ async def _report_view(
     total_duration = sum(answer.duration_seconds or 0 for answer in duration_answers)
     total_word_count = sum(answer.word_count or 0 for answer in voice_answers)
     measured_word_count = sum(answer.word_count or 0 for answer in duration_answers)
+    proctoring_summary = await get_proctoring_summary(db, session.id)
     return InterviewReportView(
         session_id=session.id,
         status=report.status,
@@ -1033,6 +1104,145 @@ async def _report_view(
             if session.interview_mode == "VIDEO" and session.started_at is not None
             else None
         ),
+        proctoring_summary=proctoring_summary,
+    )
+
+
+async def get_proctoring_summary(
+    db: AsyncSession,
+    session_id: int,
+) -> InterviewProctoringSummary:
+    events = list(
+        (
+            await db.scalars(
+                select(InterviewProctoringEvent).where(
+                    InterviewProctoringEvent.session_id == session_id
+                )
+            )
+        ).all()
+    )
+    counts: dict[str, int] = {}
+    total_time_away_ms = 0
+    for event in events:
+        total_time_away_ms += int(
+            (event.event_metadata or {}).get("duration_away_ms") or 0
+        )
+        if event.event_type == "FOCUS_RETURN":
+            continue
+        counts[event.event_type] = counts.get(event.event_type, 0) + 1
+    return InterviewProctoringSummary(
+        violation_count=sum(counts.values()),
+        types=counts,
+        total_time_away_ms=total_time_away_ms,
+    )
+
+
+async def record_proctoring_event(
+    db: AsyncSession,
+    student_id: int,
+    session_id: int,
+    request: InterviewProctoringEventCreate,
+) -> InterviewProctoringEventResult:
+    session = await _owned_session(db, student_id, session_id, lock=True)
+    if session.interview_mode not in {"TEXT", "VIDEO"}:
+        raise InterviewStudioError(422, "proctoring_not_enabled_for_mode")
+    if session.status != "IN_PROGRESS" and not (
+        session.status == "TERMINATED" and request.event_type == "FOCUS_RETURN"
+    ):
+        raise InterviewStudioError(
+            409,
+            "proctoring_session_terminated"
+            if session.status == "TERMINATED"
+            else "invalid_session_transition",
+        )
+
+    event_metadata = {
+        "question_index": request.question_index,
+        "duration_away_ms": request.duration_away_ms,
+    }
+    if request.event_type == "FOCUS_RETURN":
+        pending_focus_events = list(
+            (
+                await db.scalars(
+                    select(InterviewProctoringEvent)
+                    .where(
+                        InterviewProctoringEvent.session_id == session.id,
+                        InterviewProctoringEvent.event_type.in_(
+                            ("TAB_HIDDEN", "WINDOW_BLUR")
+                        ),
+                    )
+                    .order_by(InterviewProctoringEvent.id.desc())
+                    .limit(20)
+                )
+            ).all()
+        )
+        pending_event = next(
+            (
+                event
+                for event in pending_focus_events
+                if (event.event_metadata or {}).get("duration_away_ms") is None
+            ),
+            None,
+        )
+        if pending_event is not None:
+            pending_event.event_metadata = {
+                **(pending_event.event_metadata or {}),
+                "duration_away_ms": request.duration_away_ms,
+            }
+        else:
+            db.add(
+                InterviewProctoringEvent(
+                    session_id=session.id,
+                    user_id=student_id,
+                    event_type=request.event_type,
+                    occurred_at=_aware(request.occurred_at),
+                    event_metadata=event_metadata,
+                )
+            )
+    else:
+        db.add(
+            InterviewProctoringEvent(
+                session_id=session.id,
+                user_id=student_id,
+                event_type=request.event_type,
+                occurred_at=_aware(request.occurred_at),
+                event_metadata=event_metadata,
+            )
+        )
+    await db.flush()
+    violation_count = int(
+        await db.scalar(
+            select(func.count(InterviewProctoringEvent.id)).where(
+                InterviewProctoringEvent.session_id == session.id,
+                InterviewProctoringEvent.event_type != "FOCUS_RETURN",
+            )
+        )
+        or 0
+    )
+    terminated = session.status == "TERMINATED" or (
+        violation_count >= session.proctoring_max_violations
+    )
+    if terminated and session.status != "TERMINATED":
+        session.status = "TERMINATED"
+        session.completed_at = _now()
+        report = await db.scalar(
+            select(InterviewReport).where(
+                InterviewReport.session_id == session.id
+            )
+        )
+        if report is None:
+            report = InterviewReport(session_id=session.id, status="FAILED")
+            db.add(report)
+        report.status = "FAILED"
+        report.failure_code = "proctoring_violations"
+        report.answer_count = len(await _latest_answer_pairs(db, session.id))
+        report.summary = "Interview ended after proctoring violations."
+        report.completed_at = session.completed_at
+    await db.commit()
+    return InterviewProctoringEventResult(
+        violation_count=violation_count,
+        max_violations=session.proctoring_max_violations,
+        terminated=terminated,
     )
 
 

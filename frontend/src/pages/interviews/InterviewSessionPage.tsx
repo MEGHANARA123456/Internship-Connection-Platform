@@ -7,6 +7,7 @@ import { Textarea } from '../../components/ui/Textarea'
 import { InterviewErrorNotice, useInterviewError } from '../../components/interviews/InterviewErrorNotice'
 import { InterviewFeedback } from '../../components/interviews/InterviewFeedback'
 import { InterviewPageLayout } from '../../components/interviews/InterviewPageLayout'
+import { ProctorGuard } from '../../components/interviews/ProctorGuard'
 import { VoiceRoom } from '../../components/interviews/VoiceRoom'
 import {
   VideoInterviewRoom,
@@ -14,7 +15,9 @@ import {
 } from '../../components/interviews/VideoInterviewRoom'
 import { InterviewVideoRecordingPanel } from '../../components/interviews/InterviewVideoRecordingPanel'
 import { routes } from '../../lib/routes'
+import { confirmAction, showToast } from '../../lib/feedback'
 import {
+  acknowledgeInterviewProctoringConsent,
   completeInterviewSession,
   getInterviewSession,
   getNextInterviewQuestion,
@@ -39,7 +42,7 @@ function formatTime(seconds: number): string {
 function failureMessage(code: string | null): string {
   if (!code) return 'This answer could not be evaluated. Your answer is saved.'
   const messages: Record<string, string> = {
-    provider_not_configured: 'Evaluation is not configured. Your answer is saved.',
+    provider_not_configured: 'Evaluation is temporarily unavailable, please retry later. Your answer is saved.',
     provider_timeout: 'Evaluation timed out. Your answer is saved.',
     provider_rate_limited: 'The evaluation service is busy. Your answer is saved.',
     provider_unavailable: 'The evaluation service is unavailable. Your answer is saved.',
@@ -93,11 +96,15 @@ export function InterviewSessionPage() {
       const detail = await getInterviewSession(sessionId)
       let nextSession = detail.session
       setQuestions(detail.questions)
-      if (nextSession.status === 'CREATED') {
+      if (
+        nextSession.status === 'CREATED'
+        && (nextSession.interview_mode === 'VOICE'
+          || nextSession.proctoring_consent_acknowledged)
+      ) {
         nextSession = await startInterviewSession(sessionId)
       }
       setSession(nextSession)
-      if (['EVALUATION_PENDING', 'EVALUATION_FAILED', 'COMPLETED'].includes(nextSession.status)) {
+      if (['EVALUATION_PENDING', 'EVALUATION_FAILED', 'COMPLETED', 'TERMINATED'].includes(nextSession.status)) {
         navigate(routes.interviewReport(sessionId), { replace: true })
         return
       }
@@ -247,14 +254,16 @@ export function InterviewSessionPage() {
   }
 
   const complete = async (endEarly = false) => {
-    if (
-      (session?.session_type === 'ASSESSMENT' || endEarly)
-      && !window.confirm(
-        endEarly
-          ? 'End this interview now? Any unsubmitted answer will be discarded, and saved answers will be evaluated.'
-          : 'Complete this Assessment and evaluate your submitted answers? You cannot add answers afterward.',
-      )
-    ) return
+    if (session?.session_type === 'ASSESSMENT' || endEarly) {
+      const confirmed = await confirmAction({
+        title: endEarly ? 'End interview now?' : 'Complete this assessment?',
+        message: endEarly
+          ? 'Any unsubmitted answer will be discarded, and saved answers will be evaluated.'
+          : 'Your submitted answers will be evaluated. You cannot add answers afterward.',
+        confirmLabel: endEarly ? 'End interview' : 'Complete assessment',
+      })
+      if (!confirmed) return
+    }
     setBusy(true)
     setError('')
     try {
@@ -269,6 +278,11 @@ export function InterviewSessionPage() {
       setBusy(false)
     }
   }
+
+  const canLeaveProctoredRoom = useCallback(
+    () => !voiceBusy && !videoBusy,
+    [videoBusy, voiceBusy],
+  )
 
   if (loading) {
     return <main className="mx-auto w-full max-w-3xl px-4 py-10"><p role="status">Loading your interview…</p></main>
@@ -295,6 +309,63 @@ export function InterviewSessionPage() {
     )
   }
 
+  if (session.status === 'TERMINATED') {
+    return (
+      <InterviewPageLayout title="Interview terminated" description="This interview ended after the configured proctoring violation threshold was reached.">
+        <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+          The event record is flagged for review and is not proof of misconduct.
+        </p>
+        <Link to={routes.interviewReport(session.id)} className="font-semibold text-indigo-700 hover:underline dark:text-indigo-300">View interview report</Link>
+      </InterviewPageLayout>
+    )
+  }
+
+  if (
+    session.status === 'CREATED'
+    && (session.interview_mode === 'TEXT' || session.interview_mode === 'VIDEO')
+    && !session.proctoring_consent_acknowledged
+  ) {
+    const acceptAndStart = async () => {
+      setBusy(true)
+      setError('')
+      try {
+        if (document.fullscreenEnabled && document.documentElement.requestFullscreen) {
+          await document.documentElement.requestFullscreen().catch(() => {
+            showToast('Fullscreen is unavailable; proctoring will continue without fullscreen enforcement.', 'info')
+          })
+        } else {
+          showToast('Fullscreen is unavailable; proctoring will continue without fullscreen enforcement.', 'info')
+        }
+        await acknowledgeInterviewProctoringConsent(session.id)
+        await startInterviewSession(session.id)
+        await loadSession()
+      } catch (consentError) {
+        setError(requestError(consentError, routes.interviewSession(session.id)))
+      } finally {
+        setBusy(false)
+      }
+    }
+    return (
+      <InterviewPageLayout
+        title="Before you begin"
+        description="Proctoring is limited to this active text or video interview."
+      >
+        {error && <InterviewErrorNotice message={error} onRetry={() => void acceptAndStart()} retrying={busy} />}
+        <Card>
+          <CardContent className="space-y-4 py-5">
+            <h2 className="font-semibold text-slate-900 dark:text-white">Proctoring consent</h2>
+            <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700 dark:text-slate-300">
+              <li>Tab visibility and window focus changes, fullscreen exits, and blocked clipboard/shortcut attempts are recorded with timestamps and the current question number.</li>
+              <li>Time away is recorded when focus returns. No screen content is recorded.</li>
+              <li>Browser-side proctoring is a deterrent and can be bypassed. Events are flagged for review, not treated as proof of misconduct.</li>
+            </ul>
+            <Button isLoading={busy} onClick={() => void acceptAndStart()}>Accept and start interview</Button>
+          </CardContent>
+        </Card>
+      </InterviewPageLayout>
+    )
+  }
+
   return (
     <InterviewPageLayout
       title={`${session.category.replaceAll('_', ' ')} ${session.session_type === 'PRACTICE' ? 'Practice' : 'Assessment'}`}
@@ -311,6 +382,14 @@ export function InterviewSessionPage() {
       )}
     >
       {error && <InterviewErrorNotice message={error} onRetry={() => void loadSession()} retrying={loading} />}
+      <ProctorGuard
+        active={session.status === 'IN_PROGRESS' && (session.interview_mode === 'TEXT' || session.interview_mode === 'VIDEO')}
+        sessionId={session.id}
+        questionIndex={question?.position ?? null}
+        maxViolations={session.proctoring_max_violations}
+        onTerminated={() => navigate(routes.interviewReport(session.id), { replace: true })}
+        canExit={canLeaveProctoredRoom}
+      >
       <div className="space-y-2" aria-label="Interview progress">
         <div className="flex justify-between text-sm font-medium text-slate-600 dark:text-slate-300">
           <span>Progress</span>
@@ -384,7 +463,7 @@ export function InterviewSessionPage() {
               <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">
                 Question {question.position} of {session.question_count}{question.is_follow_up ? ' · Follow-up' : ''}
               </p>
-              <h2 ref={headingRef} tabIndex={-1} className="mt-2 text-xl font-semibold leading-8 text-slate-900 focus:outline-none dark:text-white">{question.prompt}</h2>
+              <h2 ref={headingRef} tabIndex={-1} className="mt-2 select-none text-xl font-semibold leading-8 text-slate-900 focus:outline-none dark:text-white">{question.prompt}</h2>
             </div>
 
             {session.session_type === 'PRACTICE' && question.hint && (
@@ -491,6 +570,7 @@ export function InterviewSessionPage() {
         </Link>
         {session.status === 'EVALUATION_PENDING' && <Link to={routes.interviewReport(session.id)} className="text-sm font-semibold text-indigo-700 hover:underline dark:text-indigo-300">View evaluation status</Link>}
       </div>
+      </ProctorGuard>
     </InterviewPageLayout>
   )
 }

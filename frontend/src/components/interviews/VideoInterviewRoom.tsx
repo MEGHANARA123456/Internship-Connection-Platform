@@ -402,7 +402,7 @@ export const VideoInterviewRoom = forwardRef<
               Captions {captionsVisible ? 'on' : 'off'}
             </Button>
           </div>
-          {captionsVisible && <p aria-live="polite" className="rounded-lg bg-slate-50 p-4 text-base leading-7 text-slate-800 dark:bg-slate-800 dark:text-slate-100">{questionText}</p>}
+          {captionsVisible && <p aria-live="polite" className="select-none rounded-lg bg-slate-50 p-4 text-base leading-7 text-slate-800 dark:bg-slate-800 dark:text-slate-100">{questionText}</p>}
         </section>
       </div>
 

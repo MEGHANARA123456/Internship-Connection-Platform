@@ -43,6 +43,7 @@ from app.models.interview_studio import (
     InterviewStudioUsageEvent,
     InterviewQuestion,
     InterviewQuestionBank,
+    InterviewProctoringEvent,
     InterviewRecording,
     InterviewReport,
     InterviewSession,
@@ -59,6 +60,7 @@ from app.models.learning_library import (
     StudentLearningPreference,
     StudentResourceProgress,
 )
+from app.models.skill_gap import RoleSkillRequirement, Skill, SkillGapReport
 
 __all__ = [
     "Application",
@@ -84,6 +86,7 @@ __all__ = [
     "InterviewStudioUsageEvent",
     "InterviewQuestion",
     "InterviewQuestionBank",
+    "InterviewProctoringEvent",
     "InterviewRecording",
     "InterviewReport",
     "InterviewSession",
@@ -110,6 +113,9 @@ __all__ = [
     "StudentLearningBookmark",
     "StudentLearningPreference",
     "StudentResourceProgress",
+    "RoleSkillRequirement",
+    "Skill",
+    "SkillGapReport",
     "User",
     "UserRole",
 ]

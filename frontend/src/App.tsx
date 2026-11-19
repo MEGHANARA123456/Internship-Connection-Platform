@@ -135,6 +135,7 @@ const InterviewSessionPage = lazy(async () => ({ default: (await import('./pages
 const InterviewReportPage = lazy(async () => ({ default: (await import('./pages/interviews/InterviewReportPage')).InterviewReportPage }))
 const InterviewHistoryPage = lazy(async () => ({ default: (await import('./pages/interviews/InterviewHistoryPage')).InterviewHistoryPage }))
 const StudentLearningLibraryPage = lazy(async () => ({ default: (await import('./pages/learning/StudentLearningLibraryPage')).StudentLearningLibraryPage }))
+const SkillInsightsPage = lazy(async () => ({ default: (await import('./pages/skill-insights/SkillInsightsPage')).SkillInsightsPage }))
 const skillAssessmentPages = () => import('./pages/SkillAssessmentPages')
 const SkillAssessmentResultPage = lazy(async () => ({ default: (await skillAssessmentPages()).SkillAssessmentResultPage }))
 const SkillAssessmentHistoryPage = lazy(async () => ({ default: (await skillAssessmentPages()).SkillAssessmentHistoryPage }))
@@ -238,6 +239,7 @@ export default function App() {
               <Route path={routes.interviewReportRoute} element={<InterviewReportPage />} />
               <Route path={routes.interviewHistory} element={<InterviewHistoryPage />} />
               <Route path={routes.learningLibrary} element={<StudentLearningLibraryPage />} />
+              <Route path={routes.skillInsights} element={<SkillInsightsPage />} />
             </Route>
 
             {/* Company Dedicated Routes */}

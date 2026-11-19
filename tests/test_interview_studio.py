@@ -19,6 +19,7 @@ from app.models import (
     InterviewEvaluation,
     InterviewQuestion,
     InterviewQuestionBank,
+    InterviewProctoringEvent,
     InterviewRecording,
     InterviewReport,
     InterviewSession,
@@ -194,15 +195,26 @@ def _session_payload(**overrides) -> dict[str, object]:
 async def _create_session(
     client: AsyncClient,
     headers: dict[str, str],
+    *,
+    proctoring_consent: bool = True,
     **overrides,
 ) -> dict:
+    payload = _session_payload(**overrides)
     response = await client.post(
         "/api/v1/interviews/sessions",
         headers=headers,
-        json=_session_payload(**overrides),
+        json=payload,
     )
     assert response.status_code == 201, response.text
-    return response.json()
+    session = response.json()
+    if proctoring_consent and payload["interview_mode"] in {"TEXT", "VIDEO"}:
+        consent = await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/proctoring-consent",
+            headers=headers,
+        )
+        assert consent.status_code == 200, consent.text
+        session = consent.json()
+    return session
 
 
 async def _start_and_get_question(
@@ -210,6 +222,16 @@ async def _start_and_get_question(
     headers: dict[str, str],
     session_id: int,
 ) -> dict:
+    detail = await client.get(
+        f"/api/v1/interviews/sessions/{session_id}",
+        headers=headers,
+    )
+    if detail.json()["session"]["interview_mode"] in {"TEXT", "VIDEO"}:
+        consent = await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/proctoring-consent",
+            headers=headers,
+        )
+        assert consent.status_code == 200, consent.text
     started = await client.post(
         f"/api/v1/interviews/sessions/{session_id}/start",
         headers=headers,
@@ -449,6 +471,10 @@ async def test_mock_test_question_snapshot_and_skill_based_recommendation(interv
             json={"interview_mode": "TEXT", "consent_acknowledged": True},
         )
         session_id = created.json()["id"]
+        await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/proctoring-consent",
+            headers=headers,
+        )
         started = await client.post(
             f"/api/v1/interviews/sessions/{session_id}/start",
             headers=headers,
@@ -510,6 +536,10 @@ async def test_mock_test_report_calculates_per_skill_scores(interview_env, monke
             },
         )
         session_id = created.json()["id"]
+        await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/proctoring-consent",
+            headers=headers,
+        )
         await client.post(f"/api/v1/interviews/sessions/{session_id}/start", headers=headers)
         for index in range(5):
             question_result = await client.post(
@@ -560,6 +590,163 @@ async def test_auth_consent_and_role_access(interview_env):
     assert company.status_code == 403
     assert admin.status_code == 403
     assert no_consent.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_proctoring_consent_event_ownership_answer_read_and_termination(interview_env):
+    student_id, other_student_id = interview_env["ids"]["students"]
+    student_headers = _headers(student_id)
+    other_headers = _headers(other_student_id)
+    company_headers = _headers(interview_env["ids"]["company"], "COMPANY")
+    admin_headers = _headers(interview_env["ids"]["admin"], "ADMIN")
+    answer_text = "A private answer visible only to its student."
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session = await _create_session(
+            client,
+            student_headers,
+            proctoring_consent=False,
+            session_type="ASSESSMENT",
+        )
+        session_id = session["id"]
+        blocked_start = await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/start",
+            headers=student_headers,
+        )
+        foreign_consent = await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/proctoring-consent",
+            headers=other_headers,
+        )
+        consent = await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/proctoring-consent",
+            headers=student_headers,
+        )
+        started = await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/start",
+            headers=student_headers,
+        )
+        question = (
+            await client.post(
+                f"/api/v1/interviews/sessions/{session_id}/next-question",
+                headers=student_headers,
+            )
+        ).json()["question"]
+        submitted = await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/answers",
+            headers=student_headers,
+            json={"question_id": question["id"], "answer_text": answer_text},
+        )
+        own_answers = await client.get(
+            f"/api/v1/interview-sessions/{session_id}/answers",
+            headers=student_headers,
+        )
+        unauthenticated_answers = await client.get(
+            f"/api/v1/interview-sessions/{session_id}/answers",
+        )
+        canonical_answers = await client.get(
+            f"/api/v1/interviews/sessions/{session_id}/answers",
+            headers=student_headers,
+        )
+        foreign_answers = await client.get(
+            f"/api/v1/interview-sessions/{session_id}/answers",
+            headers=other_headers,
+        )
+        company_answers = await client.get(
+            f"/api/v1/interview-sessions/{session_id}/answers",
+            headers=company_headers,
+        )
+        admin_events = await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/proctoring-events",
+            headers=admin_headers,
+            json={
+                "event_type": "PASTE_ATTEMPT",
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "question_index": 1,
+            },
+        )
+        first_event = await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/proctoring-events",
+            headers=student_headers,
+            json={
+                "event_type": "TAB_HIDDEN",
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "question_index": 1,
+            },
+        )
+        focus_return = await client.post(
+            f"/api/v1/interviews/sessions/{session_id}/proctoring-events",
+            headers=student_headers,
+            json={
+                "event_type": "FOCUS_RETURN",
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "question_index": 1,
+                "duration_away_ms": 1250,
+            },
+        )
+        events = [first_event]
+        for event_type in ("PASTE_ATTEMPT", "FULLSCREEN_EXIT"):
+            events.append(
+                await client.post(
+                    f"/api/v1/interviews/sessions/{session_id}/proctoring-events",
+                    headers=student_headers,
+                    json={
+                        "event_type": event_type,
+                        "occurred_at": datetime.now(timezone.utc).isoformat(),
+                        "question_index": 1,
+                    },
+                )
+            )
+        terminated_session = await client.get(
+            f"/api/v1/interviews/sessions/{session_id}",
+            headers=student_headers,
+        )
+        report = await client.get(
+            f"/api/v1/interviews/sessions/{session_id}/report",
+            headers=student_headers,
+        )
+        analytics = await client.get(
+            "/api/v1/admin/interview-studio/analytics",
+            headers=admin_headers,
+        )
+
+    assert blocked_start.status_code == 409
+    assert blocked_start.json()["detail"] == "proctoring_consent_required"
+    assert foreign_consent.status_code == 404
+    assert consent.status_code == 200
+    assert consent.json()["proctoring_consent_acknowledged"] is True
+    assert started.status_code == 200
+    assert submitted.status_code == 200
+    assert own_answers.json()[0]["answer_text"] == answer_text
+    assert canonical_answers.json() == own_answers.json()
+    assert unauthenticated_answers.status_code == 401
+    assert foreign_answers.status_code == 404
+    assert company_answers.status_code == 403
+    assert admin_events.status_code == 403
+    assert focus_return.status_code == 200
+    assert focus_return.json()["violation_count"] == 1
+    assert [response.json()["violation_count"] for response in events] == [1, 2, 3]
+    assert events[-1].json()["terminated"] is True
+    assert terminated_session.json()["session"]["status"] == "TERMINATED"
+    assert report.status_code == 200
+    assert report.json()["failure_code"] == "proctoring_violations"
+    assert report.json()["proctoring_summary"] == {
+        "violation_count": 3,
+        "types": {"TAB_HIDDEN": 1, "PASTE_ATTEMPT": 1, "FULLSCREEN_EXIT": 1},
+        "total_time_away_ms": 1250,
+    }
+    assert analytics.status_code == 200
+    assert answer_text not in analytics.text
+    async with interview_env["sessions"]() as db:
+        saved_events = list(
+            (
+                await db.scalars(
+                    select(InterviewProctoringEvent).where(
+                        InterviewProctoringEvent.session_id == session_id
+                    )
+                )
+            ).all()
+        )
+    tab_event = next(event for event in saved_events if event.event_type == "TAB_HIDDEN")
+    assert tab_event.event_metadata["duration_away_ms"] == 1250
 
 
 @pytest.mark.anyio
@@ -992,6 +1179,15 @@ async def test_student_delete_cascades_all_interview_data(interview_env, monkeyp
             f"/api/v1/interviews/sessions/{session['id']}/start",
             headers=_headers(student_id),
         )
+        await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/proctoring-events",
+            headers=_headers(student_id),
+            json={
+                "event_type": "COPY_ATTEMPT",
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "question_index": 1,
+            },
+        )
         question = (
             await client.post(
                 f"/api/v1/interviews/sessions/{session['id']}/next-question",
@@ -1017,6 +1213,7 @@ async def test_student_delete_cascades_all_interview_data(interview_env, monkeyp
         assert int(await db.scalar(select(func.count(InterviewAnswer.id))) or 0) == 0
         assert int(await db.scalar(select(func.count(InterviewEvaluation.id))) or 0) == 0
         assert int(await db.scalar(select(func.count(InterviewReport.id))) or 0) == 0
+        assert int(await db.scalar(select(func.count(InterviewProctoringEvent.id))) or 0) == 0
 
 
 @pytest.mark.anyio
@@ -1495,7 +1692,11 @@ async def test_video_recording_requires_versioned_consent_and_is_owner_scoped(in
     assert created.status_code == 201
     assert created.json()["status"] == "UPLOADING"
     async with interview_env["sessions"]() as db:
-        saved = await db.scalar(select(InterviewConsent))
+        saved = await db.scalar(
+            select(InterviewConsent).where(
+                InterviewConsent.consent_type == "VIDEO_RECORDING"
+            )
+        )
         assert saved is not None
         assert saved.version == VIDEO_RECORDING_CONSENT_VERSION
 

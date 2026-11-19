@@ -5,7 +5,9 @@ import { Card, CardContent } from '../../components/ui/Card'
 import { InterviewErrorNotice, useInterviewError } from '../../components/interviews/InterviewErrorNotice'
 import { InterviewPageLayout } from '../../components/interviews/InterviewPageLayout'
 import { routes } from '../../lib/routes'
+import { showToast } from '../../lib/feedback'
 import {
+  acknowledgeInterviewProctoringConsent,
   createInterviewSession,
   getInterviewSession,
   startInterviewSession,
@@ -43,6 +45,7 @@ export function InterviewSetupPage() {
   const [interviewMode, setInterviewMode] = useState<InterviewMode>('TEXT')
   const [questionCount, setQuestionCount] = useState<5 | 10>(5)
   const [consent, setConsent] = useState(false)
+  const [proctoringConsent, setProctoringConsent] = useState(false)
   const [loadingRetake, setLoadingRetake] = useState(Boolean(retakeId))
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -80,7 +83,20 @@ export function InterviewSetupPage() {
 
   const start = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!consent || submitting) return
+    const proctoringRequired = interviewMode === 'TEXT' || interviewMode === 'VIDEO'
+    if (!consent || (proctoringRequired && !proctoringConsent) || submitting) return
+    if (proctoringRequired) {
+      const request = document.fullscreenEnabled
+        ? document.documentElement.requestFullscreen?.()
+        : undefined
+      if (request) {
+        void request.catch(() => {
+          showToast('Fullscreen is unavailable; proctoring will continue without fullscreen enforcement.', 'info')
+        })
+      } else {
+        showToast('Fullscreen is unavailable; proctoring will continue without fullscreen enforcement.', 'info')
+      }
+    }
     setSubmitting(true)
     setError('')
     setCreatedSessionId(null)
@@ -95,6 +111,9 @@ export function InterviewSetupPage() {
         ...(retakeId ? { retake_of_session_id: retakeId } : {}),
       })
       setCreatedSessionId(created.id)
+      if (proctoringRequired) {
+        await acknowledgeInterviewProctoringConsent(created.id)
+      }
       await startInterviewSession(created.id)
       navigate(routes.interviewSession(created.id))
     } catch (startError) {
@@ -190,9 +209,33 @@ export function InterviewSetupPage() {
           </label>
         </div>
 
+        {(interviewMode === 'TEXT' || interviewMode === 'VIDEO') && (
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 dark:border-indigo-900 dark:bg-indigo-950/30">
+            <label htmlFor="interview-proctoring-consent" className="flex cursor-pointer items-start gap-3 text-sm leading-6 text-indigo-950 dark:text-indigo-100">
+              <input
+                id="interview-proctoring-consent"
+                type="checkbox"
+                checked={proctoringConsent}
+                onChange={(event) => setProctoringConsent(event.target.checked)}
+                disabled={submitting}
+                required
+                className="mt-1 h-4 w-4 rounded border-indigo-400 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>
+                I consent to proctoring for this interview. InternSphere records tab visibility and focus changes, fullscreen exits, and blocked clipboard/shortcut attempts, with timestamps, question number, and time away. No screen content is recorded. This browser-side monitoring is a deterrent, may be bypassed, and flags events for review rather than proving misconduct.
+              </span>
+            </label>
+          </div>
+        )}
+
         <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <Link to={routes.interviewStudio} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900">Cancel</Link>
-          <Button type="submit" size="lg" isLoading={submitting} disabled={!consent || loadingRetake}>
+          <Button
+            type="submit"
+            size="lg"
+            isLoading={submitting}
+            disabled={!consent || loadingRetake || ((interviewMode === 'TEXT' || interviewMode === 'VIDEO') && !proctoringConsent)}
+          >
             {retakeId ? 'Create retake' : 'Start interview'}
           </Button>
         </div>

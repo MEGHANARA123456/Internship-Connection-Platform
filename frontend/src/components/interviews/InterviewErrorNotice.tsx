@@ -13,7 +13,7 @@ const knownErrors: Record<string, string> = {
   assessment_answer_already_submitted: 'This Assessment answer was already submitted.',
   invalid_session_transition: 'This interview has changed state. Refresh it before continuing.',
   report_not_found: 'A report is not available for this interview yet.',
-  provider_not_configured: 'Interview evaluation is not configured. Your answer has been saved.',
+  provider_not_configured: 'Evaluation is temporarily unavailable, please retry later. Your answer has been saved.',
   provider_timeout: 'The evaluation service took too long to respond. Your answer has been saved.',
   provider_rate_limited: 'The evaluation service is busy. Your answer has been saved; try again shortly.',
   provider_unavailable: 'The evaluation service is unavailable. Your answer has been saved.',
@@ -52,7 +52,7 @@ export function useInterviewError() {
   const navigate = useNavigate()
   return useCallback((error: unknown, returnTo: string): string => {
     if (interviewErrorStatus(error) === 401) {
-      navigate(routes.login({ next: returnTo }), { replace: true })
+      navigate(routes.login({ next: returnTo, session_expired: true }), { replace: true })
       return ''
     }
     return interviewErrorMessage(error)

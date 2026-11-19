@@ -165,6 +165,16 @@ export function PrivacyPolicyPage() {
           </p>
         </section>
 
+        <section className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900 dark:bg-amber-950/30">
+          <h2 className="text-base font-bold text-slate-900 dark:text-white">Active interview proctoring</h2>
+          <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300">
+            With your separate consent, active text and video mock interviews record tab visibility and window focus changes, fullscreen exits, and blocked clipboard or shortcut attempts. Event records contain the event type, timestamp, question number, and time away; they do not capture screen contents. Proctoring events are retained with the interview session and removed when that session or your account is deleted. Administrators receive aggregated event counts only, not student answers, reports, transcripts, or recording access.
+          </p>
+          <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300">
+            Browser-side controls are a deterrent and can be bypassed. Recorded events are flagged for review and are not treated as proof of misconduct or as a hiring decision.
+          </p>
+        </section>
+
         {/* Section 5 */}
         <section className="space-y-3">
           <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">

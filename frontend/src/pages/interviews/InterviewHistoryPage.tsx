@@ -30,7 +30,7 @@ function formatDate(value: string): string {
 }
 
 function hasReport(session: InterviewSession): boolean {
-  return ['EVALUATION_PENDING', 'EVALUATION_FAILED', 'COMPLETED'].includes(session.status)
+  return ['EVALUATION_PENDING', 'EVALUATION_FAILED', 'COMPLETED', 'TERMINATED'].includes(session.status)
 }
 
 function statusLabel(status: InterviewSession['status']): string {

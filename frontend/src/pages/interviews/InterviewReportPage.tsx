@@ -45,7 +45,7 @@ export function InterviewReportPage() {
         setReport(null)
         return
       }
-      if (!['EVALUATION_PENDING', 'EVALUATION_FAILED', 'COMPLETED'].includes(detail.session.status)) {
+      if (!['EVALUATION_PENDING', 'EVALUATION_FAILED', 'COMPLETED', 'TERMINATED'].includes(detail.session.status)) {
         setReport(null)
         return
       }
@@ -117,7 +117,8 @@ export function InterviewReportPage() {
   }
 
   const pending = session.status === 'EVALUATION_PENDING' || report.status === 'PENDING'
-  const failed = session.status === 'EVALUATION_FAILED' || report.status === 'FAILED'
+  const terminated = session.status === 'TERMINATED'
+  const failed = !terminated && (session.status === 'EVALUATION_FAILED' || report.status === 'FAILED')
   const completed = session.status === 'COMPLETED' && report.status === 'COMPLETED'
   const completedEvaluations = report.evaluations.filter((item) => item.evaluation_status === 'COMPLETED')
   const failedEvaluations = report.evaluations.filter((item) => item.evaluation_status === 'FAILED')
@@ -154,11 +155,37 @@ export function InterviewReportPage() {
         <div role="alert" className="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="font-semibold">Evaluation failed</p>
-            <p className="mt-1">Your answers are preserved. Retry to evaluate unanswered or failed results; successful evaluations will be kept.</p>
-            {report.failure_code && <p className="mt-1 text-xs">Failure code: {report.failure_code}</p>}
+            <p className="mt-1">
+              {report.failure_code === 'provider_not_configured'
+                ? 'Evaluation is temporarily unavailable, please retry later. Your answers are preserved.'
+                : 'Your answers are preserved. Retry to evaluate unanswered or failed results; successful evaluations will be kept.'}
+            </p>
           </div>
           <Button variant="outline" isLoading={retrying} disabled={retrying} onClick={() => void retryEvaluation()}>Retry evaluation</Button>
         </div>
+      )}
+
+      {terminated && (
+        <section aria-label="Proctoring termination" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+          <h2 className="font-semibold">Terminated – proctoring violations</h2>
+          <p className="mt-1">Events are flagged for review and are not treated as proof of misconduct.</p>
+        </section>
+      )}
+
+      {report.proctoring_summary && (
+        <section aria-label="Proctoring violations summary" className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <h2 className="font-semibold text-slate-900 dark:text-white">Proctoring summary</h2>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+            {report.proctoring_summary.violation_count} violation(s) recorded · {Math.round(report.proctoring_summary.total_time_away_ms / 1000)} seconds away
+          </p>
+          {Object.keys(report.proctoring_summary.types).length > 0 && (
+            <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
+              {Object.entries(report.proctoring_summary.types).map(([type, count]) => (
+                <li key={type}>{type.replaceAll('_', ' ').toLowerCase()}: {count}</li>
+              ))}
+            </ul>
+          )}
+        </section>
       )}
 
       {completed && typeof report.overall_score === 'number' && (

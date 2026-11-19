@@ -364,6 +364,17 @@ export function InterviewStudioAdminPage() {
         <pre className="overflow-auto rounded-xl border p-4 text-xs sm:col-span-2">{JSON.stringify(analytics.mode_split ?? {}, null, 2)}</pre>
         <pre className="overflow-auto rounded-xl border p-4 text-xs sm:col-span-2">{JSON.stringify(analytics.daily ?? [], null, 2)}</pre>
       </section>}
+      {analytics && (
+        <section aria-label="Aggregated proctoring analytics" className="rounded-xl border border-slate-200 p-4 dark:border-slate-800">
+          <h2 className="font-semibold">Aggregated proctoring events</h2>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+            {String((analytics.proctoring as Record<string, unknown> | undefined)?.violation_count ?? 0)} violations ·{' '}
+            {Math.round(Number((analytics.proctoring as Record<string, unknown> | undefined)?.total_time_away_ms ?? 0) / 1000)} seconds away
+          </p>
+          <pre className="mt-2 overflow-auto text-xs">{JSON.stringify((analytics.proctoring as Record<string, unknown> | undefined)?.types ?? {}, null, 2)}</pre>
+          <p className="mt-2 text-xs text-slate-500">Aggregated counts only; no student identity, answers, transcripts, or screen content.</p>
+        </section>
+      )}
       {failures && <section className="rounded-xl border border-slate-200 p-4 dark:border-slate-800">
         <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">Sanitized failure monitor</h2><Button variant="secondary" disabled={busy} onClick={() => {
           if (window.confirm('Retry up to 10 failed evaluations? No student content will be returned.')) {

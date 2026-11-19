@@ -15,6 +15,7 @@ InterviewStatus = Literal[
     "EVALUATION_FAILED",
     "COMPLETED",
     "EXPIRED",
+    "TERMINATED",
 ]
 MockTestFormat = Literal["QUICK_PRACTICE", "STANDARD", "FULL", "TOPIC_WISE"]
 MockTestAttemptMode = Literal["TEXT", "VOICE", "VIDEO"]
@@ -62,6 +63,8 @@ class InterviewSessionView(BaseModel):
     time_limit_seconds: int
     status: InterviewStatus
     consent_acknowledged: bool
+    proctoring_consent_acknowledged: bool
+    proctoring_max_violations: int
     retake_of_session_id: int | None
     created_at: datetime
     started_at: datetime | None
@@ -115,6 +118,44 @@ class InterviewAnswerReview(BaseModel):
     word_count: int | None = None
     speaking_pace_wpm: float | None = None
     filler_word_count: int | None = None
+
+
+class InterviewAnswerRecord(BaseModel):
+    question_id: int
+    position: int
+    answer_text: str
+    submitted_at: datetime
+
+
+class InterviewProctoringEventCreate(BaseModel):
+    event_type: Literal[
+        "TAB_HIDDEN",
+        "WINDOW_BLUR",
+        "FULLSCREEN_EXIT",
+        "COPY_ATTEMPT",
+        "CUT_ATTEMPT",
+        "PASTE_ATTEMPT",
+        "CONTEXT_MENU",
+        "DRAG_ATTEMPT",
+        "DROP_ATTEMPT",
+        "SHORTCUT_ATTEMPT",
+        "FOCUS_RETURN",
+    ]
+    occurred_at: datetime
+    question_index: int | None = Field(default=None, ge=1)
+    duration_away_ms: int | None = Field(default=None, ge=0, le=86_400_000)
+
+
+class InterviewProctoringEventResult(BaseModel):
+    violation_count: int
+    max_violations: int
+    terminated: bool
+
+
+class InterviewProctoringSummary(BaseModel):
+    violation_count: int
+    types: dict[str, int]
+    total_time_away_ms: int
 
 
 class InterviewVoiceMetrics(BaseModel):
@@ -181,6 +222,7 @@ class InterviewReportView(BaseModel):
     skill_breakdown: dict[str, float] | None = None
     voice_metrics: InterviewVoiceMetrics | None = None
     video_metrics: InterviewVideoMetrics | None = None
+    proctoring_summary: InterviewProctoringSummary
 
 
 class MockTestAttemptCreate(BaseModel):

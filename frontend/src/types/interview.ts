@@ -9,6 +9,7 @@ export type InterviewSessionStatus =
   | 'EVALUATION_FAILED'
   | 'COMPLETED'
   | 'EXPIRED'
+  | 'TERMINATED'
 export type InterviewEvaluationStatus = 'PENDING' | 'COMPLETED' | 'FAILED'
 
 export interface InterviewSession {
@@ -23,6 +24,8 @@ export interface InterviewSession {
   time_limit_seconds: number
   status: InterviewSessionStatus
   consent_acknowledged: boolean
+  proctoring_consent_acknowledged: boolean
+  proctoring_max_violations: number
   retake_of_session_id: number | null
   created_at: string
   started_at: string | null
@@ -76,6 +79,45 @@ export interface InterviewAnswerResult {
   evaluation_status: InterviewEvaluationStatus
   failure_code: string | null
   evaluation: InterviewEvaluation | null
+}
+
+export interface InterviewAnswerRecord {
+  question_id: number
+  position: number
+  answer_text: string
+  submitted_at: string
+}
+
+export type InterviewProctoringEventType =
+  | 'TAB_HIDDEN'
+  | 'WINDOW_BLUR'
+  | 'FULLSCREEN_EXIT'
+  | 'COPY_ATTEMPT'
+  | 'CUT_ATTEMPT'
+  | 'PASTE_ATTEMPT'
+  | 'CONTEXT_MENU'
+  | 'DRAG_ATTEMPT'
+  | 'DROP_ATTEMPT'
+  | 'SHORTCUT_ATTEMPT'
+  | 'FOCUS_RETURN'
+
+export interface InterviewProctoringEventInput {
+  event_type: InterviewProctoringEventType
+  occurred_at: string
+  question_index: number | null
+  duration_away_ms: number | null
+}
+
+export interface InterviewProctoringEventResult {
+  violation_count: number
+  max_violations: number
+  terminated: boolean
+}
+
+export interface InterviewProctoringSummary {
+  violation_count: number
+  types: Record<string, number>
+  total_time_away_ms: number
 }
 
 export interface InterviewAnswerReview {
@@ -147,6 +189,7 @@ export interface InterviewReport {
   skill_breakdown?: Record<string, number> | null
   voice_metrics: InterviewVoiceMetrics | null
   video_metrics?: InterviewVideoMetrics | null
+  proctoring_summary: InterviewProctoringSummary
 }
 
 export type MockTestFormat = 'QUICK_PRACTICE' | 'STANDARD' | 'FULL' | 'TOPIC_WISE'

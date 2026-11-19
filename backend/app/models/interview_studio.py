@@ -27,7 +27,7 @@ class InterviewSession(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('CREATED', 'IN_PROGRESS', 'EVALUATION_PENDING', "
-            "'EVALUATION_FAILED', 'COMPLETED', 'EXPIRED')",
+            "'EVALUATION_FAILED', 'COMPLETED', 'EXPIRED', 'TERMINATED')",
             name="ck_interview_sessions_status",
         ),
         CheckConstraint(
@@ -83,6 +83,15 @@ class InterviewSession(Base):
     )
     consent_acknowledged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    proctoring_consent_acknowledged: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    proctoring_consent_acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    proctoring_max_violations: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default="3"
     )
     retake_of_session_id: Mapped[int | None] = mapped_column(
         ForeignKey("interview_sessions.id", ondelete="SET NULL"), nullable=True, index=True
@@ -473,7 +482,7 @@ class InterviewConsent(Base):
             name="uq_interview_consents_session_type_version",
         ),
         CheckConstraint(
-            "consent_type IN ('VIDEO_RECORDING')",
+            "consent_type IN ('VIDEO_RECORDING', 'PROCTORING')",
             name="ck_interview_consents_type",
         ),
     )
@@ -494,6 +503,48 @@ class InterviewConsent(Base):
     )
     version: Mapped[str] = mapped_column(String(50), nullable=False)
     acknowledged_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+
+class InterviewProctoringEvent(Base):
+    __tablename__ = "interview_proctoring_events"
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('TAB_HIDDEN', 'WINDOW_BLUR', 'FULLSCREEN_EXIT', "
+            "'COPY_ATTEMPT', 'CUT_ATTEMPT', 'PASTE_ATTEMPT', 'CONTEXT_MENU', "
+            "'DRAG_ATTEMPT', 'DROP_ATTEMPT', 'SHORTCUT_ATTEMPT', "
+            "'FOCUS_RETURN')",
+            name="ck_interview_proctoring_events_type",
+        ),
+        Index(
+            "ix_interview_proctoring_events_session_occurred",
+            "session_id",
+            "occurred_at",
+        ),
+        Index("ix_interview_proctoring_events_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("interview_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    event_metadata: Mapped[dict[str, int | None]] = mapped_column(
+        "metadata", JSON, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),

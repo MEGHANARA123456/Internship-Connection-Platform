@@ -20,7 +20,7 @@ function formatDate(value: string): string {
 }
 
 function sessionDestination(session: InterviewSession): string {
-  return ['EVALUATION_PENDING', 'EVALUATION_FAILED', 'COMPLETED'].includes(session.status)
+  return ['EVALUATION_PENDING', 'EVALUATION_FAILED', 'COMPLETED', 'TERMINATED'].includes(session.status)
     ? routes.interviewReport(session.id)
     : routes.interviewSession(session.id)
 }

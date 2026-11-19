@@ -8,10 +8,13 @@ from app.core.config import get_settings
 from app.models import User, UserRole
 from app.schemas.interview import (
     InterviewAudioTranscriptView,
+    InterviewAnswerRecord,
     InterviewAnswerSubmit,
     InterviewAnswerView,
     InterviewNextQuestionView,
     InterviewReportView,
+    InterviewProctoringEventCreate,
+    InterviewProctoringEventResult,
     InterviewRecordingConsentRequest,
     InterviewRecordingConsentView,
     InterviewRecordingView,
@@ -28,15 +31,18 @@ from app.schemas.interview import (
 )
 from app.services.interview_studio import (
     InterviewStudioError,
+    acknowledge_proctoring_consent,
     complete_session,
     create_session,
     create_mock_test_session,
     delete_session,
     get_report,
+    get_session_answers,
     get_session_detail,
     list_sessions,
     next_question,
     retry_evaluation,
+    record_proctoring_event,
     start_session,
     submit_answer,
     transcribe_voice_answer,
@@ -62,6 +68,7 @@ from app.services.interview_video import (
 )
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
+legacy_router = APIRouter(prefix="/interview-sessions", tags=["interviews"])
 student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))]
 
 
@@ -188,6 +195,50 @@ async def get_interview_session(
     db: DbSession,
 ) -> dict[str, object]:
     return await _execute(get_session_detail(db, user.id, session_id))
+
+
+@router.get(
+    "/sessions/{session_id}/answers",
+    response_model=list[InterviewAnswerRecord],
+)
+@legacy_router.get("/{session_id}/answers", response_model=list[InterviewAnswerRecord])
+async def get_interview_answers(
+    session_id: int,
+    user: student_only,
+    db: DbSession,
+) -> list[InterviewAnswerRecord]:
+    return await _execute(get_session_answers(db, user.id, session_id))
+
+
+@router.post(
+    "/sessions/{session_id}/proctoring-consent",
+    response_model=InterviewSessionView,
+)
+async def post_interview_proctoring_consent(
+    session_id: int,
+    user: student_only,
+    db: DbSession,
+) -> InterviewSessionView:
+    return await _execute(acknowledge_proctoring_consent(db, user.id, session_id))
+
+
+@router.post(
+    "/sessions/{session_id}/proctoring-events",
+    response_model=InterviewProctoringEventResult,
+)
+@legacy_router.post(
+    "/{session_id}/proctoring-events",
+    response_model=InterviewProctoringEventResult,
+)
+async def post_interview_proctoring_event(
+    session_id: int,
+    request: InterviewProctoringEventCreate,
+    user: student_only,
+    db: DbSession,
+) -> InterviewProctoringEventResult:
+    return await _execute(
+        record_proctoring_event(db, user.id, session_id, request)
+    )
 
 
 @router.post(

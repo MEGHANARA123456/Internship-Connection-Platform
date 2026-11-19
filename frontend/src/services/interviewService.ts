@@ -1,9 +1,12 @@
 import { api } from '../api/client'
 import type {
   InterviewAnswerResult,
+  InterviewAnswerRecord,
   InterviewAudioTranscript,
   InterviewNextQuestion,
   InterviewReport,
+  InterviewProctoringEventInput,
+  InterviewProctoringEventResult,
   InterviewSession,
   InterviewSessionCreate,
   InterviewSessionDetail,
@@ -30,6 +33,26 @@ export async function listInterviewSessions(): Promise<InterviewSession[]> {
 
 export async function getInterviewSession(sessionId: number): Promise<InterviewSessionDetail> {
   const { data } = await api.get<InterviewSessionDetail>(`${sessionsPath}/${sessionId}`)
+  return data
+}
+
+export async function getInterviewAnswers(sessionId: number): Promise<InterviewAnswerRecord[]> {
+  const { data } = await api.get<InterviewAnswerRecord[]>(`${sessionsPath}/${sessionId}/answers`)
+  return data
+}
+
+export async function acknowledgeInterviewProctoringConsent(sessionId: number): Promise<void> {
+  await api.post(`${sessionsPath}/${sessionId}/proctoring-consent`)
+}
+
+export async function recordInterviewProctoringEvent(
+  sessionId: number,
+  event: InterviewProctoringEventInput,
+): Promise<InterviewProctoringEventResult> {
+  const { data } = await api.post<InterviewProctoringEventResult>(
+    `${sessionsPath}/${sessionId}/proctoring-events`,
+    event,
+  )
   return data
 }
 
