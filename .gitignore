@@ -72,3 +72,4 @@ backend/.env
 
 
 backup.dump
+backend/storage/
