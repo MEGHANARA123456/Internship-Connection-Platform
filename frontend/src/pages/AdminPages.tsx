@@ -2620,9 +2620,18 @@ export function AdminSkillAssessmentsPage() {
                 key: 'options',
                 header: 'Options',
                 render: (question) => {
-                  const correctAnswers = question.question_type === 'MULTI' ? question.correct_answers ?? [question.correct_index] : [question.correct_index]
-                  const answerLabels = correctAnswers.map((index) => `${index + 1} - '${question.options[index]}'`).join(', ')
-                  return <span className="text-slate-600 dark:text-slate-300">{question.options.length} options · Correct: {answerLabels}</span>
+                  const correctAnswers = question.question_type === 'MULTI'
+                    ? question.correct_answers ?? [question.correct_index]
+                    : [question.correct_index]
+                  const answerLabels = correctAnswers
+                    .map((index) => `${index + 1} - '${question.options[index] ?? ''}'`)
+                    .join(', ')
+
+                  return (
+                    <span className="text-slate-600 dark:text-slate-300">
+                      {`${question.options.length} options · Correct: ${answerLabels}`}
+                    </span>
+                  )
                 },
               },
               {

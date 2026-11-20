@@ -21,6 +21,10 @@
 !/backend/kb/spotting-internship-scams.md
 !/backend/kb/company-posting-closing.md
 !/backend/kb/admin-analytics-reports.md
+!/backend/kb/admin-moderation.md
+!/backend/kb/admin-users.md
+!/backend/kb/admin-moderation-reports.md
+!/backend/kb/admin-account-suspension.md
 
 
 # Python
@@ -66,6 +70,7 @@ backend/storage/interview_recordings/*
 !backend/storage/interview_recordings/.gitkeep
 backend/storage/company_documents/*
 backend/storage/*.json
+backend/storage/company_documents/*
 
 # IDEs & System
 .vscode/
@@ -75,8 +80,6 @@ Thumbs.db
 *.swp
 *.swo
 backend/.env
-
-.env
 
 
 

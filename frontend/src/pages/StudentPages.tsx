@@ -97,6 +97,16 @@ function assessmentTopicForSkill(skill: string): string | null {
   )))?.[0] ?? null
 }
 
+function readNormalizedHandle(key: string, parse: (value: string) => string | null): string {
+  const stored = localStorage.getItem(key) || ''
+  const normalized = stored ? parse(stored) : null
+  if (stored !== (normalized || '')) {
+    if (normalized) localStorage.setItem(key, normalized)
+    else localStorage.removeItem(key)
+  }
+  return normalized || ''
+}
+
 type SavedRoleFilter = 'all' | 'open' | 'applied' | 'closed'
 
 function savedRoleAvailability(job: any): 'OPEN' | 'CLOSED' | 'EXPIRED' | 'UNAVAILABLE' {
@@ -2059,8 +2069,8 @@ export function StudentProfilePage() {
   }
 
   // Developer Social Proof & Badges State
-  const [githubHandle, setGithubHandle] = useState('')
-  const [leetcodeHandle, setLeetcodeHandle] = useState('')
+  const [githubHandle, setGithubHandle] = useState(() => readNormalizedHandle('student_github_handle', parseGithubHandle))
+  const [leetcodeHandle, setLeetcodeHandle] = useState(() => readNormalizedHandle('student_leetcode_handle', parseLeetCodeHandle))
 
   const [editingHandles, setEditingHandles] = useState(false)
   const [tempGithub, setTempGithub] = useState(githubHandle)

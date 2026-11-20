@@ -151,31 +151,21 @@ function CandidateFilters({
 }
 
 function internshipOptions(internships: CompanyInternship[]) {
-  const groupedByTitle = new Map<string, CompanyInternship[]>()
-  for (const internship of internships) {
-    const group = groupedByTitle.get(internship.title) ?? []
-    group.push(internship)
-    groupedByTitle.set(internship.title, group)
-  }
-  const duplicateTitleRanks = new Map<number, number>()
-  for (const group of groupedByTitle.values()) {
-    if (group.length < 2) continue
-    const oldestFirst = [...group].sort((left, right) => {
+  return [...internships]
+    .sort((left, right) => {
+      const titleOrder = left.title.localeCompare(right.title)
+      if (titleOrder !== 0) return titleOrder
+
       const leftDate = Date.parse(left.created_at ?? '')
       const rightDate = Date.parse(right.created_at ?? '')
-      const leftTime = Number.isFinite(leftDate) ? leftDate : Number.POSITIVE_INFINITY
-      const rightTime = Number.isFinite(rightDate) ? rightDate : Number.POSITIVE_INFINITY
-      return leftTime - rightTime || left.id - right.id
+      const leftTime = Number.isFinite(leftDate) ? leftDate : Number.NEGATIVE_INFINITY
+      const rightTime = Number.isFinite(rightDate) ? rightDate : Number.NEGATIVE_INFINITY
+      return rightTime - leftTime || right.id - left.id
     })
-    oldestFirst.forEach((internship, index) => duplicateTitleRanks.set(internship.id, index + 1))
-  }
-  return internships.map((internship) => {
-    const rank = duplicateTitleRanks.get(internship.id)
-    return {
-      label: `${internship.title}${rank ? ` #${rank}` : ''} (${internship.applicant_count ?? 0})`,
+    .map((internship) => ({
+      label: internship.title,
       value: String(internship.id),
-    }
-  })
+    }))
 }
 
 function searchFromParams(params: URLSearchParams) {
