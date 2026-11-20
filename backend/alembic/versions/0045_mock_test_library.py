@@ -136,10 +136,9 @@ def upgrade() -> None:
         "interview_sessions",
         "question_count IN (5, 10, 15, 20)",
     )
-    op.drop_constraint(
-        "ck_interview_sessions_ten_questions_mixed_only",
-        "interview_sessions",
-        type_="check",
+    op.execute(
+        "ALTER TABLE interview_sessions "
+        "DROP CONSTRAINT IF EXISTS ck_interview_sessions_ten_questions_mixed_only"
     )
     op.create_check_constraint(
         "ck_interview_sessions_ten_questions_mixed_only",
