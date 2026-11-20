@@ -4,9 +4,11 @@ import { AlertTriangle, ArrowLeft, Ban, RotateCcw } from 'lucide-react'
 import { api } from '../../api/client'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import { Modal } from '../../components/ui/Modal'
 import { routes } from '../../lib/routes'
 import { showToast } from '../../lib/feedback'
 import type { AdminStudentDetail } from './types'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 
 export function AdminStudentDetailPage() {
   const { userId } = useParams()
@@ -18,21 +20,25 @@ export function AdminStudentDetailPage() {
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const load = async () => {
+  const load = async (silent = false) => {
     if (!userId) return
-    setLoading(true)
-    setError(null)
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const response = await api.get<AdminStudentDetail>(`/admin/students/${userId}`)
       setDetail(response.data)
+      setError(null)
     } catch (requestError) {
       const status = (requestError as { response?: { status?: number } }).response?.status
-      setError(status === 404 ? 'not-found' : 'load')
+      if (!silent) setError(status === 404 ? 'not-found' : 'load')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
   useEffect(() => { void load() }, [userId])
+  useAutoRefresh(() => load(true), 15_000, Boolean(userId) && !busy && !action)
 
   const submitAction = async () => {
     if (!userId || !action || !reason.trim()) return
@@ -41,7 +47,7 @@ export function AdminStudentDetailPage() {
       await api.post(`/admin/users/${userId}/${action}`, { reason: reason.trim() })
       setAction(null)
       setReason('')
-      await load()
+      await load(true)
       showToast(action === 'suspend' ? 'Student suspended.' : 'Student reactivated.', 'success')
     } catch {
       showToast('Could not update this account. Retry the action.', 'error')
@@ -71,7 +77,29 @@ export function AdminStudentDetailPage() {
         <Card className="p-5 dark:bg-slate-900"><h2 className="font-bold">Badges</h2>{detail.badges.length ? <ul className="mt-3 space-y-2">{detail.badges.map((badge, index) => <li key={`${badge.topic}-${badge.issued_at}-${index}`} className="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800"><p className="font-semibold">{badge.title} · {badge.score}%</p><p className="text-xs text-slate-500">{badge.valid ? 'Valid' : 'Expired'} · expires {new Date(badge.expires_at).toLocaleDateString()}</p></li>)}</ul> : <p className="mt-3 text-sm text-slate-500">No badges earned.</p>}</Card>
       </div>
       <Card className="p-5 dark:bg-slate-900"><h2 className="font-bold">Recent audit events</h2>{detail.recent_audit_events.length ? <ul className="mt-3 divide-y divide-slate-200 dark:divide-slate-800">{detail.recent_audit_events.map((event) => <li key={event.id} className="py-2 text-sm"><span className="font-semibold">{event.action}</span><span className="ml-2 text-slate-500">{new Date(event.created_at).toLocaleString()}</span></li>)}</ul> : <p className="mt-3 text-sm text-slate-500">No recent events.</p>}</Card>
-      {action && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="presentation"><section role="dialog" aria-modal="true" aria-labelledby="student-action-title" className="glass-strong w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl dark:bg-slate-900"><h2 id="student-action-title" className="text-lg font-bold">{action === 'suspend' ? 'Suspend student' : 'Reactivate student'}</h2><p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Enter a reason for this account action.</p><label htmlFor="student-action-reason" className="mt-4 block text-sm font-semibold">Reason</label><textarea id="student-action-reason" value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} rows={3} className="glass-input mt-1 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950" /><div className="mt-4 flex justify-end gap-2"><Button variant="outline" disabled={busy} onClick={() => { setAction(null); setReason('') }}>Cancel</Button><Button variant="primary" disabled={!reason.trim() || busy} isLoading={busy} onClick={() => void submitAction()}>Confirm</Button></div></section></div>}
+      {action && (
+        <Modal
+          isOpen={Boolean(action)}
+          onClose={() => {
+            if (busy) return
+            setAction(null)
+            setReason('')
+          }}
+          title={action === 'suspend' ? 'Suspend student' : 'Reactivate student'}
+          description="Enter a reason for this account action."
+          maxWidth="md"
+          dismissible={false}
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" disabled={busy} onClick={() => { setAction(null); setReason('') }}>Cancel</Button>
+              <Button variant="primary" disabled={!reason.trim() || busy} isLoading={busy} onClick={() => void submitAction()}>Confirm</Button>
+            </div>
+          }
+        >
+          <label htmlFor="student-action-reason" className="block text-sm font-semibold">Reason</label>
+          <textarea id="student-action-reason" value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} rows={3} className="glass-input mt-1 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950" />
+        </Modal>
+      )}
     </main>
   )
 }

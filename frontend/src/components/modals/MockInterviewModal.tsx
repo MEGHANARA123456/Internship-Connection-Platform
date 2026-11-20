@@ -132,6 +132,33 @@ export function MockInterviewModal({
       onClose={onClose}
       title="AI Mock Interview Practice Room"
       description={`Practice role-specific interview questions for "${jobTitle}" with instant AI feedback.`}
+      footer={!isLoading && questions.length > 0 ? (
+        <div className="flex items-center justify-between">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handlePrev}
+            disabled={currentIndex === 0}
+            leftIcon={<ArrowLeft className="w-3.5 h-3.5" />}
+          >
+            Previous
+          </Button>
+          {currentIndex < questions.length - 1 ? (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleNext}
+              rightIcon={<ArrowRight className="w-3.5 h-3.5" />}
+            >
+              Next Question
+            </Button>
+          ) : (
+            <Button variant="primary" size="sm" onClick={onClose}>
+              Done Practice
+            </Button>
+          )}
+        </div>
+      ) : undefined}
     >
       {isLoading ? (
         <div className="py-12 flex flex-col items-center justify-center space-y-3 text-slate-500 dark:text-slate-400">
@@ -250,33 +277,6 @@ export function MockInterviewModal({
               </Button>
             </div>
           )}
-
-          {/* Nav Controls */}
-          <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-slate-800">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handlePrev}
-              disabled={currentIndex === 0}
-              leftIcon={<ArrowLeft className="w-3.5 h-3.5" />}
-            >
-              Previous
-            </Button>
-            {currentIndex < questions.length - 1 ? (
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={handleNext}
-                rightIcon={<ArrowRight className="w-3.5 h-3.5" />}
-              >
-                Next Question
-              </Button>
-            ) : (
-              <Button variant="primary" size="sm" onClick={onClose}>
-                Done Practice
-              </Button>
-            )}
-          </div>
         </div>
       )}
     </Modal>

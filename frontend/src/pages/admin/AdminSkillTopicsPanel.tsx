@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Archive, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { Archive, Clock3, Eye, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { api } from '../../api/client'
 import { Button } from '../../components/ui/Button'
+import { DataList } from '../../components/ui/DataList'
 import { DropdownSelect } from '../../components/ui/DropdownSelect'
+import { IconButton } from '../../components/ui/IconButton'
 import { Modal } from '../../components/ui/Modal'
 
 interface Topic {
@@ -535,7 +537,7 @@ export function AdminSkillTopicsPanel({
     <section aria-labelledby="admin-skill-topics-heading" className="glass-strong space-y-4 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:p-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 id="admin-skill-topics-heading" className="text-lg font-bold text-slate-900 dark:text-white">Skill assessment topics</h2>
+          <h2 id="admin-skill-topics-heading" className="text-lg font-bold text-slate-900 dark:text-white">Skill assessment topics ({visibleTopics.length})</h2>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Create and manage topics, check readiness, and review student results.</p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -548,57 +550,58 @@ export function AdminSkillTopicsPanel({
       </header>
 
       {loadingTopics ? (
-        <div aria-label="Loading assessment topics" className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{[1, 2, 3].map((item) => <div key={item} className="h-48 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800" />)}</div>
+        <div aria-label="Loading assessment topics" className="space-y-2">{[1, 2, 3].map((item) => <div key={item} className="h-16 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800" />)}</div>
       ) : topicsError ? (
         <p role="status" className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-700">Topics could not be loaded. Use Retry above to try again.</p>
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div role="list" aria-label="Assessment topics" className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
           {visibleTopics.map((item) => {
             const ready = Object.entries(readinessTargets).every(([difficulty, required]) =>
               (item.difficulty_pool_sizes[difficulty] ?? 0) >= required)
             const fill = Object.entries(readinessTargets).reduce((sum, [difficulty, required]) =>
               sum + Math.min(item.difficulty_pool_sizes[difficulty] ?? 0, required), 0)
             return (
-              <article key={item.topic} className={`min-w-0 rounded-xl border p-4 ${selectedTopic === item.topic ? 'border-indigo-400 bg-indigo-50/50 dark:border-indigo-500 dark:bg-indigo-950/20' : 'border-slate-200 dark:border-slate-700'}`}>
-                <div className="flex items-start gap-3">
-                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-100 text-xl dark:bg-slate-800" aria-hidden="true">{item.icon || '✦'}</span>
+              <article key={item.topic} role="listitem" className={`grid min-w-0 gap-3 p-3 sm:grid-cols-2 sm:items-center sm:gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] ${selectedTopic === item.topic ? 'bg-indigo-50/50 dark:bg-indigo-950/20' : ''}`}>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-slate-100 text-lg dark:bg-slate-800" aria-hidden="true">{item.icon || '✦'}</span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="truncate font-semibold text-slate-900 dark:text-white">{item.name}</h3>
+                      <h3 className="truncate text-sm font-semibold text-slate-900 dark:text-white">{item.name}</h3>
                       {!item.archived_at && (
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${ready ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'}`}>
                           {ready ? 'Ready' : 'Needs questions'}
                         </span>
                       )}
                     </div>
-                    <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{item.topic}</p>
+                    <p className="truncate text-xs text-slate-500 dark:text-slate-400">{item.topic} · {item.description || 'No description provided.'}</p>
                     {item.archived_at && (
-                      <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                      <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
                         Archived {new Date(item.archived_at).toLocaleString()} · Admin #{item.archived_by ?? '—'}
                       </p>
                     )}
                   </div>
                 </div>
-                <p className="mt-3 line-clamp-2 min-h-9 text-sm text-slate-600 dark:text-slate-300">{item.description || 'No description provided.'}</p>
-                <div className="mt-3 flex justify-end text-xs">
-                  <span className="text-slate-500">{fill}/10 pool questions</span>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+                  <div className="space-y-1">
+                    <p className="text-[11px] text-slate-500">{fill}/10 pool questions</p>
+                    <DifficultyPoolChips sizes={item.difficulty_pool_sizes ?? {}} />
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                    <span>{item.active_questions} active questions</span><span>{item.attempts} attempts</span><span>{item.pass_rate}% pass rate</span>
+                  </div>
                 </div>
-                <div className="mt-2"><DifficultyPoolChips sizes={item.difficulty_pool_sizes ?? {}} /></div>
-                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                  <span>{item.active_questions} active questions</span><span>{item.attempts} attempts</span><span>{item.pass_rate}% pass rate</span>
-                </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Button size="sm" variant={selectedTopic === item.topic ? 'primary' : 'outline'} onClick={() => changeTopic(item.topic)}>Open analytics</Button>
+                <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-1">
+                  <IconButton icon={Eye} variant={selectedTopic === item.topic ? 'primary' : 'default'} onClick={() => changeTopic(item.topic)} aria-label={`Open analytics for ${item.name}`} />
                   {item.archived_at ? (
                     <>
-                      <Button size="sm" variant="outline" onClick={() => void restoreTopic(item)}><RotateCcw className="mr-1 h-3.5 w-3.5" />Restore</Button>
-                      <Button size="sm" variant="outline" onClick={() => void openHistory(item)}>History</Button>
-                      <Button size="sm" variant="outline" onClick={() => void openLifecycleDialog(item, 'delete')} aria-label={`Delete ${item.name}`}><Trash2 className="mr-1 h-3.5 w-3.5 text-rose-600" />Delete</Button>
+                      <IconButton icon={RotateCcw} onClick={() => void restoreTopic(item)} aria-label={`Restore ${item.name}`} />
+                      <IconButton icon={Clock3} onClick={() => void openHistory(item)} aria-label={`View history for ${item.name}`} />
+                      <IconButton icon={Trash2} variant="danger" onClick={() => void openLifecycleDialog(item, 'delete')} aria-label={`Delete ${item.name}`} />
                     </>
                   ) : (
                     <>
-                      <Button size="sm" variant="outline" onClick={() => openTopicEditor(item)} aria-label={`Edit ${item.name}`}><Pencil className="mr-1 h-3.5 w-3.5" />Edit</Button>
-                      <Button size="sm" variant="outline" onClick={() => void openLifecycleDialog(item, 'archive')} aria-label={`Archive ${item.name}`}><Archive className="mr-1 h-3.5 w-3.5" />Archive</Button>
+                      <IconButton icon={Pencil} onClick={() => openTopicEditor(item)} aria-label={`Edit ${item.name}`} />
+                      <IconButton icon={Archive} onClick={() => void openLifecycleDialog(item, 'archive')} aria-label={`Archive ${item.name}`} />
                     </>
                   )}
                 </div>
@@ -680,21 +683,31 @@ export function AdminSkillTopicsPanel({
                   </Button>
                 ))}
               </div>
-              {loadingAttempts && attempts.length === 0 ? <p role="status" className="mt-4 text-sm text-slate-500">Loading attempts…</p> : attemptsLoadError && attempts.length === 0 ? <p role="status" className="mt-4 text-sm text-slate-500">Attempts could not be loaded. Use Retry above to try again.</p> : attempts.length === 0 ? <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-500 dark:bg-slate-950">No {attemptFilter === 'ALL' ? '' : `${displayStatus(attemptFilter).toLowerCase()} `}attempts for this topic.</p> : (
-                <ul className="mt-3 divide-y divide-slate-200 dark:divide-slate-700">
-                  {attempts.map((attempt) => {
-                    const status = attempt.status === 'SUBMITTED' ? 'COMPLETED' : attempt.status
-                    const score = status === 'EXPIRED' || attempt.score == null ? '—' : `${attempt.score}%`
-                    return <li key={attempt.id} className="flex items-center justify-between gap-2 py-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{attempt.student_email}</p>
-                        <p className="text-xs text-slate-500">{displayStatus(status)} · {score}</p>
-                        <p className="text-[11px] text-slate-500">{new Date(attempt.submitted_at ?? attempt.started_at).toLocaleString()}</p>
-                      </div>
-                      <Button size="sm" variant="outline" onClick={() => void loadAttempt(attempt.id)}>View</Button>
-                    </li>
-                  })}
-                </ul>
+              {attemptsLoadError && attempts.length === 0 ? <p role="status" className="mt-4 text-sm text-slate-500">Attempts could not be loaded. Use Retry above to try again.</p> : (
+                <DataList
+                  ariaLabel="Recent assessment attempts"
+                  rows={attempts}
+                  getRowKey={(attempt) => attempt.id}
+                  loading={loadingAttempts}
+                  emptyState={`No ${attemptFilter === 'ALL' ? '' : `${displayStatus(attemptFilter).toLowerCase()} `}attempts for this topic.`}
+                  columns={[
+                    {
+                      key: 'student',
+                      header: 'Student',
+                      render: (attempt) => <div><p className="truncate font-medium">{attempt.student_email}</p><p className="mt-1 text-xs text-slate-500">{new Date(attempt.submitted_at ?? attempt.started_at).toLocaleString()}</p></div>,
+                    },
+                    {
+                      key: 'result',
+                      header: 'Result',
+                      render: (attempt) => {
+                        const status = attempt.status === 'SUBMITTED' ? 'COMPLETED' : attempt.status
+                        const score = status === 'EXPIRED' || attempt.score == null ? '—' : `${attempt.score}%`
+                        return <span>{displayStatus(status)} · {score}</span>
+                      },
+                    },
+                  ]}
+                  actions={(attempt) => <IconButton icon={Eye} onClick={() => void loadAttempt(attempt.id)} aria-label={`View attempt ${attempt.id}`} />}
+                />
               )}
               {attempts.length < filteredAttemptTotal && <Button className="mt-3 w-full" size="sm" variant="outline" disabled={loadingAttempts} onClick={() => setAttemptPage((page) => page + 1)}>Load more</Button>}
               {details && details.topic === selectedTopic && <div role="dialog" aria-label="Assessment attempt details" className="glass-strong mt-4 rounded-lg bg-indigo-50 p-3 text-sm dark:bg-indigo-950/30"><div className="flex items-center justify-between"><h4 className="font-semibold">Attempt #{details.id}</h4><Button size="sm" variant="ghost" aria-label="Close attempt details" onClick={() => setDetails(null)}>Close</Button></div><p className="mt-2">{details.student_email} · {displayStatus(details.status)} · {details.status === 'EXPIRED' || details.score == null ? '—' : `${details.score}%`}</p><p className="text-xs text-slate-600 dark:text-slate-300">{details.passed ? 'Passed' : details.passed === false ? 'Not passed' : 'Result unavailable'} · {details.level ?? 'No level'} · Percentile {details.percentile ?? '—'}</p><ul className="mt-2 space-y-1 text-xs">{Object.entries(details.subtopic_scores).map(([key, value]) => <li key={key} className="flex justify-between"><span>{key}</span><span>{value.percentage}%</span></li>)}</ul></div>}
@@ -703,14 +716,44 @@ export function AdminSkillTopicsPanel({
         </aside>
       </div>
 
-      <Modal isOpen={topicDialogOpen} onClose={() => setTopicDialogOpen(false)} title={editingTopic ? 'Edit skill topic' : 'Add skill topic'} description={editingTopic ? 'Update display details for this topic.' : 'Topics require a ready question pool before students can access them.'} maxWidth="lg">
-        <form onSubmit={(event) => void saveTopic(event)} className="space-y-4">
-          {!editingTopic && <label htmlFor="new-skill-topic-id" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Topic ID<input id="new-skill-topic-id" aria-label="Topic ID" required minLength={2} maxLength={40} pattern="[a-z0-9]+(-[a-z0-9]+)*" value={topicDraft.topic} onChange={(event) => setTopicDraft((current) => ({ ...current, topic: event.target.value.toLowerCase() }))} placeholder="e.g. data-science" className={topicFieldClassName} /><span className="mt-1 block font-normal text-slate-500">Lowercase letters and numbers, separated by hyphens.</span></label>}
-          <label htmlFor="new-skill-topic-name" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Display name<input id="new-skill-topic-name" aria-label="Display name" required minLength={3} maxLength={60} value={topicDraft.name} onChange={(event) => setTopicDraft((current) => ({ ...current, name: event.target.value }))} className={topicFieldClassName} /></label>
-          <label htmlFor="new-skill-topic-description" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Description<textarea id="new-skill-topic-description" aria-label="Description" maxLength={200} rows={3} value={topicDraft.description} onChange={(event) => setTopicDraft((current) => ({ ...current, description: event.target.value }))} className={topicTextareaClassName} /><span className="mt-1 block font-normal text-slate-500">Up to 200 characters.</span></label>
-          <label htmlFor="new-skill-topic-icon" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Icon or symbol<input id="new-skill-topic-icon" aria-label="Icon or symbol" required maxLength={80} value={topicDraft.icon} onChange={(event) => setTopicDraft((current) => ({ ...current, icon: event.target.value }))} className={topicFieldClassName} /></label>
-          <label htmlFor="new-skill-topic-badge-title" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Badge title<input id="new-skill-topic-badge-title" aria-label="Badge title" maxLength={255} value={topicDraft.badge_title} onChange={(event) => setTopicDraft((current) => ({ ...current, badge_title: event.target.value }))} className={topicFieldClassName} /></label>
-          <div className="flex justify-end gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setTopicDialogOpen(false)}>Cancel</Button><Button type="submit" size="sm" isLoading={saving}>{editingTopic ? 'Save topic' : 'Create topic'}</Button></div>
+      <Modal
+        isOpen={topicDialogOpen}
+        onClose={() => setTopicDialogOpen(false)}
+        title={editingTopic ? 'Edit skill topic' : 'Add skill topic'}
+        description={editingTopic ? 'Update display details for this topic.' : 'Topics require a ready question pool before students can access them.'}
+        maxWidth="xl"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => setTopicDialogOpen(false)}>Cancel</Button>
+            <Button type="submit" form="skill-topic-form" size="sm" isLoading={saving}>{editingTopic ? 'Save topic' : 'Create topic'}</Button>
+          </div>
+        }
+      >
+        <form id="skill-topic-form" onSubmit={(event) => void saveTopic(event)} className="grid gap-4 sm:grid-cols-2">
+          {!editingTopic && (
+            <label htmlFor="new-skill-topic-id" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Topic ID
+              <input id="new-skill-topic-id" aria-label="Topic ID" required minLength={2} maxLength={40} pattern="[a-z0-9]+(-[a-z0-9]+)*" value={topicDraft.topic} onChange={(event) => setTopicDraft((current) => ({ ...current, topic: event.target.value.toLowerCase() }))} placeholder="e.g. data-science" className={topicFieldClassName} />
+              <span className="mt-1 block font-normal text-slate-500">Lowercase letters and numbers, separated by hyphens.</span>
+            </label>
+          )}
+          <label htmlFor="new-skill-topic-name" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Display name
+            <input id="new-skill-topic-name" aria-label="Display name" required minLength={3} maxLength={60} value={topicDraft.name} onChange={(event) => setTopicDraft((current) => ({ ...current, name: event.target.value }))} className={topicFieldClassName} />
+          </label>
+          <label htmlFor="new-skill-topic-icon" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Icon or symbol
+            <input id="new-skill-topic-icon" aria-label="Icon or symbol" required maxLength={80} value={topicDraft.icon} onChange={(event) => setTopicDraft((current) => ({ ...current, icon: event.target.value }))} className={topicFieldClassName} />
+          </label>
+          <label htmlFor="new-skill-topic-badge-title" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Badge title
+            <input id="new-skill-topic-badge-title" aria-label="Badge title" maxLength={255} value={topicDraft.badge_title} onChange={(event) => setTopicDraft((current) => ({ ...current, badge_title: event.target.value }))} className={topicFieldClassName} />
+          </label>
+          <label htmlFor="new-skill-topic-description" className="block text-xs font-semibold text-slate-700 dark:text-slate-300 sm:col-span-2">
+            Description
+            <textarea id="new-skill-topic-description" aria-label="Description" maxLength={200} rows={3} value={topicDraft.description} onChange={(event) => setTopicDraft((current) => ({ ...current, description: event.target.value }))} className={topicTextareaClassName} />
+            <span className="mt-1 block font-normal text-slate-500">Up to 200 characters.</span>
+          </label>
         </form>
       </Modal>
 

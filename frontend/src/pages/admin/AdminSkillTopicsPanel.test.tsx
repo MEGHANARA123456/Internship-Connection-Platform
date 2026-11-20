@@ -61,13 +61,13 @@ describe('AdminSkillTopicsPanel', () => {
     render(<AdminSkillTopicsPanel />)
 
     expect(await screen.findAllByText('Python')).not.toHaveLength(0)
-    expect(await screen.findByText('student@example.test')).toBeInTheDocument()
+    expect((await screen.findAllByText('student@example.test')).length).toBeGreaterThan(0)
     expect(screen.getByText('2 total')).toBeInTheDocument()
-    expect(screen.getByText('Expired · —')).toBeInTheDocument()
+    expect((await screen.findAllByText('Expired · —')).length).toBeGreaterThan(0)
     expect(screen.getByText('Weakest subtopics')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Expired' }))
-    expect(await screen.findByText('expired@example.test')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'View' }))
+    expect((await screen.findAllByText('expired@example.test')).length).toBeGreaterThan(0)
+    fireEvent.click(screen.getAllByRole('button', { name: 'View attempt 4' })[0])
     expect(await screen.findByRole('dialog', { name: 'Assessment attempt details' })).toHaveTextContent('Expired · —')
     expect(api.get).toHaveBeenCalledWith(
       expect.stringMatching(/\/skills\/admin\/topics\/python\/attempts\?.*topic_id=python.*status=EXPIRED/),

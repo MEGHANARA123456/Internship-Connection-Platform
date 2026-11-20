@@ -37,6 +37,7 @@ export function useCompanyMetrics(enabled = true, internshipId: number | null = 
         return response.data as CompanyMetrics
       },
       staleTime: 0,
+      refetchInterval: 60_000,
       enabled,
     }),
     [enabled, internshipId],

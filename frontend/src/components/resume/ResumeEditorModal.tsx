@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import {
-  X,
   Printer,
   Download,
   Plus,
@@ -15,6 +14,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { Button } from '../ui/Button'
+import { Modal } from '../ui/Modal'
 import { api } from '../../api/client'
 import { showToast } from '../../lib/feedback'
 
@@ -297,87 +297,92 @@ export function ResumeEditorModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/80 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200 print:p-0 print:m-0 print:bg-white print:fixed-none">
-      {/* Modal Container */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-6xl max-h-[94vh] flex flex-col overflow-hidden print:border-none print:shadow-none print:max-h-none print:h-auto">
-        
-        {/* Header Ribbon (Hidden during print) */}
-        <div className="p-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4 bg-slate-50/50 dark:bg-slate-800/30 shrink-0 print:hidden">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/50">
-              <FileText className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  ATS Resume Builder & Editor
-                </h3>
-                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                  ATS Compliant 100%
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Edit credentials directly in-app with live formatting, instant PDF export, and profile sync.
-              </p>
-            </div>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="ATS Resume Builder & Editor"
+      description="Edit credentials directly in-app with live formatting, instant PDF export, and profile sync."
+      titleAdornment={<div className="shrink-0 rounded-xl border border-indigo-100 bg-indigo-50 p-2 text-indigo-600 dark:border-indigo-900/50 dark:bg-indigo-950/60 dark:text-indigo-400"><FileText className="h-5 w-5" /></div>}
+      maxWidth="5xl"
+      overlayClassName="print:static print:block print:bg-white print:p-0"
+      panelClassName="print:h-auto print:max-h-none print:max-w-none print:overflow-visible print:rounded-none print:border-none print:shadow-none"
+      bodyClassName="mt-0 min-h-0 flex-1 overflow-hidden p-0 print:overflow-visible"
+      headerClassName="print:hidden"
+      footerClassName="print:hidden"
+      headerActions={
+        <>
+          <div className="flex lg:hidden rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-700 dark:bg-slate-800">
+            <button
+              type="button"
+              onClick={() => setMobileView('edit')}
+              className={`rounded-md px-2.5 py-1 text-xs font-semibold ${
+                mobileView === 'edit'
+                  ? 'bg-white text-indigo-600 shadow-xs dark:bg-slate-900 dark:text-indigo-400'
+                  : 'text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              Editor
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileView('preview')}
+              className={`rounded-md px-2.5 py-1 text-xs font-semibold ${
+                mobileView === 'preview'
+                  ? 'bg-white text-indigo-600 shadow-xs dark:bg-slate-900 dark:text-indigo-400'
+                  : 'text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              ATS Preview
+            </button>
           </div>
-
+          <span className="hidden rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 sm:inline">
+            ATS Compliant 100%
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handlePrint}
+            leftIcon={<Printer className="w-3.5 h-3.5" />}
+            className="text-xs font-medium"
+          >
+            Print / Save PDF
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={handleSyncToProfile}
+            isLoading={isSaving}
+            leftIcon={saveSuccess ? <CheckCircle2 className="w-3.5 h-3.5" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            className="text-xs font-medium"
+          >
+            {saveSuccess ? 'Synced to Profile!' : 'Sync to Profile'}
+          </Button>
+        </>
+      }
+      footer={
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400">
           <div className="flex items-center gap-2">
-            {/* Mobile View Toggle */}
-            <div className="flex lg:hidden rounded-lg border border-slate-200 dark:border-slate-700 p-0.5 bg-slate-100 dark:bg-slate-800">
-              <button
-                type="button"
-                onClick={() => setMobileView('edit')}
-                className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
-                  mobileView === 'edit'
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400'
-                }`}
-              >
-                Editor
-              </button>
-              <button
-                type="button"
-                onClick={() => setMobileView('preview')}
-                className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
-                  mobileView === 'preview'
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400'
-                }`}
-              >
-                ATS Preview
-              </button>
-            </div>
-
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            <span>Edits persist automatically in your browser session.</span>
+          </div>
+          <div className="flex items-center gap-2">
             <Button
               size="sm"
               variant="outline"
               onClick={handlePrint}
-              leftIcon={<Printer className="w-3.5 h-3.5" />}
-              className="text-xs font-medium"
+              leftIcon={<Download className="w-3.5 h-3.5" />}
+              className="text-xs"
             >
-              Print / Save PDF
+              Export as PDF
             </Button>
-
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={handleSyncToProfile}
-              isLoading={isSaving}
-              leftIcon={saveSuccess ? <CheckCircle2 className="w-3.5 h-3.5" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              className="text-xs font-medium"
-            >
-              {saveSuccess ? 'Synced to Profile!' : 'Sync to Profile'}
+            <Button size="sm" variant="primary" onClick={onClose} className="text-xs">
+              Done
             </Button>
-
-            <button
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
           </div>
         </div>
+      }
+    >
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden print:overflow-visible">
 
         {/* Content Body: Split View (Editor Left, ATS Preview Right) */}
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 min-h-0 overflow-hidden">
@@ -1145,34 +1150,7 @@ export function ResumeEditorModal({
             </div>
           </div>
         </div>
-
-        {/* Footer info ribbon */}
-        <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between text-xs text-slate-500 dark:text-slate-400 shrink-0 print:hidden">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-            <span>Edits persist automatically in your browser session.</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handlePrint}
-              leftIcon={<Download className="w-3.5 h-3.5" />}
-              className="text-xs"
-            >
-              Export as PDF
-            </Button>
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={onClose}
-              className="text-xs"
-            >
-              Done
-            </Button>
-          </div>
-        </div>
       </div>
-    </div>
+    </Modal>
   )
 }

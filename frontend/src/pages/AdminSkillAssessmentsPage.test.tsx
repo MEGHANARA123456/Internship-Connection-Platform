@@ -274,8 +274,8 @@ describe('AdminSkillAssessmentsPage resource form', () => {
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never)
     renderPage()
 
-    expect(await screen.findByText("2 options · Correct: 2 - 'O(1)'")).toBeInTheDocument()
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    expect((await screen.findAllByText("2 options · Correct: 2 - 'O(1)'")).length).toBeGreaterThan(0)
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Edit question 8' }))[0])
     const numberField = await screen.findByLabelText('Correct option number')
     expect(numberField).toHaveValue(2)
     expect(numberField).toHaveAttribute('min', '1')

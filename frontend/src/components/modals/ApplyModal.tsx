@@ -183,6 +183,28 @@ export function ApplyModal({
       title="Apply for Internship"
       description={`Submit your application for "${internshipTitle}"${companyName ? ` at ${companyName}` : ''}.`}
       maxWidth="2xl"
+      footer={!submitted ? (
+        <div className="flex items-center justify-between gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={step === 0 ? onClose : () => setStep((current) => Math.max(0, current - 1))}>
+            {step === 0 ? 'Cancel' : <><ChevronLeft className="mr-1 h-4 w-4" /> Back</>}
+          </Button>
+          {step < 2 ? (
+            !canApply && eligibility?.blockers.length ? (
+              <Button type="button" variant="primary" size="sm" disabled title={eligibility.blockers.map((blocker) => blocker.message).join(' ')}>
+                Submit Application
+              </Button>
+            ) : (
+              <Button type="button" variant="primary" size="sm" disabled={loadingEligibility || !eligibility} onClick={() => setStep((current) => Math.min(2, current + 1))}>
+                Continue <ChevronRight className="ml-1 h-4 w-4" />
+              </Button>
+            )
+          ) : (
+            <Button type="submit" form="apply-internship-form" variant="primary" size="sm" disabled={loadingEligibility || !canApply || saving} isLoading={saving} leftIcon={<Send className="h-3.5 w-3.5" />} title={!canApply ? eligibility?.blockers.map((blocker) => blocker.message).join(' ') : undefined}>
+              Submit Application
+            </Button>
+          )}
+        </div>
+      ) : undefined}
     >
       {submitted ? (
         <div className="space-y-5 py-2 text-center" aria-live="polite">
@@ -201,7 +223,7 @@ export function ApplyModal({
           </div>
         </div>
       ) : (
-        <form onSubmit={submit} className="space-y-5">
+        <form id="apply-internship-form" onSubmit={submit} className="space-y-5">
           <ol aria-label="Application steps" className="grid grid-cols-3 gap-2">
             {steps.map((label, index) => (
               <li
@@ -359,27 +381,6 @@ export function ApplyModal({
               )}
             </div>
           )}
-
-          <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
-            <Button type="button" variant="outline" size="sm" onClick={step === 0 ? onClose : () => setStep((current) => Math.max(0, current - 1))}>
-              {step === 0 ? 'Cancel' : <><ChevronLeft className="mr-1 h-4 w-4" /> Back</>}
-            </Button>
-            {step < 2 ? (
-              !canApply && eligibility?.blockers.length ? (
-                <Button type="button" variant="primary" size="sm" disabled title={eligibility.blockers.map((blocker) => blocker.message).join(' ')}>
-                  Submit Application
-                </Button>
-              ) : (
-                <Button type="button" variant="primary" size="sm" disabled={loadingEligibility || !eligibility} onClick={() => setStep((current) => Math.min(2, current + 1))}>
-                  Continue <ChevronRight className="ml-1 h-4 w-4" />
-                </Button>
-              )
-            ) : (
-              <Button type="submit" variant="primary" size="sm" disabled={loadingEligibility || !canApply || saving} isLoading={saving} leftIcon={<Send className="h-3.5 w-3.5" />} title={!canApply ? eligibility?.blockers.map((blocker) => blocker.message).join(' ') : undefined}>
-                Submit Application
-              </Button>
-            )}
-          </div>
         </form>
       )}
     </Modal>

@@ -44,6 +44,20 @@ def _retry_after_seconds(value: str | None) -> int:
             return 60
 
 
+def _rejects_response_format(error: HTTPError) -> bool:
+    """Detect an explicit response_format rejection without exposing its body."""
+    if error.code != 400:
+        return False
+    try:
+        body = error.read(8192).decode("utf-8", errors="ignore").casefold()
+    except OSError:
+        return False
+    return "response_format" in body and any(
+        phrase in body
+        for phrase in ("unsupported", "not support", "unknown", "unrecognized", "invalid")
+    )
+
+
 def _extract_json_object(content: str) -> dict[str, object]:
     """Parse the first complete JSON object, tolerating optional Markdown code fences."""
     text = content.strip()
@@ -131,6 +145,8 @@ class LLMHTTPProvider:
             completion_tokens = 0
             total_tokens = 0
             usage_reported = False
+            supports_response_format = True
+            request_count = 0
             attempts = 1 + self._config.retries if retry_on_truncation else 1
             for attempt in range(attempts):
                 body = {
@@ -145,18 +161,24 @@ class LLMHTTPProvider:
                 }
                 if "gpt-oss" in self._config.model.lower():
                     body["reasoning_effort"] = "low"
-                body["response_format"] = {"type": "json_object"}
-                request = Request(
-                    f"{self._config.base_url}/v1/chat/completions",
-                    data=json.dumps(body).encode("utf-8"),
-                    headers=headers,
-                    method="POST",
-                )
-                try:
-                    response_bytes = await asyncio.wait_for(
+                if supports_response_format:
+                    body["response_format"] = {"type": "json_object"}
+
+                async def post_request() -> bytes:
+                    request = Request(
+                        f"{self._config.base_url}/v1/chat/completions",
+                        data=json.dumps(body).encode("utf-8"),
+                        headers=headers,
+                        method="POST",
+                    )
+                    return await asyncio.wait_for(
                         asyncio.to_thread(self._post, request),
                         timeout=self._config.timeout_seconds,
                     )
+
+                request_count += 1
+                try:
+                    response_bytes = await post_request()
                 except ProviderRateLimitError:
                     raise
                 except HTTPError as error:
@@ -166,7 +188,12 @@ class LLMHTTPProvider:
                                 (error.headers or {}).get("Retry-After")
                             )
                         ) from error
-                    raise
+                    if not supports_response_format or not _rejects_response_format(error):
+                        raise
+                    supports_response_format = False
+                    body.pop("response_format", None)
+                    request_count += 1
+                    response_bytes = await post_request()
                 response = json.loads(response_bytes)
                 if not isinstance(response, dict):
                     raise ValueError("Provider response must be a JSON object.")
@@ -253,7 +280,9 @@ class LLMHTTPProvider:
             if completion is None:
                 raise ValueError("Provider response has no completion.")
             parsed = _extract_json_object(content)
-            if not isinstance(parsed.get("answerable"), bool) or not isinstance(parsed.get("answer"), str):
+            answerable = parsed.get("answerable")
+            answer_text = parsed.get("answer")
+            if not isinstance(answerable, bool) or not isinstance(answer_text, str):
                 raise ValueError("Provider response does not match the required schema.")
             source_values = parsed.get("used_chunk_ids")
             if not isinstance(source_values, list) or not all(isinstance(value, str) for value in source_values):
@@ -265,15 +294,15 @@ class LLMHTTPProvider:
             if needs_clarification is not None and not isinstance(needs_clarification, str):
                 raise ValueError("Provider clarification does not match the required schema.")
             return ProviderResult(
-                parsed["answerable"],
-                parsed["answer"],
+                answerable,
+                answer_text,
                 tuple(source_values),
                 float(confidence),
                 needs_clarification,
                 prompt_tokens,
                 completion_tokens,
                 total_tokens,
-                attempt,
+                max(0, request_count - 1),
                 usage_reported,
             )
         except ProviderRateLimitError:

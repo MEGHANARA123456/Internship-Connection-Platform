@@ -1,7 +1,8 @@
+import { useEffect } from 'react'
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuthStore, type UserRole } from '../store/auth'
 import { routes } from '../lib/routes'
-import { getRoleHome } from '../lib/postLoginTarget'
+import { getRoleHome, isRouteAllowedForRole } from '../lib/postLoginTarget'
 
 export function ProtectedRoute({ allowedRoles }: { allowedRoles?: UserRole[] }) {
   const session = useAuthStore((state) => state.session)
@@ -9,16 +10,19 @@ export function ProtectedRoute({ allowedRoles }: { allowedRoles?: UserRole[] }) 
   const clearSignedOutDeliberately = useAuthStore((state) => state.clearSignedOutDeliberately)
   const location = useLocation()
 
-  if (!session) {
-    if (signedOutDeliberately) {
+  useEffect(() => {
+    if (!session && signedOutDeliberately) {
       clearSignedOutDeliberately()
-      return <Navigate to={routes.login()} replace />
     }
+  }, [session, signedOutDeliberately, clearSignedOutDeliberately])
+
+  if (!session) {
+    if (signedOutDeliberately) return <Navigate to={routes.login()} replace />
     const next = `${location.pathname}${location.search}${location.hash}`
     return <Navigate to={routes.login({ next })} replace />
   }
 
-  if (allowedRoles && !allowedRoles.includes(session.role)) {
+  if (!isRouteAllowedForRole(session.role, location.pathname, allowedRoles)) {
     const home = getRoleHome(session.role)
     return (
       <main className="mx-auto flex min-h-[60vh] w-full max-w-xl flex-col items-center justify-center px-4 text-center">

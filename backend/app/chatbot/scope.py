@@ -15,9 +15,12 @@ from .guardrails import (
     detect_account_specific,
     detect_cross_account_request,
     detect_injection,
+    is_admin_user_directory_summary,
     is_chatbot_capability_question,
     is_role_capability_question,
+    requests_ambiguous_sensitive_access,
     requests_credential_value,
+    requests_other_company_resource,
     requests_personal_data_export,
     suggests_self_harm,
 )
@@ -78,24 +81,33 @@ def decide_scope(
     role: str = "guest",
 ) -> ScopeDecision:
     """Classify safety, role, account-specific, and knowledge-match scope in precedence order."""
-    if contains_secret(text) or requests_credential_value(text):
-        return ScopeDecision("credential", False, True, "credential_detected")
+    role_name = role.lower()
     if detect_abuse(text):
         reason = "self_harm_request" if suggests_self_harm(text) else "abusive_request"
         return ScopeDecision("abuse", False, True, reason)
     if detect_injection(text):
         return ScopeDecision("injection", False, True, "prompt_injection")
+    if contains_secret(text) or requests_credential_value(text):
+        return ScopeDecision("credential", False, True, "credential_detected")
+    if is_admin_user_directory_summary(text, role_name):
+        return ScopeDecision("in_scope", True, False)
     if requests_personal_data_export(text):
         return ScopeDecision("personal_data_export", False, True, "personal_data_export")
     if detect_cross_account_request(text):
-        return ScopeDecision("privacy", False, True, "cross_account_request")
+        reason = (
+            "cross_company_resource"
+            if requests_other_company_resource(text)
+            else "cross_account_sensitive_data"
+        )
+        return ScopeDecision("privacy", False, True, reason)
+    if requests_ambiguous_sensitive_access(text):
+        return ScopeDecision("privacy", False, True, "ambiguous_sensitive_access")
     if (
         not is_chatbot_capability_question(text)
         and any(pattern.search(text) for pattern in OUT_OF_SCOPE_PATTERNS)
     ):
         return ScopeDecision("out_of_scope", False, True, "outside_product_scope")
 
-    role_name = role.lower()
     if is_admin_only_query(text) and role_name != "admin":
         return ScopeDecision("admin_only", False, True, "role_restricted")
     has_retrieval = bool(passages and passages[0].score >= minimum_score)
@@ -118,6 +130,18 @@ def fixed_reply(decision: ScopeDecision, role: str = "guest") -> str:
     if decision.category == "injection":
         return INJECTION_REPLY
     if decision.category == "personal_data_export":
+        if role.lower() == "company":
+            return (
+                "I can’t disclose users’ personal data or company email addresses. "
+                "I can help review applicants to your own postings."
+            )
+        if role.lower() == "student":
+            return (
+                "I can’t disclose other users’ personal data. I can help with your own "
+                "applications, profile, or assessment results."
+            )
+        if role.lower() == "guest":
+            return "I can’t disclose users’ personal data. Sign in to manage your own account."
         return PERSONAL_DATA_EXPORT_REPLY
     if decision.category == "abuse":
         if decision.refusal_reason == "self_harm_request":
@@ -129,6 +153,22 @@ def fixed_reply(decision: ScopeDecision, role: str = "guest") -> str:
     if decision.category == "admin_only":
         return ADMIN_ONLY_REPLY
     if decision.category == "privacy":
+        if decision.refusal_reason == "cross_company_resource":
+            return (
+                "I can’t view, change, or delete another company’s postings or applicants. "
+                "I can help manage records owned by your company."
+            )
+        if decision.refusal_reason == "cross_account_sensitive_data":
+            return (
+                "I can’t disclose another person’s resume, assessment score, or private "
+                "account data. I can help with your own information, your postings, or "
+                "applicants to your own postings."
+            )
+        if decision.refusal_reason == "ambiguous_sensitive_access":
+            return (
+                "I can’t access or disclose sensitive account data without a clear, "
+                "authorized scope. Ask about your own account or your company’s applicants."
+            )
         own_data = {
             "student": "your applications, profile, or notifications",
             "company": "your postings, applicants, or interviews",

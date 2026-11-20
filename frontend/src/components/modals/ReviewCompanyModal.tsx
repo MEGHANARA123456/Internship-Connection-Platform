@@ -74,6 +74,16 @@ export function ReviewCompanyModal({
       title={`Review & Rate ${companyName}`}
       description={internshipTitle ? `Share your internship experience for ${internshipTitle}` : 'Share your verified intern feedback'}
       maxWidth="md"
+      footer={!success ? (
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button type="submit" form="submit-company-review-form" variant="primary" size="sm" isLoading={submitting}>
+            Submit Verified Review
+          </Button>
+        </div>
+      ) : undefined}
     >
       {success ? (
         <div className="flex flex-col items-center justify-center p-6 text-center text-emerald-700 dark:text-emerald-300 space-y-2">
@@ -84,7 +94,7 @@ export function ReviewCompanyModal({
           </p>
         </div>
       ) : (
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form id="submit-company-review-form" onSubmit={handleSubmit} className="space-y-4">
           {/* Verified Badge Notice */}
           <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 rounded-xl flex items-start gap-2.5 text-xs text-emerald-800 dark:text-emerald-300">
             <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
@@ -145,15 +155,6 @@ export function ReviewCompanyModal({
               <span>{serverError}</span>
             </div>
           )}
-
-          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-            <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={submitting}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" size="sm" isLoading={submitting}>
-              Submit Verified Review
-            </Button>
-          </div>
         </form>
       )}
     </Modal>

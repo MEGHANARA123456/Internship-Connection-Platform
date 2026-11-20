@@ -20,6 +20,9 @@ CHATBOT_ENV_NAMES = (
     "CHATBOT_PROVIDER",
     "CHATBOT_BASE_URL",
     "CHATBOT_API_KEY",
+    "CHATBOT_FALLBACK_BASE_URL",
+    "CHATBOT_FALLBACK_API_KEY",
+    "CHATBOT_FALLBACK_MODEL",
     "ANTHROPIC_API_KEY",
     "CHATBOT_MODEL",
     "CHATBOT_ROUTER_MODEL",
@@ -75,10 +78,13 @@ def _chatbot_dotenv() -> dict[str, str | None]:
 class ChatbotConfig:
     enabled: bool = False
     mode: str = "retrieval"
-    provider: str = "anthropic"
-    base_url: str = ""
+    provider: str = "openai-compatible"
+    base_url: str = "https://api.groq.com/openai"
     api_key: str = field(default="", repr=False)
-    model: str = ""
+    model: str = "openai/gpt-oss-20b"
+    fallback_base_url: str = ""
+    fallback_api_key: str = field(default="", repr=False)
+    fallback_model: str = ""
     router_model: str = ""
     max_tokens: int = 600
     temperature: float = 0.1
@@ -125,14 +131,29 @@ def load_config() -> ChatbotConfig:
         """Interpret common affirmative strings as true and all others as false."""
         return setting(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
-    provider = setting("CHATBOT_PROVIDER", "anthropic").strip().lower()
-    base_url = setting("CHATBOT_BASE_URL", "").strip().rstrip("/")
-    if base_url.lower().endswith("/v1"):
-        base_url = base_url[:-3].rstrip("/")
-        logger.warning(
-            "chatbot_base_url_version_suffix_removed",
-            extra={"chatbot_meta": {"reason": "duplicate_v1_path"}},
-        )
+    provider = setting("CHATBOT_PROVIDER", "openai-compatible").strip().lower()
+    def base_url_setting(name: str) -> str:
+        """Normalize an OpenAI-compatible endpoint without duplicating its version path."""
+        base_url_value = setting(name, "").strip().rstrip("/")
+        if base_url_value.lower().endswith("/v1"):
+            base_url_value = base_url_value[:-3].rstrip("/")
+            logger.warning(
+                "chatbot_base_url_version_suffix_removed",
+                extra={"chatbot_meta": {"setting": name, "reason": "duplicate_v1_path"}},
+            )
+        return base_url_value
+
+    default_base_url = (
+        "https://api.groq.com/openai"
+        if provider == "openai-compatible"
+        else ""
+    )
+    base_url = base_url_setting("CHATBOT_BASE_URL") or default_base_url
+    default_model = (
+        "openai/gpt-oss-20b"
+        if provider == "openai-compatible"
+        else "claude-haiku-5-5"
+    )
     config = ChatbotConfig(
         enabled=setting("CHATBOT_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
         mode=setting("CHATBOT_MODE", "retrieval").strip().lower(),
@@ -142,10 +163,13 @@ def load_config() -> ChatbotConfig:
             "ANTHROPIC_API_KEY" if provider == "anthropic" else "CHATBOT_API_KEY",
             "",
         ).strip(),
-        model=setting("CHATBOT_MODEL", "claude-haiku-5-5").strip(),
+        model=setting("CHATBOT_MODEL", default_model).strip(),
+        fallback_base_url=base_url_setting("CHATBOT_FALLBACK_BASE_URL"),
+        fallback_api_key=setting("CHATBOT_FALLBACK_API_KEY", "").strip(),
+        fallback_model=setting("CHATBOT_FALLBACK_MODEL", "").strip(),
         router_model=setting(
             "CHATBOT_ROUTER_MODEL",
-            setting("CHATBOT_MODEL", "claude-haiku-5-5"),
+            setting("CHATBOT_MODEL", default_model),
         ).strip(),
         max_tokens=max(1, min(1500, int(setting("CHATBOT_MAX_TOKENS", "600")))),
         temperature=max(0.0, min(0.2, float(setting("CHATBOT_TEMPERATURE", "0.1")))),
@@ -206,3 +230,25 @@ def provider_configured(config: ChatbotConfig) -> bool:
         and config.model
         and (config.api_key or local_provider)
     )
+
+
+def fallback_provider_configured(config: ChatbotConfig) -> bool:
+    """Report whether all required settings for the optional compatible fallback exist."""
+    parsed_url = urlsplit(config.fallback_base_url)
+    local_provider = parsed_url.hostname in {"localhost", "127.0.0.1", "::1"}
+    return bool(
+        parsed_url.scheme in {"http", "https"}
+        and parsed_url.hostname
+        and config.fallback_model
+        and (config.fallback_api_key or local_provider)
+    )
+
+
+def provider_name(config: ChatbotConfig) -> str:
+    """Return a safe provider label for admin status without exposing credentials."""
+    if config.provider == "anthropic":
+        return "anthropic"
+    hostname = urlsplit(config.base_url).hostname
+    if hostname and hostname.endswith(".groq.com"):
+        return "groq"
+    return hostname or config.provider

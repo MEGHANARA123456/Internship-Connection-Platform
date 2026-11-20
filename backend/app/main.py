@@ -38,6 +38,24 @@ async def run_database_migrations() -> None:
     logger.info("Database schema is upgraded to the latest Alembic revision.")
 
 
+async def seed_interview_catalog() -> None:
+    """Keep the interview question bank and reusable test catalog available."""
+    from app.core.database import async_session_factory
+    from app.services.interview_question_seed import seed_interview_question_bank
+    from app.services.learning_library_seed import seed_learning_library
+    from app.services.mock_test_seed import seed_mock_test_library
+    from app.services.skill_gap_seed import seed_skill_gap_catalog
+
+    async with async_session_factory() as db:
+        await seed_interview_question_bank(db)
+        seeded_tests = await seed_mock_test_library(db)
+        learning_seed = await seed_learning_library(db)
+        skill_gap_seed = await seed_skill_gap_catalog(db)
+    logger.info("Interview mock test catalog is ready.", extra={"seeded_tests": seeded_tests})
+    logger.info("Student learning library is ready.", extra={"learning_catalog": learning_seed})
+    logger.info("Skill gap catalog is ready.", extra={"skill_gap_catalog": skill_gap_seed})
+
+
 async def _interview_reminder_worker() -> None:
     """Send pending interview reminders once per minute until the task is cancelled."""
     from app.core.database import async_session_factory
@@ -70,6 +88,22 @@ async def _interview_expiry_worker() -> None:
         await asyncio.sleep(300)
 
 
+async def _interview_video_retention_worker() -> None:
+    """Remove expired private video files and retire their metadata."""
+    from app.core.database import async_session_factory
+    from app.services.interview_video import expire_video_recordings
+
+    while True:
+        try:
+            async with async_session_factory() as db:
+                await expire_video_recordings(db)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Interview video retention cleanup failed.")
+        await asyncio.sleep(600)
+
+
 # Check whether Mailpit is already running before starting a local one.
 def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
     """Return whether the given host accepts a TCP connection on the specified port."""
@@ -100,6 +134,22 @@ async def _cancel_tasks(*tasks: asyncio.Task | None) -> None:
 async def lifespan(app: FastAPI):
     """Migrate the database, ingest enabled chatbot knowledge, start workers, and stop them on shutdown."""
     await run_database_migrations()
+    settings = get_settings()
+    missing_interview_settings = [
+        name
+        for name, value in (
+            ("INTERVIEW_LLM_API_KEY", settings.interview_llm_api_key),
+            ("INTERVIEW_LLM_MODEL", settings.interview_llm_model),
+            ("INTERVIEW_LLM_BASE_URL", settings.interview_llm_base_url),
+        )
+        if not value.strip()
+    ]
+    if missing_interview_settings:
+        logger.warning(
+            "AI provider not configured: set %s",
+            ", ".join(missing_interview_settings),
+        )
+    await seed_interview_catalog()
     from app.chatbot.chatbot_config import load_config
     from app.chatbot.rag.ingest import ingest_knowledge
 
@@ -118,6 +168,7 @@ async def lifespan(app: FastAPI):
     mailpit_task: asyncio.Task | None = None
     reminder_task = asyncio.create_task(_interview_reminder_worker())
     expiry_task = asyncio.create_task(_interview_expiry_worker())
+    video_retention_task = asyncio.create_task(_interview_video_retention_worker())
     try:
         if not is_port_in_use(8025):
             try:
@@ -130,7 +181,12 @@ async def lifespan(app: FastAPI):
                 logger.warning("Could not start embedded Mailpit server: %s", exc)
         yield
     finally:
-        await _cancel_tasks(reminder_task, expiry_task, mailpit_task)
+        await _cancel_tasks(
+            reminder_task,
+            expiry_task,
+            video_retention_task,
+            mailpit_task,
+        )
 
 # Set up app logging before creating the FastAPI instance.
 configure_logging()

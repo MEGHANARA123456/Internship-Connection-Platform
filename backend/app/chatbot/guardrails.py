@@ -14,12 +14,12 @@ INJECTION_REPLY = "I can’t follow instructions to ignore my safety rules or re
 SECRET_REPLY = "Please don’t share passwords, verification codes, tokens, or personal information here. I can’t process that message."
 ABUSE_REPLY = "I can’t help with harming anyone. If someone is in immediate danger, contact local emergency services."
 PERSONAL_DATA_EXPORT_REPLY = (
-    "I can't list user emails in chat. Open Platform Users to view accounts."
+    "I can’t list or export user data in chat. Open Platform Users to view accounts."
 )
 
 _CREDENTIAL_VALUE_REQUEST = re.compile(
     r"\b(?:what(?:'s| is)|tell me|show me|give me|provide|send|share|reveal)\b"
-    r".{0,35}\b(?:my\s+|the\s+|a\s+|an\s+)?"
+    r".{0,35}\b(?:(?:my|the|a|an|admin|database|provider|service)\s+)?"
     r"(?:password|passcode|otp|one[- ]time (?:password|code)|verification code|"
     r"security code|authenticator code|(?:2fa|mfa) code|"
     r"access token|refresh token|token|api key|secret)\b",
@@ -29,6 +29,13 @@ _CREDENTIAL_CODE_REQUEST = re.compile(
     r"\b(?:what(?:'s| is)|tell me|show me|give me|provide|send|share|reveal)\b"
     r".{0,35}\b(?:my\s+|the\s+|a\s+|an\s+)"
     r"(?:(?:verification|security|authenticator|2fa|mfa|one[- ]time)\s+)?code\b",
+    re.I,
+)
+_SENSITIVE_CONFIGURATION_REQUEST = re.compile(
+    r"\b(?:show|tell me|give me|provide|send|share|reveal|print|dump|display|export)\b"
+    r".{0,80}\b(?:database (?:connection string|url|credentials?)|connection string|"
+    r"environment variables?|env vars?|\.env file|api keys?|secret keys?|"
+    r"internal (?:configuration|config)|system prompt)\b",
     re.I,
 )
 _HTML_MARKUP = re.compile(r"<\s*/?\s*[a-z][^>]{0,300}>", re.I)
@@ -50,9 +57,24 @@ PRIVATE_CROSS_ACCOUNT_PATTERN = re.compile(
     r"\b(user|student|company|account|person|applicant)s?\b.{0,30}"
     r"\b(data|application|profile|notification|interview)s?\b"
     r"|\b(?:show|list|find|give me)\b.{0,30}\b(?:all|every)\b.{0,20}\b(?:students?|users?|applicants?)\b"
+    r"|\b(?:show|tell|give|find|list|download|delete|remove|access)\b.{0,40}"
+    r"\b(?:another|other|someone else'?s)\b.{0,30}"
+    r"\b(?:student'?s?|user'?s?|company'?s?|applicant'?s?)\b.{0,30}"
+    r"\b(?:resume|assessment scores?|skill results?|applicants?|internships?|postings?|"
+    r"profiles?|personal details|private data)\b"
+    r"|\b(?:show|list|give|tell|display)\b.{0,40}\b(?:all|every)\b.{0,25}"
+    r"\b(?:registered )?(?:students?|users?|companies)\b.{0,20}\b(?:details|records|profiles)\b"
     r"|\b(?:show|list|find|tell me about)\b.{0,30}\b[a-z][a-z'-]{1,30}'s\b.{0,20}"
     r"\b(?:applications?|profiles?|interviews?|notifications?)\b"
+    r"|\b(?:delete|remove|archive)\b.{0,40}\b(?:another|other)\b.{0,25}"
+    r"\bcompany'?s?\s+(?:internship|posting)\b"
     r"|\b(?:private|confidential)\s+(?:company|student|applicant|account)\s+(?:information|data|details)\b",
+    re.I,
+)
+OTHER_COMPANY_RESOURCE_PATTERN = re.compile(
+    r"\b(?:show|list|tell|give|find|download|access|delete|remove|archive)\b"
+    r".{0,40}\b(?:another|other)\b.{0,25}\bcompany'?s?\b.{0,25}"
+    r"\b(?:applicants?|internships?|postings?)\b",
     re.I,
 )
 PERSONAL_DATA_EXPORT_PATTERN = re.compile(
@@ -67,6 +89,21 @@ PERSONAL_DATA_EXPORT_PATTERN = re.compile(
     r".{0,50}\b(?:user emails?|emails?|email addresses?|personal data|personal information|personal details|"
     r"personal records|private information|private data|contact details|"
     r"personally identifiable information|pii)\b",
+    re.I,
+)
+AMBIGUOUS_SENSITIVE_ACCESS_PATTERN = re.compile(
+    r"\b(?:show|tell|give|find|list|download|display|export|dump|retrieve|share|access)\b"
+    r".{0,60}\b(?:resume|assessment scores?|skill results?|email addresses?|"
+    r"personal data|personal details|contact details|applicant details)\b",
+    re.I,
+)
+ADMIN_USER_DIRECTORY_PATTERN = re.compile(
+    r"\b(?:show|list|view|browse|search)\b.{0,35}\b(?:all\s+)?(?:platform\s+)?users\b",
+    re.I,
+)
+USER_DETAIL_TERMS_PATTERN = re.compile(
+    r"\b(?:email addresses?|phone numbers?|personal data|personal details|"
+    r"contact details|resume|assessment scores?|profiles?)\b",
     re.I,
 )
 
@@ -110,6 +147,7 @@ def requests_credential_value(text: str) -> bool:
     return bool(
         _CREDENTIAL_VALUE_REQUEST.search(text)
         or _CREDENTIAL_CODE_REQUEST.search(text)
+        or _SENSITIVE_CONFIGURATION_REQUEST.search(text)
     )
 
 
@@ -123,6 +161,15 @@ def credential_question_guidance(text: str) -> str | None:
             "I can't see or share passwords. To change yours, open Privacy & Security, "
             "then Security settings and choose Update Password, or use Forgot password "
             "on the login page."
+        )
+    if re.search(
+        r"\b(?:database|connection string|environment variables?|env vars?|"
+        r"\.env file|api keys?|secret keys?|configuration|config|system prompt)\b",
+        normalized,
+    ):
+        return (
+            "I can’t reveal API keys, environment variables, database connection details, "
+            "or private configuration. Manage secrets only through the secure environment."
         )
     if re.search(
         r"\b(?:otp|one[- ]time|verification code|security code|authenticator code|"
@@ -163,9 +210,40 @@ def detect_cross_account_request(text: str) -> bool:
     return bool(PRIVATE_CROSS_ACCOUNT_PATTERN.search(text))
 
 
+def requests_other_company_resource(text: str) -> bool:
+    """Detect attempts to inspect or modify another company's records."""
+    return bool(OTHER_COMPANY_RESOURCE_PATTERN.search(text))
+
+
 def requests_personal_data_export(text: str) -> bool:
     """Detect requests to list or export user emails or personal records."""
     return bool(PERSONAL_DATA_EXPORT_PATTERN.search(text))
+
+
+def is_admin_user_directory_summary(text: str, role: str) -> bool:
+    """Allow only an authenticated administrator to request the paginated user directory."""
+    return bool(
+        role.lower() == "admin"
+        and ADMIN_USER_DIRECTORY_PATTERN.search(text)
+        and not USER_DETAIL_TERMS_PATTERN.search(text)
+    )
+
+
+def requests_ambiguous_sensitive_access(text: str) -> bool:
+    """Fail closed on sensitive-data access requests without self-ownership or help intent."""
+    if not AMBIGUOUS_SENSITIVE_ACCESS_PATTERN.search(text):
+        return False
+    if re.search(r"\b(?:my|mine|our|own)\b", text, re.I):
+        return False
+    if re.search(
+        r"\bhow\s+(?:do|can|should)\s+i\b|"
+        r"\bwhat\s+should\s+i\s+check\b|"
+        r"\bwhere\s+(?:can|do)\s+i\b",
+        text,
+        re.I,
+    ):
+        return False
+    return True
 
 
 def is_chatbot_capability_question(text: str) -> bool:

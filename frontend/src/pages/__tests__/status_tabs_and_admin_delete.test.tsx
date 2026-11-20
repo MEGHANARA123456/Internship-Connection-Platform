@@ -12,7 +12,7 @@ vi.mock('../../api/client', () => ({
   api: {
     get: vi.fn(),
     post: vi.fn(),
-    patch: vi.fn(),
+    patch: vi.fn().mockResolvedValue({ data: {} }),
     put: vi.fn(),
     delete: vi.fn(),
   },
@@ -102,6 +102,7 @@ beforeEach(() => {
     if (path === '/admin/users') return { data: [] } as never
     return { data: [] } as never
   })
+  vi.mocked(api.patch).mockResolvedValue({ data: {} } as never)
 })
 
 afterEach(() => {

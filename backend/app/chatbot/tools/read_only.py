@@ -57,6 +57,8 @@ TOOL_ROLES = {
     "student_skill_retake": UserRole.STUDENT,
     "company_applicants": UserRole.COMPANY,
     "company_shortlisted": UserRole.COMPANY,
+    "company_analytics": UserRole.COMPANY,
+    "company_most_applied_internship": UserRole.COMPANY,
     "company_pipeline": UserRole.COMPANY,
     "company_internships": UserRole.COMPANY,
     "company_interviews": UserRole.COMPANY,
@@ -72,6 +74,8 @@ TOOL_ROLES = {
     "admin_platform_summary": UserRole.ADMIN,
     "admin_company_counts": UserRole.ADMIN,
     "admin_student_counts": UserRole.ADMIN,
+    "admin_selected_student_counts": UserRole.ADMIN,
+    "admin_most_applied_internships": UserRole.ADMIN,
     "admin_posting_counts": UserRole.ADMIN,
     "admin_today_activity": UserRole.ADMIN,
     "admin_recent_registrations": UserRole.ADMIN,
@@ -693,8 +697,8 @@ async def _student_recommended_internships(db: AsyncSession, user: User) -> Tool
     if profile is None or not profile.skills.strip():
         return ToolResult(
             "student_recommended_internships",
-            "I could not find profile skills to match yet. Add skills to your profile and try again.",
-            "/profile/student",
+            "I couldn't find skills in your profile to match internships. Add skills to your profile, then browse current opportunities.",
+            "/opportunities",
         )
 
     rows = (await db.execute(
@@ -883,6 +887,44 @@ async def _company_applicants(
         answer,
         "/company/shortlisted" if shortlisted else "/company/applicants",
     )
+
+
+async def _company_most_applied_internship(
+    db: AsyncSession,
+    user: User,
+) -> ToolResult:
+    """Return the most-applied posting owned by the authenticated company."""
+    metrics = await get_company_metrics(db, user.id)
+    postings = sorted(
+        (
+            posting for posting in metrics["applications_by_role"]
+            if int(posting["applications"]) > 0
+        ),
+        key=lambda posting: (-int(posting["applications"]), str(posting["title"]).casefold()),
+    )
+    answer = (
+        "None of your internships has received applications yet."
+        if not postings
+        else (
+            f"Your most-applied internship is {postings[0]['title']} with "
+            f"{int(postings[0]['applications'])} applications."
+        )
+    )
+    return ToolResult("company_most_applied_internship", answer, "/company/jobs")
+
+
+async def _company_analytics(db: AsyncSession, user: User) -> ToolResult:
+    """Return applicant and hiring-stage aggregates for only the authenticated company."""
+    metrics = await get_company_metrics(db, user.id)
+    counts = metrics["status_counts"]
+    answer = (
+        f"Across your internships, there are {metrics['total_applicants']} active "
+        f"applications (withdrawn excluded): {counts.get('APPLIED', 0)} applied, "
+        f"{counts.get('UNDER_REVIEW', 0)} under review, {metrics['shortlisted']} shortlisted, "
+        f"{metrics['interviews_scheduled']} upcoming interviews, and "
+        f"{metrics['offers']} selected or accepted."
+    )
+    return ToolResult("company_analytics", answer, "/company/analytics")
 
 
 async def _company_pipeline(db: AsyncSession, user: User) -> ToolResult:
@@ -1115,6 +1157,46 @@ async def _admin_student_counts(db: AsyncSession) -> ToolResult:
         f"There are {total} registered student accounts; {active} are currently active.",
         "/admin/students",
     )
+
+
+async def _admin_selected_student_counts(db: AsyncSession) -> ToolResult:
+    count = int(await db.scalar(
+        select(func.count(func.distinct(Application.student_id))).where(
+            Application.status.in_(("SELECTED", "ACCEPTED"))
+        )
+    ) or 0)
+    answer = (
+        "No students have been selected or accepted yet."
+        if not count
+        else (
+            f"{_count_phrase(count, 'student')} "
+            f"{'has' if count == 1 else 'have'} been selected or accepted."
+        )
+    )
+    return ToolResult("admin_selected_student_counts", answer, "/admin")
+
+
+async def _admin_most_applied_internships(db: AsyncSession) -> ToolResult:
+    rows = (await db.execute(
+        select(Internship.title, func.count(Application.id).label("application_count"))
+        .join(Application, Application.internship_id == Internship.id)
+        .where(Application.status != "WITHDRAWN")
+        .group_by(Internship.id, Internship.title)
+        .order_by(
+            func.count(Application.id).desc(),
+            Internship.title.asc(),
+            Internship.id.asc(),
+        )
+        .limit(MAX_ROWS)
+    )).all()
+    answer = (
+        "No applications have been recorded for internships yet."
+        if not rows
+        else "Most-applied internships: " + "; ".join(
+            f"{title} ({int(count)} applications)" for title, count in rows
+        ) + "."
+    )
+    return ToolResult("admin_most_applied_internships", answer, "/admin")
 
 
 async def _admin_posting_counts(db: AsyncSession) -> ToolResult:
@@ -1468,6 +1550,8 @@ async def execute_read_tool(
         "student_skill_retake": lambda: _student_skill_retake(db, user),
         "company_applicants": lambda: _company_applicants(db, user, internship_id),
         "company_shortlisted": lambda: _company_applicants(db, user, internship_id, True),
+        "company_analytics": lambda: _company_analytics(db, user),
+        "company_most_applied_internship": lambda: _company_most_applied_internship(db, user),
         "company_pipeline": lambda: _company_pipeline(db, user),
         "company_internships": lambda: _company_internships(db, user, internship_id),
         "company_interviews": lambda: _company_interviews(db, user),
@@ -1480,6 +1564,8 @@ async def execute_read_tool(
         "admin_analytics": lambda: _admin_analytics(db),
         "admin_company_counts": lambda: _admin_company_counts(db),
         "admin_student_counts": lambda: _admin_student_counts(db),
+        "admin_selected_student_counts": lambda: _admin_selected_student_counts(db),
+        "admin_most_applied_internships": lambda: _admin_most_applied_internships(db),
         "admin_posting_counts": lambda: _admin_posting_counts(db),
         "admin_today_activity": lambda: _admin_today_activity(db),
         "admin_recent_registrations": lambda: _admin_recent_registrations(db),

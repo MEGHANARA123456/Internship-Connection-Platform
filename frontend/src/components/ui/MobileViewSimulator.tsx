@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, type ReactNode, type SyntheticEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { useViewModeStore } from '../../store/viewMode'
+import { Z_INDEX } from '../../lib/zIndex'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Smartphone,
@@ -120,7 +122,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isMobileView, isInsidePreviewFrame, toggleMobileView])
 
-  if (!isMobileView || isInsidePreviewFrame) {
+  if (!isMobileView || isInsidePreviewFrame || typeof document === 'undefined' || !document.body) {
     return <>{children}</>
   }
 
@@ -197,8 +199,8 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
     setOrientation((prev) => (prev === 'portrait' ? 'landscape' : 'portrait'))
   }
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-start py-3 px-3 select-none overflow-x-hidden antialiased">
+  return createPortal(
+    <div className={`fixed inset-0 ${Z_INDEX.mobileNavigation} flex flex-col items-center justify-start overflow-x-hidden overflow-y-auto bg-slate-950 px-3 py-3 text-slate-100 antialiased select-none`}>
       {/* Executive Studio Inspector Header */}
       <header className="w-full max-w-4xl mb-4 flex flex-wrap items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 backdrop-blur-xl px-4 py-2.5 rounded-2xl shadow-2xl z-50">
         {/* Left: Device & Dimensions */}
@@ -435,6 +437,7 @@ export function MobileViewSimulator({ children }: { children: ReactNode }) {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

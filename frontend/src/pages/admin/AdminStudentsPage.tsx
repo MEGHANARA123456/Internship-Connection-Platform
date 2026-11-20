@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Users } from 'lucide-react'
 import { api } from '../../api/client'
@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/Button'
 import { EmptyState } from '../../components/ui/EmptyState'
 import { SearchBox } from '../../components/ui/SearchBox'
 import { routes } from '../../lib/routes'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import type { AdminPage, AdminStudent } from './types'
 
 const pageSizes = [10, 20, 50, 100]
@@ -18,6 +19,30 @@ export function AdminStudentsPage() {
   const [error, setError] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
   const requestKey = params.toString()
+  const requestKeyRef = useRef(requestKey)
+  requestKeyRef.current = requestKey
+
+  const fetchStudents = async (silent = false, signal?: AbortSignal) => {
+    const key = requestKey
+    const query = new URLSearchParams(key)
+    if (!query.has('page')) query.set('page', '1')
+    if (!query.has('page_size')) query.set('page_size', '20')
+    if (!silent) {
+      setLoading(true)
+      setError(false)
+    }
+    try {
+      const response = await api.get<AdminPage<AdminStudent>>(`/admin/students?${query.toString()}`, { signal })
+      if (requestKeyRef.current === key) {
+        setData(response.data)
+        setError(false)
+      }
+    } catch {
+      if (!signal?.aborted && requestKeyRef.current === key && !silent) setError(true)
+    } finally {
+      if (!signal?.aborted && requestKeyRef.current === key && !silent) setLoading(false)
+    }
+  }
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -40,21 +65,10 @@ export function AdminStudentsPage() {
 
   useEffect(() => {
     const controller = new AbortController()
-    const query = new URLSearchParams(requestKey)
-    if (!query.has('page')) query.set('page', '1')
-    if (!query.has('page_size')) query.set('page_size', '20')
-    setLoading(true)
-    setError(false)
-    api.get<AdminPage<AdminStudent>>(`/admin/students?${query.toString()}`, { signal: controller.signal })
-      .then((response) => setData(response.data))
-      .catch(() => {
-        if (!controller.signal.aborted) setError(true)
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
+    void fetchStudents(false, controller.signal)
     return () => controller.abort()
   }, [requestKey, retryKey])
+  useAutoRefresh(() => fetchStudents(true), 15_000)
 
   const currentPage = Number(params.get('page') || '1')
   const pageSize = Number(params.get('page_size') || '20')

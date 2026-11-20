@@ -13,6 +13,14 @@
 !/backend/kb/admin-users.md
 !/backend/kb/admin-moderation-reports.md
 !/backend/kb/admin-account-suspension.md
+!/backend/kb/overview.md
+!/backend/kb/roles.md
+!/backend/kb/privacy-cookies-data-rights.md
+!/backend/kb/troubleshooting.md
+!/backend/kb/search-filters.md
+!/backend/kb/spotting-internship-scams.md
+!/backend/kb/company-posting-closing.md
+!/backend/kb/admin-analytics-reports.md
 
 
 # Python
@@ -46,10 +54,17 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Storage & Uploads
-backend/storage/resumes/*
-!backend/storage/resumes/.gitkeep
+backend/storage/*
+!backend/storage/avatars/
 backend/storage/avatars/*
 !backend/storage/avatars/.gitkeep
+!backend/storage/resumes/
+backend/storage/resumes/*
+!backend/storage/resumes/.gitkeep
+!backend/storage/interview_recordings/
+backend/storage/interview_recordings/*
+!backend/storage/interview_recordings/.gitkeep
+backend/storage/company_documents/*
 backend/storage/*.json
 
 # IDEs & System
@@ -66,8 +81,5 @@ backend/.env
 
 
 backup.dump
-backend/storage/company_documents/*
-backend/storage/avatars/*
-backend/storage/resumes/*
-!backend/storage/avatars/.gitkeep
-!backend/storage/resumes/.gitkeep
+pytest.log
+vitest.log

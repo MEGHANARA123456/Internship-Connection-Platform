@@ -26,6 +26,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { api } from '../../api/client'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import { routes } from '../../lib/routes'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
@@ -291,24 +292,29 @@ export function DesktopAnalysisVisuals({
     viewTriggerRef.current?.focus()
   }
 
-  const fetchAnalytics = async () => {
-    setIsRefreshing(true)
-    setLoadError(false)
+  const fetchAnalytics = async (silent = false) => {
+    if (!silent) {
+      setIsRefreshing(true)
+      setLoadError(false)
+    }
     try {
       const res = await api.get('/analytics/overview')
       setAnalytics(res.data)
       onRefreshed?.()
     } catch {
-      setLoadError(true)
+      if (!silent) setLoadError(true)
     } finally {
-      setIsRefreshing(false)
-      setLoading(false)
+      if (!silent) {
+        setIsRefreshing(false)
+        setLoading(false)
+      }
     }
   }
 
   useEffect(() => {
     if (!fullAnalyticsMenu) void fetchAnalytics()
   }, [variant, refreshKey, fullAnalyticsMenu])
+  useAutoRefresh(() => fetchAnalytics(true), 60_000, !fullAnalyticsMenu)
 
   // Raw API counts with fallback safety
   const rawApplied = analytics?.funnel?.applied || 0

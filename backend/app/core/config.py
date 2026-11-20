@@ -2,6 +2,7 @@
 # Values are loaded from environment variables and the local .env file.
 from functools import lru_cache
 from typing import Literal
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -36,6 +37,26 @@ class Settings(BaseSettings):
     rate_limit_backend: Literal["memory", "redis"] = "memory"
     rate_limit_redis_url: str | None = None
     gemini_api_key: str | None = None
+    interview_llm_base_url: str = "https://api.groq.com/openai"
+    interview_llm_model: str = "openai/gpt-oss-20b"
+    interview_llm_api_key: str = Field(default="", repr=False)
+    interview_llm_timeout_seconds: float = Field(default=12.0, gt=0, le=60)
+    interview_allowed_provider_hosts: list[str] = ["api.groq.com"]
+    interview_proctoring_max_violations: int = Field(default=3, gt=0, le=10)
+    skill_gap_llm_enabled: bool = False
+    interview_stt_base_url: str = "https://api.groq.com/openai"
+    interview_stt_model: str = "whisper-large-v3-turbo"
+    interview_stt_api_key: str = Field(default="", repr=False)
+    interview_stt_timeout_seconds: float = Field(default=45.0, gt=0, le=120)
+    interview_stt_max_audio_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    interview_stt_max_duration_seconds: int = Field(default=180, gt=0, le=600)
+    interview_stt_requests_per_minute: int = Field(default=5, gt=0, le=60)
+    interview_ffprobe_path: str = "ffprobe"
+    interview_video_storage_path: str = "storage/interview_recordings"
+    interview_video_max_chunk_bytes: int = Field(default=5 * 1024 * 1024, gt=0)
+    interview_video_max_bytes: int = Field(default=250 * 1024 * 1024, gt=0)
+    interview_video_max_duration_seconds: int = Field(default=1200, gt=0, le=3600)
+    interview_video_retention_days: int = Field(default=30, gt=0, le=365)
     require_email_verification: bool = True
     require_company_email_verification: bool = False
     interview_auto_cancel_grace_minutes: int = 60

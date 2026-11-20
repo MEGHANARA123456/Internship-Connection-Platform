@@ -6,6 +6,7 @@ import { useChatbot } from './useChatbot'
 import { ChatWindow } from './ChatWindow'
 import { getChatbotStatus } from './api'
 import type { ChatbotStatus } from './types'
+import { Z_INDEX } from '../lib/zIndex'
 
 const AUTHENTICATION_PATHS = [
   '/login',
@@ -64,7 +65,7 @@ export function ChatbotWidget() {
           aria-label="Chat with InternSphere AI"
           title="Chat with InternSphere AI"
           onClick={() => setOpen(true)}
-          className="fixed bottom-6 right-6 z-[60] flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-700 text-white shadow-xl transition duration-200 hover:scale-105 hover:shadow-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 motion-reduce:transition-none dark:focus-visible:ring-offset-slate-950"
+          className={`fixed bottom-6 right-6 ${Z_INDEX.chatbotLauncher} flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-700 text-white shadow-xl transition duration-200 hover:scale-105 hover:shadow-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 motion-reduce:transition-none dark:focus-visible:ring-offset-slate-950`}
         >
           <MessageCircle className="h-6 w-6" />
           <span className={`absolute right-0 top-0 h-3.5 w-3.5 rounded-full border-2 border-white dark:border-slate-950 ${!chat.online || statusError || statusDisabled ? 'bg-rose-400' : statusChecking ? 'bg-amber-400' : 'bg-emerald-400'}`} aria-label={!chat.online || statusError ? 'Offline' : statusDisabled ? 'Disabled' : statusChecking ? 'Checking connection' : 'Online'} />

@@ -148,6 +148,51 @@ export function VideoInterviewModal({
       title="Secure In-App Video Interview"
       description={`In-app interview room • Room #${interviewId} • ${roleName}`}
       maxWidth="4xl"
+      footer={
+        <div className="flex items-center justify-center gap-3 rounded-xl bg-slate-100 p-3 dark:bg-slate-800/80">
+          <button
+            onClick={toggleAudio}
+            className={`rounded-xl p-3 font-semibold transition-all ${
+              isAudioEnabled
+                ? 'bg-white text-slate-700 hover:bg-slate-50 dark:bg-slate-700 dark:text-slate-200'
+                : 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
+            }`}
+            title={isAudioEnabled ? 'Mute Microphone' : 'Unmute Microphone'}
+          >
+            {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+          </button>
+          <button
+            onClick={toggleVideo}
+            className={`rounded-xl p-3 font-semibold transition-all ${
+              isVideoEnabled
+                ? 'bg-white text-slate-700 hover:bg-slate-50 dark:bg-slate-700 dark:text-slate-200'
+                : 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
+            }`}
+            title={isVideoEnabled ? 'Turn Off Camera' : 'Turn On Camera'}
+          >
+            {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+          </button>
+          <button
+            onClick={toggleScreenShare}
+            className={`rounded-xl p-3 font-semibold transition-all ${
+              isScreenSharing
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'bg-white text-slate-700 hover:bg-slate-50 dark:bg-slate-700 dark:text-slate-200'
+            }`}
+            title={isScreenSharing ? 'Stop Screen Share' : 'Share Screen'}
+          >
+            <Monitor className="w-5 h-5" />
+          </button>
+          <button
+            onClick={handleEndCall}
+            className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-3 font-semibold text-white shadow-sm transition-colors hover:bg-rose-700"
+            title="Leave Call"
+          >
+            <PhoneOff className="w-5 h-5" />
+            <span className="hidden text-xs font-bold sm:inline">End Call</span>
+          </button>
+        </div>
+      }
     >
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Main Video Stage */}
@@ -197,53 +242,6 @@ export function VideoInterviewModal({
             </div>
           )}
 
-          {/* Video Controls Bar */}
-          <div className="flex items-center justify-center gap-3 p-3 bg-slate-100 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700">
-            <button
-              onClick={toggleAudio}
-              className={`p-3 rounded-xl font-semibold transition-all ${
-                isAudioEnabled
-                  ? 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50'
-                  : 'bg-rose-500 text-white hover:bg-rose-600 shadow-sm'
-              }`}
-              title={isAudioEnabled ? 'Mute Microphone' : 'Unmute Microphone'}
-            >
-              {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
-            </button>
-
-            <button
-              onClick={toggleVideo}
-              className={`p-3 rounded-xl font-semibold transition-all ${
-                isVideoEnabled
-                  ? 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50'
-                  : 'bg-rose-500 text-white hover:bg-rose-600 shadow-sm'
-              }`}
-              title={isVideoEnabled ? 'Turn Off Camera' : 'Turn On Camera'}
-            >
-              {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-            </button>
-
-            <button
-              onClick={toggleScreenShare}
-              className={`p-3 rounded-xl font-semibold transition-all ${
-                isScreenSharing
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50'
-              }`}
-              title={isScreenSharing ? 'Stop Screen Share' : 'Share Screen'}
-            >
-              <Monitor className="w-5 h-5" />
-            </button>
-
-            <button
-              onClick={handleEndCall}
-              className="p-3 rounded-xl font-semibold bg-rose-600 text-white hover:bg-rose-700 transition-colors shadow-sm flex items-center gap-1.5 px-4"
-              title="Leave Call"
-            >
-              <PhoneOff className="w-5 h-5" />
-              <span className="text-xs font-bold hidden sm:inline">End Call</span>
-            </button>
-          </div>
         </div>
 
         {/* Sidebar: Private Interview Notes & Checklist */}

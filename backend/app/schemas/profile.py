@@ -3,8 +3,11 @@
 # -----------------------------------------------------------------------------
 
 from datetime import datetime
+import re
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
 class StudentProfileUpdate(BaseModel):
     full_name: str = Field(min_length=2, max_length=255)
     university: str = Field(min_length=2, max_length=255)
@@ -13,6 +16,40 @@ class StudentProfileUpdate(BaseModel):
     bio: str | None = None
     skills: str | None = None
     avatar_url: str | None = None
+
+
+class StudentHandlesUpdate(BaseModel):
+    github_username: str | None
+    leetcode_username: str | None
+
+    @field_validator("github_username", mode="before")
+    @classmethod
+    def validate_github_username(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        username = value.strip().removeprefix("@").strip()
+        if not username:
+            return None
+        if len(username) > 39 or not re.fullmatch(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", username):
+            raise ValueError("Enter a valid GitHub username")
+        return username
+
+    @field_validator("leetcode_username", mode="before")
+    @classmethod
+    def validate_leetcode_username(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        username = value.strip().removeprefix("@").strip()
+        if not username:
+            return None
+        if len(username) > 50 or not re.fullmatch(r"[A-Za-z0-9_-]+", username):
+            raise ValueError("Enter a valid LeetCode username")
+        return username
+
 
 class CompanyProfileUpdate(BaseModel):
     company_name: str = Field(min_length=2, max_length=255)
@@ -35,6 +72,8 @@ class ProfileResponse(BaseModel):
     graduation_year: int | None = None
     bio: str | None = None
     skills: str | None = None
+    github_username: str | None = None
+    leetcode_username: str | None = None
     company_name: str | None = None
     industry: str | None = None
     website: str | None = None

@@ -7,13 +7,18 @@ from types import SimpleNamespace
 
 import pytest
 from app.api.v1.dependencies import get_current_user_optional
-from app.chatbot.chatbot_config import ChatbotConfig, load_config, provider_configured
+from app.chatbot.chatbot_config import (
+    ChatbotConfig,
+    fallback_provider_configured,
+    load_config,
+    provider_configured,
+)
 from app.chatbot.guardrails import output_is_safe
 from app.chatbot.orchestrator import classify_intent
 from app.chatbot.prompts import system_prompt_for
 from app.chatbot.providers.anthropic import AnthropicProvider
-from app.chatbot.providers.base import ProviderPayload, ProviderResult
-from app.chatbot.providers.llm_http import LLMHTTPProvider
+from app.chatbot.providers.base import Passage, ProviderPayload, ProviderResult
+from app.chatbot.providers.llm_http import LLMHTTPProvider, ProviderRateLimitError
 from app.chatbot.redaction import contains_secret, redact
 from app.chatbot.retriever import BM25Retriever, _metadata_questions, load_documents
 from app.chatbot.scope import decide_scope, fixed_reply
@@ -24,6 +29,7 @@ from app.schemas.chatbot import ChatAskRequest, ChatFeedbackRequest
 from app.services.audit import AuditEventSummary
 from app.services.chatbot_service import (
     ChatbotService,
+    NO_EVIDENCE_ANSWER,
     _is_allowed_live_route,
     _links_for,
     _render_retrieval_answer,
@@ -52,6 +58,16 @@ class FakeProvider:
     async def rewrite(self, payload: ProviderPayload) -> ProviderResult:
         self.payloads.append(payload)
         return self.result
+
+
+class FailingProvider:
+    def __init__(self, error: Exception):
+        self.error = error
+        self.calls = 0
+
+    async def rewrite(self, payload: ProviderPayload) -> ProviderResult:
+        self.calls += 1
+        raise self.error
 
 
 def _config(**changes) -> ChatbotConfig:
@@ -139,6 +155,42 @@ def test_openai_compatible_base_url_strips_v1_suffix(tmp_path, monkeypatch, capl
     assert config.mode == "llm"
     assert "chatbot_base_url_version_suffix_removed" in caplog.text
     assert "local-test-key" not in caplog.text
+
+
+def test_fallback_provider_settings_are_loaded_and_redacted_from_repr(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".env").write_text(
+        "CHATBOT_MODE=llm\n"
+        "CHATBOT_PROVIDER=openai-compatible\n"
+        "CHATBOT_BASE_URL=https://api.groq.com/openai\n"
+        "CHATBOT_API_KEY=primary-test-key\n"
+        "CHATBOT_MODEL=gpt-oss-20b\n"
+        "CHATBOT_FALLBACK_BASE_URL=https://backup.example.test/v1/\n"
+        "CHATBOT_FALLBACK_API_KEY=fallback-test-key\n"
+        "CHATBOT_FALLBACK_MODEL=backup-gpt-oss\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    for name in (
+        "CHATBOT_MODE",
+        "CHATBOT_PROVIDER",
+        "CHATBOT_BASE_URL",
+        "CHATBOT_API_KEY",
+        "CHATBOT_MODEL",
+        "CHATBOT_FALLBACK_BASE_URL",
+        "CHATBOT_FALLBACK_API_KEY",
+        "CHATBOT_FALLBACK_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    config = load_config()
+    service = ChatbotService(config=config)
+
+    assert config.fallback_base_url == "https://backup.example.test"
+    assert config.fallback_model == "backup-gpt-oss"
+    assert fallback_provider_configured(config)
+    assert "fallback-test-key" not in repr(config)
+    assert isinstance(service.fallback_provider, LLMHTTPProvider)
+    assert service.fallback_provider._config.model == "backup-gpt-oss"
 
 
 def test_anthropic_configuration_is_loaded_from_dotenv_and_bounded(tmp_path, monkeypatch) -> None:
@@ -374,6 +426,71 @@ async def test_openai_compatible_provider_redacts_and_retries_gpt_oss(
 
 
 @pytest.mark.anyio
+async def test_openai_compatible_retries_without_unsupported_response_format(monkeypatch) -> None:
+    from email.message import Message
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    provider = LLMHTTPProvider(_config(
+        mode="llm",
+        provider="openai-compatible",
+        base_url="https://chat.example.test",
+        api_key="local-test-key",
+        model="plain-model",
+        retries=0,
+    ))
+    requests = []
+
+    def fake_post(request):
+        body = json.loads(request.data)
+        requests.append(body)
+        if len(requests) == 1:
+            raise HTTPError(
+                request.full_url,
+                400,
+                "Bad Request",
+                Message(),
+                BytesIO(b'{"error":{"message":"response_format is not supported"}}'),
+            )
+        return json.dumps({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": json.dumps({
+                    "answerable": True,
+                    "answer": "Applications shows the current status.",
+                    "used_chunk_ids": ["chunk-1"],
+                    "confidence": 0.9,
+                    "needs_clarification": None,
+                })},
+            }],
+        }).encode("utf-8")
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    result = await provider.rewrite(ProviderPayload(
+        "Where is my application?",
+        (),
+        "student",
+        "applications",
+        (Passage(
+            "chunk-1",
+            "Applications",
+            ("student",),
+            "Review your application status.",
+            ("/applications",),
+            1.0,
+        ),),
+    ))
+
+    assert result.answerable
+    assert result.retries == 1
+    assert len(requests) == 2
+    assert "response_format" in requests[0]
+    assert "response_format" not in requests[1]
+    assert "reasoning_effort" not in requests[0]
+    assert "reasoning_effort" not in requests[1]
+
+
+@pytest.mark.anyio
 async def test_llm_mode_calls_openai_compatible_provider(monkeypatch) -> None:
     config = _config(
         mode="llm",
@@ -469,6 +586,154 @@ async def test_provider_429_falls_back_and_honors_retry_after(monkeypatch, caplo
     assert "How do students apply" not in caplog.text
     assert "local-test-key" not in caplog.text
     assert "chatbot_provider_rate_limited retry_after=37" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_primary_provider_failure_uses_secondary_once(caplog) -> None:
+    primary = FailingProvider(RuntimeError("private-question fallback-test-key"))
+    retriever = BM25Retriever()
+    passage = next(
+        item for item in retriever.retrieve(
+            "How do students apply to an internship?", "student", top_k=8
+        ) if item.id.startswith("applying#")
+    )
+    fallback = FakeProvider(ProviderResult(
+        True,
+        "Fallback provider answer.",
+        (passage.id,),
+        0.9,
+        prompt_tokens=12,
+        completion_tokens=4,
+        total_tokens=16,
+        usage_reported=True,
+    ))
+    service = ChatbotService(
+        config=_config(
+            mode="llm",
+            provider="openai-compatible",
+            tokens_per_minute=100_000,
+            tokens_per_day=100_000,
+            requests_per_minute=100,
+            requests_per_day=100,
+        ),
+        retriever=retriever,
+        provider=primary,
+        fallback_provider=fallback,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="internsphere.chatbot"):
+        answer, _, _, used_retrieval_fallback, _, reason, _ = await service._answer_with_provider(
+            "Private application question",
+            [],
+            "student",
+            "applications",
+            [passage],
+            "user-fingerprint",
+        )
+
+    assert answer == "Fallback provider answer."
+    assert not used_retrieval_fallback
+    assert reason == "provider_unavailable"
+    assert primary.calls == 1
+    assert len(fallback.payloads) == 1
+    assert service.metrics["provider_fallback_attempts"] == 1
+    assert service.metrics["provider_fallback_successes"] == 1
+    assert service.fallback_provider_budget.snapshot()["tokens_per_day"] == 16
+    assert "private-question" not in caplog.text
+    assert "fallback-test-key" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_both_providers_failing_returns_retrieval_answer(caplog) -> None:
+    primary = FailingProvider(RuntimeError("primary response invalid"))
+    fallback = FailingProvider(RuntimeError("fallback response invalid"))
+    service = ChatbotService(
+        config=_config(mode="llm", provider="openai-compatible"),
+        provider=primary,
+        fallback_provider=fallback,
+    )
+    passage = next(
+        item for item in service.retriever.retrieve(
+            "How do students apply to an internship?", "student", top_k=8
+        ) if item.id.startswith("applying#")
+    )
+
+    with caplog.at_level(logging.WARNING, logger="internsphere.chatbot"):
+        answer, sources, _, used_retrieval_fallback, _, reason, _ = await service._answer_with_provider(
+            "question-not-for-logs",
+            [],
+            "student",
+            "applications",
+            [passage],
+            "user-fingerprint",
+        )
+
+    assert answer != NO_EVIDENCE_ANSWER
+    assert sources
+    assert used_retrieval_fallback
+    assert reason == "provider_fallback_failed"
+    assert primary.calls == fallback.calls == 1
+    assert service.metrics["provider_fallback_attempts"] == 1
+    assert service.metrics["provider_fallback_failures"] == 1
+    assert "question-not-for-logs" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_primary_cooldown_does_not_block_secondary_provider() -> None:
+    class RateLimitedProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def rewrite(self, payload: ProviderPayload) -> ProviderResult:
+            self.calls += 1
+            raise ProviderRateLimitError(37)
+
+    primary = RateLimitedProvider()
+    clock = [100.0]
+    retriever = BM25Retriever()
+    passage = next(
+        item for item in retriever.retrieve(
+            "How do students apply to an internship?", "student", top_k=8
+        ) if item.id.startswith("applying#")
+    )
+    fallback = FakeProvider(ProviderResult(
+        True,
+        "Fallback provider answer.",
+        (passage.id,),
+        0.9,
+    ))
+    service = ChatbotService(
+        config=_config(
+            mode="llm",
+            provider="openai-compatible",
+            tokens_per_minute=100_000,
+            tokens_per_day=100_000,
+            requests_per_minute=100,
+            requests_per_day=100,
+        ),
+        retriever=retriever,
+        provider=primary,
+        fallback_provider=fallback,
+        now=lambda: clock[0],
+    )
+
+    for _ in range(2):
+        answer, _, _, used_retrieval_fallback, _, reason, _ = await service._answer_with_provider(
+            "How do students apply to an internship?",
+            [],
+            "student",
+            "applications",
+            [passage],
+            "user-fingerprint",
+        )
+        assert answer == "Fallback provider answer."
+        assert not used_retrieval_fallback
+        assert reason == "provider_rate_limited"
+
+    assert primary.calls == 1
+    assert len(fallback.payloads) == 2
+    assert service.provider_budget.snapshot()["provider_cooldown_seconds"] == 37
+    assert service.fallback_provider_budget.snapshot()["provider_cooldown_seconds"] == 0
 
 
 def test_redacts_credentials_and_personal_data() -> None:
@@ -618,6 +883,54 @@ def test_guest_can_retrieve_public_internship_search_help() -> None:
     assert results[0].id.startswith("search-filters#")
 
 
+@pytest.mark.anyio
+async def test_question_variants_are_not_returned_as_answer_content() -> None:
+    overview = next(
+        document for document in load_documents() if document.id == "overview"
+    )
+    result = await ChatbotService(config=_config()).ask(
+        "What can someone do on the platform before creating a profile?",
+        [],
+        "guest",
+        "home",
+    )
+
+    assert result.matched_ids[0] == "overview"
+    assert any("before registering or creating a profile" in item for item in overview.examples)
+    assert all(not section.startswith("## Questions") for section in overview.sections)
+    assert "Visitors can browse public internship opportunities" in result.answer
+    assert not result.answer.lstrip().startswith("- ")
+
+
+@pytest.mark.anyio
+async def test_expired_verification_link_has_the_real_resend_steps() -> None:
+    result = await ChatbotService(config=_config()).ask(
+        "What should I try when an account confirmation link is no longer valid?",
+        [],
+        "guest",
+        "home",
+    )
+
+    assert result.matched_ids[0] == "troubleshooting"
+    assert "Send a new verification email" in result.answer
+    assert "Resend email" in result.answer
+    assert any(route == "/verify" for _, route in result.links)
+
+
+@pytest.mark.anyio
+async def test_employer_stage_answer_includes_terminal_stages() -> None:
+    result = await ChatbotService(config=_config()).ask(
+        "What do application stages mean from an employer's perspective?",
+        [],
+        "company",
+        "home",
+    )
+
+    assert result.matched_ids[0] == "company-hiring-pipeline"
+    assert "Rejected:" in result.answer
+    assert "Withdrawn:" in result.answer
+
+
 def test_retrieval_returns_the_best_matching_section() -> None:
     retriever = BM25Retriever()
     imported = retriever.retrieve("How do I import assessment questions?", "admin")
@@ -693,7 +1006,7 @@ async def test_curated_answers_are_role_scoped_and_handle_two_how_to_questions()
             "Show the email addresses for all student accounts.",
             "admin",
             "personal_data_export",
-            "I can't list user emails in chat. Open Platform Users to view accounts.",
+            "I can’t list or export user data in chat. Open Platform Users to view accounts.",
         ),
     ],
 )
@@ -926,7 +1239,10 @@ async def test_ambiguous_live_query_returns_a_clarification_without_running_a_to
                 },
             )
         assert response.status_code == 200
-        expected = "Which internship should I check? Please provide its posting ID."
+        expected = (
+            "Would you like applicant totals across all your company’s postings, "
+            "or help finding a particular posting in Applicants?"
+        )
         assert response.json()["needs_clarification"] == expected
         assert response.json()["answer"] == expected
         assert response.json()["category"] == "clarification"
@@ -1570,6 +1886,51 @@ async def test_status_endpoint_exposes_only_non_secret_configuration(monkeypatch
     }
     assert "api_key" not in response.text.lower()
     assert "test-secret" not in response.text
+
+
+@pytest.mark.anyio
+async def test_admin_status_reports_provider_names_and_fallback_counters(monkeypatch) -> None:
+    import app.chatbot.router as chatbot_router
+
+    config = _config(
+        mode="llm",
+        provider="openai-compatible",
+        base_url="https://api.groq.com/openai",
+        api_key="primary-test-key",
+        model="gpt-oss-20b",
+        fallback_base_url="https://backup.example.test",
+        fallback_api_key="fallback-test-key",
+        fallback_model="backup-model",
+    )
+    service = ChatbotService(
+        config=config,
+        provider=FakeProvider(),
+        fallback_provider=FakeProvider(),
+    )
+    service.metrics["provider_fallback_attempts"] = 3
+    service.metrics["provider_fallback_successes"] = 2
+    service.metrics["provider_fallback_failures"] = 1
+
+    class EmptyDb:
+        async def execute(self, _query):
+            return SimpleNamespace(all=lambda: [])
+
+    monkeypatch.setattr(chatbot_router, "_settings", config)
+    monkeypatch.setattr(chatbot_router, "_service", service)
+    result = await chatbot_router.chatbot_status(
+        EmptyDb(),
+        SimpleNamespace(role=UserRole.ADMIN),
+    )
+
+    metrics = result["metrics"]
+    assert metrics["provider_name"] == "groq"
+    assert metrics["fallback_provider_name"] == "backup.example.test"
+    assert metrics["provider_fallback_attempts"] == 3
+    assert metrics["provider_fallback_successes"] == 2
+    assert metrics["provider_fallback_failures"] == 1
+    assert result["fallback_provider_usage"] == service.fallback_provider_budget.snapshot()
+    assert "primary-test-key" not in repr(result)
+    assert "fallback-test-key" not in repr(result)
 
 
 @pytest.mark.anyio

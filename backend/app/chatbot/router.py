@@ -16,7 +16,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.v1.dependencies import DbSession, get_current_user, get_current_user_optional, require_roles
 from app.models import ChatbotFeedback, ChatbotLowConfidenceLog, User, UserRole
-from .chatbot_config import load_config, provider_configured
+from .chatbot_config import (
+    fallback_provider_configured,
+    load_config,
+    provider_configured,
+    provider_name,
+)
 from .guardrails import is_role_capability_question
 from ..schemas.chatbot import ChatAskRequest, ChatAskResponse, ChatFeedbackRequest, ChatLink, ChatSource
 from .orchestrator import Intent, classify_intent_with_examples, resolve_followup
@@ -256,11 +261,37 @@ async def chatbot_status(
     }
     if getattr(getattr(user, "role", None), "value", "").lower() == "admin":
         path_names = ("curated", "tool", "retrieval", "llm", "fallback", "refusal")
-        result["metrics"] = {
+        metrics = {
             **dict(_service.metrics),
             **{name: _service.metrics.get(name, 0) for name in path_names},
+            "provider_name": provider_name(_settings),
+            "fallback_provider_configured": fallback_provider_configured(_settings),
+            "fallback_provider_name": (
+                provider_name(replace(
+                    _settings,
+                    provider="openai-compatible",
+                    base_url=_settings.fallback_base_url,
+                ))
+                if fallback_provider_configured(_settings)
+                else None
+            ),
+            "provider_fallback_attempts": _service.metrics.get(
+                "provider_fallback_attempts", 0
+            ),
+            "provider_fallback_successes": _service.metrics.get(
+                "provider_fallback_successes", 0
+            ),
+            "provider_fallback_failures": _service.metrics.get(
+                "provider_fallback_failures", 0
+            ),
         }
+        result["metrics"] = metrics
         result["provider_usage"] = _service.provider_budget.snapshot()
+        result["fallback_provider_usage"] = (
+            _service.fallback_provider_budget.snapshot()
+            if _service.fallback_provider_budget is not None
+            else None
+        )
         since = datetime.now(timezone.utc) - timedelta(days=30)
         rows = (await db.execute(
             select(

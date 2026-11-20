@@ -276,6 +276,24 @@ export function ScheduleInterviewModal({
       title={rescheduleInterview ? 'Reschedule Interview' : 'Schedule Interview'}
       description={`Invite ${currentCandidateName} to an interview.`}
       maxWidth="lg"
+      footer={!success ? (
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            form="schedule-interview-form"
+            variant="primary"
+            size="sm"
+            isLoading={isSubmitting}
+            disabled={!activeAppId || (!applicationId && (!selectedJobId || !selectedAppId || loadingCandidates))}
+            leftIcon={<Calendar className="w-3.5 h-3.5" />}
+          >
+            {rescheduleInterview ? 'Confirm Reschedule' : 'Confirm & Schedule'}
+          </Button>
+        </div>
+      ) : undefined}
     >
       {success ? (
         <div className="flex flex-col items-center justify-center p-6 text-center text-emerald-700 dark:text-emerald-400 space-y-2">
@@ -286,7 +304,7 @@ export function ScheduleInterviewModal({
           </p>
         </div>
       ) : (
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form id="schedule-interview-form" onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           {/* Candidate / Job Context Selector */}
           {applicationId ? (
             <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 rounded-xl border border-indigo-100 dark:border-indigo-900/60 flex items-center gap-3">
@@ -477,22 +495,6 @@ export function ScheduleInterviewModal({
           />
 
           {serverError && <p className="text-xs text-rose-600 font-medium">{serverError}</p>}
-
-          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-            <Button type="button" variant="outline" size="sm" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              isLoading={isSubmitting}
-              disabled={!activeAppId || (!applicationId && (!selectedJobId || !selectedAppId || loadingCandidates))}
-              leftIcon={<Calendar className="w-3.5 h-3.5" />}
-            >
-              {rescheduleInterview ? 'Confirm Reschedule' : 'Confirm & Schedule'}
-            </Button>
-          </div>
         </form>
       )}
     </Modal>

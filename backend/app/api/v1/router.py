@@ -17,6 +17,13 @@ from app.api.v1.communication import router as communication_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.ai import router as ai_router
+from app.api.v1.interviews import legacy_router as legacy_interview_sessions_router
+from app.api.v1.interviews import router as interviews_router
+from app.api.v1.interview_studio_admin import router as interview_studio_admin_router
+from app.api.v1.learning_library import router as learning_library_router
+from app.api.v1.learning_library_admin import router as learning_library_admin_router
+from app.api.v1.skill_gaps import router as skill_gaps_router
+from app.api.v1.skill_gap_admin import router as skill_gap_admin_router
 from app.api.v1.ws import router as ws_router
 from app.api.v1.mailbox import router as mailbox_router
 from app.api.v1.analytics import router as analytics_router
@@ -51,6 +58,13 @@ api_router.include_router(communication_router)
 api_router.include_router(admin_router)
 api_router.include_router(reports_router)
 api_router.include_router(ai_router)
+api_router.include_router(interviews_router)
+api_router.include_router(legacy_interview_sessions_router)
+api_router.include_router(interview_studio_admin_router)
+api_router.include_router(learning_library_router)
+api_router.include_router(learning_library_admin_router)
+api_router.include_router(skill_gaps_router)
+api_router.include_router(skill_gap_admin_router)
 api_router.include_router(ws_router)
 api_router.include_router(mailbox_router)
 api_router.include_router(analytics_router)

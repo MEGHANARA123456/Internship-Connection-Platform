@@ -21,6 +21,10 @@ def _limited_app() -> FastAPI:
     async def login() -> dict[str, str]:
         return {"status": "ok"}
 
+    @application.post("/api/v1/interviews/sessions/1/audio")
+    async def interview_audio() -> dict[str, str]:
+        return {"status": "ok"}
+
     return application
 
 
@@ -85,4 +89,28 @@ async def test_forwarded_ip_is_used_only_for_configured_proxies(monkeypatch: pyt
 
     assert first.status_code == 200
     assert second.status_code == 200
+    get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_interview_audio_rate_limit_uses_per_student_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("INTERVIEW_STT_REQUESTS_PER_MINUTE", "1")
+    get_settings.cache_clear()
+    app = _limited_app()
+    token_a = create_token("301", "STUDENT", "access", timedelta(minutes=5))
+    token_b = create_token("302", "STUDENT", "access", timedelta(minutes=5))
+    endpoint = "/api/v1/interviews/sessions/1/audio"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("203.0.113.12", 4567)),
+        base_url="http://rate-limit-test",
+    ) as client:
+        first_a = await client.post(endpoint, headers={"Authorization": f"Bearer {token_a}"})
+        first_b = await client.post(endpoint, headers={"Authorization": f"Bearer {token_b}"})
+        second_a = await client.post(endpoint, headers={"Authorization": f"Bearer {token_a}"})
+
+    assert first_a.status_code == 200
+    assert first_b.status_code == 200
+    assert second_a.status_code == 429
+    assert int(second_a.headers["retry-after"]) >= 1
     get_settings.cache_clear()

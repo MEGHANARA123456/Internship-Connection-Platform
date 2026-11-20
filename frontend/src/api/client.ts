@@ -93,6 +93,9 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
       const session = useAuthStore.getState().session
       if (!session?.refreshToken) {
+        if (typeof window !== 'undefined') {
+          window.sessionStorage.setItem('session_expired_message', 'true')
+        }
         useAuthStore.getState().logout()
         return Promise.reject(error)
       }
@@ -156,9 +159,12 @@ api.interceptors.response.use(
       } catch (refreshError) {
         processQueue(refreshError, null)
         if (useAuthStore.getState().session?.userId === refreshUserId) {
+          if (typeof window !== 'undefined') {
+            window.sessionStorage.setItem('session_expired_message', 'true')
+          }
           useAuthStore.getState().logout()
         }
-        return Promise.reject(refreshError)
+        return Promise.reject(error)
       } finally {
         isRefreshing = false
       }

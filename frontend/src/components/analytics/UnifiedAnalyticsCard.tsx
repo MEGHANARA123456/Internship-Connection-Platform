@@ -1,6 +1,7 @@
 import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
+  Activity,
   Award,
   Bookmark,
   Briefcase,
@@ -8,6 +9,7 @@ import {
   Check,
   ChevronDown,
   FileText,
+  Info,
   RefreshCw,
   SlidersHorizontal,
   Users,
@@ -20,6 +22,7 @@ import type { AnalyticsChartKind, ChartDatum } from './RechartsAnalyticsCharts'
 import { KpiCard } from '../dashboard/KpiCard'
 import { routes } from '../../lib/routes'
 import { useCompanyMetrics } from '../../hooks/useCompanyMetrics'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 
 const RechartsAnalyticsCharts = lazy(async () => {
   const module = await import('./RechartsAnalyticsCharts')
@@ -345,7 +348,15 @@ const KPI_CONFIG: Record<AnalyticsKind, KpiCardConfig[]> = {
     { label: 'Interviews scheduled', key: 'interviews_scheduled', href: routes.interviews({ tab: 'upcoming' }), icon: <CalendarDays className="h-4 w-4" />, info: 'Future interviews in SCHEDULED or RESCHEDULED status.', sampleUnit: 'interviews' },
     { label: 'Offers', key: 'offers', href: routes.companyApplicants({ status: 'selected' }), icon: <Award className="h-4 w-4" />, info: 'Applications currently selected or accepted.', sampleUnit: 'applications' },
   ],
-  admin: [],
+  admin: [
+    { label: 'Users signed up', key: 'users_signed_up', href: routes.adminUsers({ created: 'this_month' }), icon: <Users className="h-4 w-4" />, info: 'Accounts created since the start of the current UTC month.', sampleUnit: 'users' },
+    { label: 'Student signups', key: 'student_signups', href: routes.adminStudents({ created: 'this_month' }), icon: <Users className="h-4 w-4" />, info: 'Student accounts created this UTC calendar month.', sampleUnit: 'students' },
+    { label: 'Company signups', key: 'company_signups', href: routes.adminCompanies + '?created=this_month', icon: <Briefcase className="h-4 w-4" />, info: 'Company accounts created this UTC calendar month.', sampleUnit: 'companies' },
+    { label: 'Admin actions', key: 'admin_actions', href: routes.adminAuditLogs(), icon: <Activity className="h-4 w-4" />, info: 'Audit log records created in the selected reporting range.', sampleUnit: 'actions' },
+    { label: 'Pending verifications', key: 'pending_verifications', href: routes.adminVerifications, icon: <Check className="h-4 w-4" />, info: 'Company profiles currently awaiting verification.', sampleUnit: 'companies' },
+    { label: 'Job queue', key: 'job_queue', href: routes.adminModeration, icon: <FileText className="h-4 w-4" />, info: 'Internships currently awaiting moderation.', sampleUnit: 'postings' },
+    { label: 'Disputes', key: 'disputes', href: routes.adminReports({ status: 'open' }), icon: <Info className="h-4 w-4" />, info: 'Reports currently open.', sampleUnit: 'reports' },
+  ],
 }
 
 export function UnifiedAnalyticsCard({
@@ -380,11 +391,13 @@ export function UnifiedAnalyticsCard({
   const focusTriggerRef = useRef<HTMLButtonElement>(null)
   const requestId = useRef(0)
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (silent = false) => {
     const currentRequest = ++requestId.current
-    setLoading(true)
-    setRefreshing(true)
-    setError(false)
+    if (!silent) {
+      setLoading(true)
+      setRefreshing(true)
+      setError(false)
+    }
     try {
       const path = variant === 'student'
         ? `/students/me/insights?range=${range}`
@@ -397,9 +410,9 @@ export function UnifiedAnalyticsCard({
         onRefreshed?.()
       }
     } catch {
-      if (currentRequest === requestId.current) setError(true)
+      if (currentRequest === requestId.current && !silent) setError(true)
     } finally {
-      if (currentRequest === requestId.current) {
+      if (currentRequest === requestId.current && !silent) {
         setLoading(false)
         setRefreshing(false)
       }
@@ -409,6 +422,15 @@ export function UnifiedAnalyticsCard({
   useEffect(() => {
     void loadData()
   }, [loadData, refreshKey])
+  useAutoRefresh(
+    () => loadData(true),
+    60_000,
+    !loading
+      && !refreshing
+      && !showRangeMenu
+      && !showFocusMenu
+      && !showInternshipMenu,
+  )
 
   useEffect(() => {
     if (!showRangeMenu && !showFocusMenu && !showInternshipMenu) return

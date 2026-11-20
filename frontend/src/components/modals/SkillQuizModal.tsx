@@ -519,6 +519,37 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
       title="Verified Skill Assessment"
       description="Your answers are graded on the server. A score of 80% or higher earns a verified badge."
       maxWidth="5xl"
+      footer={result ? (
+        <div className="flex flex-wrap justify-end gap-2">
+          <Link
+            to={routes.skillResult(result.attempt_id)}
+            onClick={onClose}
+            className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            Full report
+          </Link>
+          <Button size="sm" variant="outline" onClick={reset}>Choose another topic</Button>
+          <Button size="sm" variant="primary" onClick={onClose}>Done</Button>
+        </div>
+      ) : attempt ? (
+        <div className="flex items-center justify-between">
+          <Button size="sm" variant="ghost" onClick={reset}>Quit</Button>
+          <div className="flex gap-2">
+            {questionIndex > 0 && (
+              <Button size="sm" variant="outline" onClick={() => goToQuestion(questionIndex - 1)}>Previous</Button>
+            )}
+            {questionIndex < attempt.questions.length - 1 ? (
+              <Button size="sm" variant="primary" disabled={!hasAnswer(answers[questionIndex]) || expired} onClick={() => goToQuestion(questionIndex + 1)}>
+                Next Question →
+              </Button>
+            ) : (
+              <Button size="sm" variant="primary" disabled={answers.some((answer) => !hasAnswer(answer)) || expired || submitting} isLoading={submitting} onClick={() => void submitAssessment()}>
+                Submit Assessment
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : undefined}
     >
       {!attempt ? (
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
@@ -744,7 +775,7 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
               </div>
             )}
           </div>
-          <div className="max-h-[45vh] space-y-2 overflow-y-auto">
+          <div className="space-y-2">
             {result.questions.map((question) => (
               <div key={question.question_id} className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
                 <p className="text-xs font-semibold text-slate-900 dark:text-white">{question.prompt}</p>
@@ -758,17 +789,6 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
                 </p>
               </div>
             ))}
-          </div>
-          <div className="flex justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-            <Link
-              to={routes.skillResult(result.attempt_id)}
-              onClick={onClose}
-              className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            >
-              Full report
-            </Link>
-            <Button size="sm" variant="outline" onClick={reset}>Choose another topic</Button>
-            <Button size="sm" variant="primary" onClick={onClose}>Done</Button>
           </div>
         </div>
       ) : (
@@ -824,23 +844,6 @@ export function SkillQuizModal({ isOpen, onClose, onBadgeAwarded, initialTopic }
           )}
           {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">{error}</p>}
           {expired && <p className="text-xs text-slate-600 dark:text-slate-400">Your attempt was not submitted. You can retake this topic after the cooldown.</p>}
-          <div className="flex items-center justify-between border-t border-slate-100 pt-3 dark:border-slate-800">
-            <Button size="sm" variant="ghost" onClick={reset}>Quit</Button>
-            <div className="flex gap-2">
-              {questionIndex > 0 && (
-                <Button size="sm" variant="outline" onClick={() => goToQuestion(questionIndex - 1)}>Previous</Button>
-              )}
-              {questionIndex < attempt.questions.length - 1 ? (
-                <Button size="sm" variant="primary" disabled={!hasAnswer(answers[questionIndex]) || expired} onClick={() => goToQuestion(questionIndex + 1)}>
-                  Next Question →
-                </Button>
-              ) : (
-                <Button size="sm" variant="primary" disabled={answers.some((answer) => !hasAnswer(answer)) || expired || submitting} isLoading={submitting} onClick={() => void submitAssessment()}>
-                  Submit Assessment
-                </Button>
-              )}
-            </div>
-          </div>
         </div>
       )}
     </Modal>

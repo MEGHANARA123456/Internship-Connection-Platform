@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from './Button'
 import { Modal } from './Modal'
 import type { ToastKind } from '../../lib/feedback'
+import { Z_INDEX } from '../../lib/zIndex'
 
 interface Confirmation {
   title: string
@@ -75,7 +76,7 @@ export function FeedbackHost() {
           key={toast.id}
           role={toast.kind === 'error' ? 'alert' : 'status'}
           aria-live={toast.kind === 'error' ? 'assertive' : 'polite'}
-          className={`fixed bottom-4 right-4 z-[100] max-w-sm rounded-lg px-4 py-3 text-sm font-medium shadow-lg ${
+          className={`fixed bottom-4 right-4 ${Z_INDEX.notifications} max-w-sm rounded-lg px-4 py-3 text-sm font-medium shadow-lg ${
             toast.kind === 'success'
               ? 'bg-emerald-100 text-emerald-950 dark:bg-emerald-950 dark:text-emerald-100'
               : toast.kind === 'error'

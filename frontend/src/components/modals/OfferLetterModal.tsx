@@ -130,6 +130,43 @@ export function OfferLetterModal({
       title="Official Internship Offer Letter"
       description={`Issued by ${companyName} • Confidential & Legally Binding`}
       maxWidth="3xl"
+      footer={!isSigned ? (
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={handleConfirmSign}
+            isLoading={isSubmitting}
+            disabled={isSubmitting || (signMode === 'draw' ? !hasDrawnSignature : !typedSignName.trim())}
+            leftIcon={<ShieldCheck className="w-3.5 h-3.5" />}
+          >
+            Apply E-Signature & Accept
+          </Button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+            <ShieldCheck className="h-4 w-4" />
+            Verified & Signed Offer Letter
+          </span>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handlePrintDownload}
+              leftIcon={<Download className="w-3.5 h-3.5" />}
+            >
+              Download Official PDF
+            </Button>
+            <Button size="sm" variant="primary" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        </div>
+      )}
     >
       <div className="space-y-6">
         {/* Printable Formal Offer Document */}
@@ -288,43 +325,8 @@ export function OfferLetterModal({
             )}
 
             {signError && <p className="text-xs text-rose-600 font-medium" role="alert">{signError}</p>}
-            <div className="pt-2 flex justify-end gap-2">
-              <Button size="sm" variant="outline" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={handleConfirmSign}
-                isLoading={isSubmitting}
-                disabled={isSubmitting || (signMode === 'draw' ? !hasDrawnSignature : !typedSignName.trim())}
-                leftIcon={<ShieldCheck className="w-3.5 h-3.5" />}
-              >
-                Apply E-Signature & Accept
-              </Button>
-            </div>
           </div>
-        ) : (
-          <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-slate-800">
-            <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4" />
-              Verified & Signed Offer Letter
-            </span>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handlePrintDownload}
-                leftIcon={<Download className="w-3.5 h-3.5" />}
-              >
-                Download Official PDF
-              </Button>
-              <Button size="sm" variant="primary" onClick={onClose}>
-                Done
-              </Button>
-            </div>
-          </div>
-        )}
+        ) : null}
       </div>
     </Modal>
   )

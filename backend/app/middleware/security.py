@@ -85,6 +85,39 @@ def _strict_auth_route(path: str) -> bool:
         or endpoint.startswith("mfa/")
     )
 
+
+def _interview_audio_route(path: str) -> bool:
+    parts = path.strip("/").split("/")
+    return (
+        len(parts) == 6
+        and parts[:4] == ["api", "v1", "interviews", "sessions"]
+        and parts[4].isdigit()
+        and parts[5] == "audio"
+    )
+
+
+def _interview_video_chunk_route(path: str) -> bool:
+    parts = path.strip("/").split("/")
+    return (
+        len(parts) == 8
+        and parts[:4] == ["api", "v1", "interviews", "sessions"]
+        and parts[4].isdigit()
+        and parts[5] == "recordings"
+        and parts[6].isdigit()
+        and parts[7] == "chunks"
+    )
+
+
+def _oversized_interview_audio_request(request: Request, limit: int) -> bool:
+    content_length = request.headers.get("content-length")
+    if content_length is None:
+        return False
+    try:
+        return int(content_length) > limit + 64 * 1024
+    except ValueError:
+        return False
+
+
 async def _request_email(request: Request) -> str | None:
     """Hash a nonblank JSON email after trimming and lowercasing; return None if absent or invalid."""
     try:
@@ -175,7 +208,29 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
         else:
             ip = _client_ip(request, settings.trusted_proxies)
-            if _strict_auth_route(path):
+            user_id = _authenticated_user_id(request)
+            is_interview_audio = _interview_audio_route(path)
+            is_interview_video_chunk = _interview_video_chunk_route(path)
+            audio_limit = min(settings.interview_stt_max_audio_bytes, 10 * 1024 * 1024)
+            video_chunk_limit = settings.interview_video_max_chunk_bytes
+            audio_request_too_large = (
+                is_interview_audio
+                and _oversized_interview_audio_request(request, audio_limit)
+            )
+            video_chunk_too_large = (
+                is_interview_video_chunk
+                and _oversized_interview_audio_request(request, video_chunk_limit)
+            )
+            if is_interview_audio:
+                limit = settings.interview_stt_requests_per_minute
+                window = 60
+                key = f"interview-audio:user:{user_id}" if user_id else f"interview-audio:ip:{ip}"
+                keys = [key]
+            elif is_interview_video_chunk:
+                limit = settings.rate_limit_requests
+                window = settings.rate_limit_window_seconds
+                keys = [f"interview-video:user:{user_id}" if user_id else f"interview-video:ip:{ip}"]
+            elif _strict_auth_route(path):
                 limit = settings.auth_rate_limit_requests
                 window = settings.auth_rate_limit_window_seconds
                 keys = [f"auth:ip:{ip}"]
@@ -185,7 +240,6 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             else:
                 limit = settings.rate_limit_requests
                 window = settings.rate_limit_window_seconds
-                user_id = _authenticated_user_id(request)
                 keys = [f"user:{user_id}" if user_id else f"ip:{ip}"]
 
             retry_after = 0
@@ -204,6 +258,16 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                     },
                     status_code=429,
                     headers={"Retry-After": str(retry_after)},
+                )
+            elif audio_request_too_large:
+                response = JSONResponse(
+                    {"detail": "audio_too_large"},
+                    status_code=413,
+                )
+            elif video_chunk_too_large:
+                response = JSONResponse(
+                    {"detail": "video_chunk_too_large"},
+                    status_code=413,
                 )
             else:
                 response = await call_next(request)

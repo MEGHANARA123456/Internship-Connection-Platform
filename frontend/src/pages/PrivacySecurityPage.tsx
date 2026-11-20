@@ -18,6 +18,7 @@ import { useAuthStore } from '../store/auth'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge'
+import { Modal } from '../components/ui/Modal'
 import { AccountSecurityCard } from '../components/security/AccountSecurityCard'
 import { routes } from '../lib/routes'
 import { showToast } from '../lib/feedback'
@@ -483,20 +484,39 @@ export function PrivacySecurityPage() {
 
       {/* Account Deletion Confirmation Modal */}
       {deleteModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="glass-strong w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-900 shadow-2xl p-6 space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-rose-100 dark:bg-rose-950/80 text-rose-600">
-                <Trash2 className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                  Permanently Erase Account?
-                </h3>
-                <p className="text-xs text-slate-500">GDPR & CCPA Irreversible Deletion</p>
-              </div>
+        <Modal
+          isOpen={deleteModalOpen}
+          onClose={() => setDeleteModalOpen(false)}
+          title="Permanently Erase Account?"
+          description="GDPR & CCPA Irreversible Deletion"
+          titleAdornment={<div className="shrink-0 rounded-xl bg-rose-100 p-2.5 text-rose-600 dark:bg-rose-950/80"><Trash2 className="h-6 w-6" /></div>}
+          maxWidth="md"
+          dismissible={false}
+          panelClassName="border-rose-300 dark:border-rose-900"
+          footer={
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setDeleteModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                form="delete-account-confirmation"
+                variant="danger"
+                size="sm"
+                isLoading={deleting}
+                disabled={deleteConfirmation.trim().toUpperCase() !== 'DELETE MY ACCOUNT'}
+              >
+                Confirm Permanent Erasure
+              </Button>
             </div>
-
+          }
+        >
+          <div className="space-y-4">
             <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
               All personal data, uploaded resumes, and active applications will be wiped from our databases immediately.
             </p>
@@ -507,7 +527,7 @@ export function PrivacySecurityPage() {
               </div>
             )}
 
-            <form onSubmit={handleDeleteAccount} className="space-y-3 pt-2">
+            <form id="delete-account-confirmation" onSubmit={handleDeleteAccount} className="space-y-3 pt-2">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Enter Password to Verify Identity:
@@ -534,29 +554,9 @@ export function PrivacySecurityPage() {
                   className="glass-input w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500 font-mono"
                 />
               </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setDeleteModalOpen(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  variant="danger"
-                  size="sm"
-                  isLoading={deleting}
-                  disabled={deleteConfirmation.trim().toUpperCase() !== 'DELETE MY ACCOUNT'}
-                >
-                  Confirm Permanent Erasure
-                </Button>
-              </div>
             </form>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   )
