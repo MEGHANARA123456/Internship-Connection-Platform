@@ -648,7 +648,6 @@ async def _student_skill_retake(db: AsyncSession, user: User) -> ToolResult:
         .where(SkillTopic.archived_at.is_(None))
         .order_by(SkillTopic.name, SkillTopic.slug)
     )).all())
-    names = {slug: name for slug, name, _ in topics}
     latest_by_topic: dict[str, SkillAttempt] = {}
     for attempt in attempts:
         latest_by_topic.setdefault(attempt.topic, attempt)

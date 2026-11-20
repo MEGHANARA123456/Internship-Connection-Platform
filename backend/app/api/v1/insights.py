@@ -607,8 +607,6 @@ async def company_insights(
     if internship_id is not None:
         role_scope.append(Internship.id == internship_id)
     metrics = await get_company_metrics(db, user.id, internship_id)
-    total_roles = metrics["total_roles"]
-    active_roles = metrics["active_roles"]
 
     cutoff = reporting_range_cutoff(range_value)
     status_counts = metrics["status_counts"]
@@ -672,7 +670,6 @@ async def company_insights(
     )
     interviews = (await db.execute(interviews_query.group_by(Interview.status))).all()
     interview_counts = {str(status).upper(): int(count) for status, count in interviews}
-    upcoming_interviews = metrics["interviews_scheduled"]
     skills_query = (
         select(StudentProfile.user_id, StudentProfile.skills)
         .join(Application, Application.student_id == StudentProfile.user_id)

@@ -5,7 +5,6 @@
 from datetime import date, datetime, timezone
 from typing import Annotated
 import logging
-import re
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from sqlalchemy import and_, case, func, or_, select
@@ -17,7 +16,6 @@ from app.schemas.internship import InternshipCloseRequest, InternshipInput, Inte
 from app.services.ai import compute_explicit_eligibility_fit, compute_match_score_fast, get_student_resume_text
 from app.services.audit import write_audit
 from app.services.skill_badges import apply_verified_badge_boost, get_valid_badges
-from app.services.mail import send_dev_email
 from app.services.notify import notify
 from app.services.internship_closing import close_internship as close_internship_service, send_closure_emails
 from app.services.search_matching import match_search_text, search_conditions, search_rank_expression
