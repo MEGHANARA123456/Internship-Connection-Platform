@@ -43,7 +43,6 @@ class Settings(BaseSettings):
     interview_llm_timeout_seconds: float = Field(default=12.0, gt=0, le=60)
     interview_allowed_provider_hosts: list[str] = ["api.groq.com"]
     interview_proctoring_max_violations: int = Field(default=3, gt=0, le=10)
-    skill_gap_llm_enabled: bool = False
     interview_stt_base_url: str = "https://api.groq.com/openai"
     interview_stt_model: str = "whisper-large-v3-turbo"
     interview_stt_api_key: str = Field(default="", repr=False)

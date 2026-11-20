@@ -51,16 +51,6 @@ from app.models.interview_studio import (
     MockTestCategory,
     MockTestQuestion,
 )
-from app.models.learning_library import (
-    LearningCategory,
-    LearningPath,
-    LearningPathResource,
-    LearningResource,
-    StudentLearningBookmark,
-    StudentLearningPreference,
-    StudentResourceProgress,
-)
-from app.models.skill_gap import RoleSkillRequirement, Skill, SkillGapReport
 
 __all__ = [
     "Application",
@@ -90,10 +80,6 @@ __all__ = [
     "InterviewRecording",
     "InterviewReport",
     "InterviewSession",
-    "LearningCategory",
-    "LearningPath",
-    "LearningPathResource",
-    "LearningResource",
     "MockTest",
     "MockTestCategory",
     "MockTestQuestion",
@@ -110,12 +96,6 @@ __all__ = [
     "SkillLearningResource",
     "SkillTopic",
     "StudentProfile",
-    "StudentLearningBookmark",
-    "StudentLearningPreference",
-    "StudentResourceProgress",
-    "RoleSkillRequirement",
-    "Skill",
-    "SkillGapReport",
     "User",
     "UserRole",
 ]

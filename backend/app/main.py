@@ -42,18 +42,12 @@ async def seed_interview_catalog() -> None:
     """Keep the interview question bank and reusable test catalog available."""
     from app.core.database import async_session_factory
     from app.services.interview_question_seed import seed_interview_question_bank
-    from app.services.learning_library_seed import seed_learning_library
     from app.services.mock_test_seed import seed_mock_test_library
-    from app.services.skill_gap_seed import seed_skill_gap_catalog
 
     async with async_session_factory() as db:
         await seed_interview_question_bank(db)
         seeded_tests = await seed_mock_test_library(db)
-        learning_seed = await seed_learning_library(db)
-        skill_gap_seed = await seed_skill_gap_catalog(db)
     logger.info("Interview mock test catalog is ready.", extra={"seeded_tests": seeded_tests})
-    logger.info("Student learning library is ready.", extra={"learning_catalog": learning_seed})
-    logger.info("Skill gap catalog is ready.", extra={"skill_gap_catalog": skill_gap_seed})
 
 
 async def _interview_reminder_worker() -> None:

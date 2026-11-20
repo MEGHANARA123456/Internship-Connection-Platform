@@ -82,9 +82,6 @@ export function isRouteAllowedForRole(
     pathname === '/profile/student' ||
     pathname === routes.interviewStudio ||
     pathname.startsWith(`${routes.interviewStudio}/`) ||
-    pathname === routes.learningLibrary ||
-    pathname.startsWith(`${routes.learningLibrary}/`) ||
-    pathname === routes.skillInsights ||
     pathname.startsWith('/skills/')
   ) {
     return normalizedRole === 'STUDENT'
