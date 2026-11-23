@@ -174,4 +174,85 @@ describe('AdminSkillTopicsPanel', () => {
       expect(api.post).toHaveBeenCalledWith('/skills/admin/skill-topics/python/archive')
     })
   })
+
+  it('states the exact question-pool readiness deficit', async () => {
+    const incompleteTopic = {
+      ...topic,
+      active_questions: 4,
+      difficulty_pool_sizes: { EASY: 0, MEDIUM: 4, HARD: 0 },
+      bank_warnings: ['Needs 4 more easy and 2 more hard questions'],
+    }
+    vi.mocked(api.get).mockImplementation(async (url) => {
+      if (url.startsWith('/skills/admin/skill-topics?')) return { data: [incompleteTopic] } as never
+      if (url.startsWith('/skills/admin/stats?topic_id=')) return { data: [incompleteTopic] } as never
+      if (url.includes('/attempts?')) return { data: { items: [], total: 0, filtered_total: 0, page: 1, page_size: 10 } } as never
+      return { data: incompleteTopic } as never
+    })
+
+    render(<AdminSkillTopicsPanel />)
+
+    expect(await screen.findAllByText('Needs 4 more easy and 2 more hard questions')).not.toHaveLength(0)
+  })
+
+  it('shows an inline retry for topic impact failures without a generic notice', async () => {
+    let impactCalls = 0
+    const onNotice = vi.fn()
+    vi.mocked(api.get).mockImplementation(async (url) => {
+      if (url.startsWith('/skills/admin/skill-topics?')) return { data: [topic] } as never
+      if (url.includes('/impact')) {
+        impactCalls += 1
+        if (impactCalls === 1) throw Object.assign(new Error('server error'), { response: { status: 500 } })
+        return { data: {
+          total_attempts: 0,
+          completed_attempts: 0,
+          expired_attempts: 0,
+          in_progress_attempts: 0,
+          total_badges: 0,
+          active_badges: 0,
+          expiring_badges: 0,
+          questions: 10,
+          resources: 0,
+        } } as never
+      }
+      if (url.startsWith('/skills/admin/stats?topic_id=')) return { data: [topic] } as never
+      if (url.includes('/attempts?')) return { data: { items: [], total: 0, filtered_total: 0, page: 1, page_size: 10 } } as never
+      return { data: topic } as never
+    })
+
+    render(<AdminSkillTopicsPanel onNotice={onNotice} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive Python' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Archive skill topic?' })
+    expect(await within(dialog).findByText(/Couldn't load topic impact/)).toBeInTheDocument()
+    expect(onNotice).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }))
+    expect(await within(dialog).findByText('10')).toBeInTheDocument()
+    expect(impactCalls).toBe(2)
+  })
+
+  it('shows an inline retry for topic history failures without a generic notice', async () => {
+    const archivedTopic = { ...topic, archived_at: '2025-01-01T00:00:00Z' }
+    let historyCalls = 0
+    const onNotice = vi.fn()
+    vi.mocked(api.get).mockImplementation(async (url) => {
+      if (url.startsWith('/skills/admin/skill-topics?')) return { data: [archivedTopic] } as never
+      if (url.includes('/history')) {
+        historyCalls += 1
+        if (historyCalls === 1) throw Object.assign(new Error('not found'), { response: { status: 404 } })
+        return { data: { topic: 'python', events: [] } } as never
+      }
+      if (url.startsWith('/skills/admin/stats?topic_id=')) return { data: [archivedTopic] } as never
+      if (url.includes('/attempts?')) return { data: { items: [], total: 0, filtered_total: 0, page: 1, page_size: 10 } } as never
+      return { data: archivedTopic } as never
+    })
+
+    render(<AdminSkillTopicsPanel onNotice={onNotice} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Archived topics' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'View history for Python' }))
+    const dialog = await screen.findByRole('dialog', { name: 'History: Python' })
+    expect(await within(dialog).findByText(/Couldn't load topic history/)).toBeInTheDocument()
+    expect(onNotice).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }))
+    expect(await within(dialog).findByText('No topic history available yet.')).toBeInTheDocument()
+    expect(historyCalls).toBe(2)
+  })
 })

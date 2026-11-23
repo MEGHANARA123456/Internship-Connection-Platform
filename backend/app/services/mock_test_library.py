@@ -6,16 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (
     InterviewReport,
     InterviewSession,
-    InterviewQuestionBank,
     InterviewStudioDifficulty,
     MockTest,
     MockTestCategory,
-    MockTestQuestion,
 )
 from app.schemas.interview import (
     MockTestAttemptSummary,
     MockTestComparisonView,
-    MockTestQuestionView,
+    MockTestDetailView,
     MockTestRecommendationView,
     MockTestView,
 )
@@ -99,15 +97,16 @@ def _test_view(
     test: MockTest,
     category: MockTestCategory,
     attempts: list[tuple[InterviewSession, InterviewReport | None]],
-    questions: list[MockTestQuestionView] | None = None,
 ) -> MockTestView:
     latest = _attempt_summary(*attempts[0]) if attempts else None
+    category_slug = category.slug.upper()
+    mapped_category = "HR" if category_slug in {"HR", "BEHAVIORAL"} else "TECHNICAL"
     return MockTestView(
         id=test.id,
         slug=test.slug,
         title=test.title,
         description=test.description,
-        category=category.slug,
+        category=mapped_category,
         difficulty=test.difficulty,
         format=test.format,
         default_mode=test.default_mode,
@@ -127,8 +126,27 @@ def _test_view(
         ),
         latest_score=latest.overall_score if latest else None,
         latest_status=latest.status if latest else None,
-        questions=questions,
         attempts=[_attempt_summary(*attempt) for attempt in attempts],
+    )
+
+
+def _test_detail_view(
+    test: MockTest,
+    category: MockTestCategory,
+) -> MockTestDetailView:
+    category_slug = category.slug.upper()
+    mapped_category = "HR" if category_slug in {"HR", "BEHAVIORAL"} else "TECHNICAL"
+    return MockTestDetailView(
+        id=test.id,
+        title=test.title,
+        description=test.description,
+        category=mapped_category,
+        difficulty=test.difficulty,
+        default_mode=test.default_mode,
+        question_count=test.question_count,
+        time_limit_seconds=test.time_limit_seconds,
+        estimated_duration_minutes=max(1, (test.time_limit_seconds + 59) // 60),
+        version=test.version,
     )
 
 
@@ -155,9 +173,15 @@ async def list_mock_tests(
         .order_by(MockTestCategory.title, MockTest.difficulty, MockTest.title)
     )
     if category:
-        statement = statement.where(MockTestCategory.slug == category)
-    if difficulty:
-        statement = statement.where(MockTest.difficulty == difficulty)
+        normalized = category.strip().upper()
+        if normalized not in {"HR", "TECHNICAL"}:
+            raise InterviewStudioError(422, "Category must be HR or TECHNICAL")
+        if normalized == "HR":
+            statement = statement.where(MockTestCategory.slug.in_(("HR", "BEHAVIORAL")))
+        else:
+            statement = statement.where(
+                MockTestCategory.slug.in_(("TECHNICAL", "DATA_SCIENCE", "DATA_ANALYST"))
+            )
     if test_format:
         statement = statement.where(MockTest.format == test_format)
     tests = list((await db.execute(statement)).all())
@@ -170,32 +194,10 @@ async def list_mock_tests(
 
 async def get_mock_test_detail(
     db: AsyncSession,
-    student_id: int,
     test_id: int,
-) -> MockTestView:
+) -> MockTestDetailView:
     test, category = await _get_test(db, test_id)
-    attempt_rows = await _attempt_rows(db, student_id, test.id, limit=30)
-    rows = await db.execute(
-        select(MockTestQuestion, InterviewQuestionBank)
-        .join(
-            InterviewQuestionBank,
-            InterviewQuestionBank.id == MockTestQuestion.question_bank_id,
-        )
-        .where(
-            MockTestQuestion.mock_test_id == test.id,
-            MockTestQuestion.version == test.version,
-        )
-        .order_by(MockTestQuestion.position)
-    )
-    questions = [
-        MockTestQuestionView(
-            position=test_question.position,
-            prompt=bank_question.prompt,
-            skill_tags=test_question.skill_tags,
-        )
-        for test_question, bank_question in rows
-    ]
-    return _test_view(test, category, attempt_rows, questions)
+    return _test_detail_view(test, category)
 
 
 async def list_mock_test_attempts(
@@ -296,7 +298,7 @@ async def recommend_mock_test(
         None,
     )
     recommended = (
-        await get_mock_test_detail(db, student_id, test_id)
+        await get_mock_test_detail(db, test_id)
         if test_id is not None
         else None
     )

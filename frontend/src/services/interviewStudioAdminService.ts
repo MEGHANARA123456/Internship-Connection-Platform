@@ -41,8 +41,15 @@ export type AdminInterviewSettings = {
   allowed_provider_hosts: string[]
 }
 
+export type AdminInterviewProviderStatus = {
+  configured: boolean
+  provider: string
+  model: string
+  last_error: string | null
+}
+
 export async function listAdminInterviewQuestions(params = {}) {
-  return (await api.get<{ items: AdminInterviewQuestion[]; total: number }>(
+  return (await api.get<{ items: AdminInterviewQuestion[]; total: number; counts: Record<string, number> }>(
     `${root}/questions`,
     { params },
   )).data
@@ -66,8 +73,11 @@ export async function importAdminInterviewQuestions(contents: string) {
   })).data
 }
 
-export async function listAdminInterviewTests() {
-  return (await api.get<AdminInterviewTest[]>(`${root}/tests`)).data
+export async function listAdminInterviewTests(category?: string) {
+  return (await api.get<{ items: AdminInterviewTest[]; counts: Record<string, number>; total: number }>(
+    `${root}/tests`,
+    category ? { params: { category } } : undefined,
+  )).data
 }
 
 export async function createAdminInterviewTest(payload: Record<string, unknown>) {
@@ -101,6 +111,10 @@ export async function getAdminInterviewSettings() {
   return (await api.get<AdminInterviewSettings>(`${root}/settings`)).data
 }
 
+export async function getAdminInterviewProviderStatus() {
+  return (await api.get<AdminInterviewProviderStatus>(`${root}/provider-status`)).data
+}
+
 export async function updateAdminInterviewSettings(payload: Partial<AdminInterviewSettings>) {
   return (await api.patch<AdminInterviewSettings>(`${root}/settings`, payload)).data
 }
@@ -121,6 +135,6 @@ export async function retryAdminInterviewFailures(limit = 10) {
   )).data
 }
 
-export async function getAdminInterviewAudit() {
-  return (await api.get<Array<Record<string, unknown>>>(`${root}/audit`)).data
+export async function getAdminInterviewAudit(params: { action?: string; limit?: number; offset?: number } = {}) {
+  return (await api.get<Array<Record<string, unknown>>>(`${root}/audit`, { params })).data
 }

@@ -31,6 +31,7 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
     portal: str | None = None
+    keep_signed_in: bool = False
 
 
 class RefreshRequest(BaseModel):
@@ -94,6 +95,7 @@ class MFALoginChallengeResponse(BaseModel):
 class MFALoginVerifyRequest(BaseModel):
     mfa_ticket: str
     otp: str = Field(min_length=6, max_length=6)
+    keep_signed_in: bool = False
 
 
 class MFATotpSetupResponse(BaseModel):

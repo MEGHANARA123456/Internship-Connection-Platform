@@ -201,6 +201,34 @@ describe('AdminSkillAssessmentsPage resource form', () => {
     })
   })
 
+  it('keeps subtopic failures local and retries loading the selected topic options', async () => {
+    let subtopicCalls = 0
+    vi.mocked(api.get).mockImplementation(async (url) => {
+      if (url.includes('/subtopics')) {
+        subtopicCalls += 1
+        if (subtopicCalls === 1) throw Object.assign(new Error('not found'), { response: { status: 404 } })
+        return { data: [{ id: 'aggregation', question_count: 2 }] } as never
+      }
+      if (url.startsWith('/skills/admin/questions?')) return { data: [] } as never
+      if (url === '/skills/admin/questions/key-review') return { data: [] } as never
+      if (url.startsWith('/skills/admin/stats?')) return { data: topicStats } as never
+      if (url.startsWith('/skills/admin/resources?')) return { data: [] } as never
+      if (url.startsWith('/skills/admin/skill-topics?')) return { data: topicStats } as never
+      if (url.includes('/attempts?')) return { data: { items: [], total: 0, filtered_total: 0, page: 1, page_size: 10 } } as never
+      return { data: topicStats[0] } as never
+    })
+    renderPage()
+
+    expect(await screen.findByText(/Couldn't load subtopics\. Using general for now\./)).toBeInTheDocument()
+    expect(screen.queryByLabelText('Skill assessment notifications')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => {
+      expect(screen.queryByText(/Using general for now/)).not.toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: 'Subtopic ID' })).toHaveTextContent('aggregation')
+    })
+    expect(subtopicCalls).toBe(2)
+  })
+
   it('preselects the current import topic and refreshes the selected pool after importing', async () => {
     const reactStats = { ...topicStats[0], topic: 'react', name: 'React' }
     vi.mocked(api.get).mockImplementation(async (url) => {

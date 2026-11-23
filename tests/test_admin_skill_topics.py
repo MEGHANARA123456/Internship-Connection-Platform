@@ -201,13 +201,18 @@ async def test_topic_creation_readiness_and_student_visibility(skill_admin_db) -
     assert duplicate.status_code == 409
     assert unready_activation.status_code == 200
     assert "active" not in unready_activation.json()
-    assert missing_topic_question.status_code == 404
-    assert missing_topic_update.status_code == 404
+    assert missing_topic_question.status_code == 201
+    assert missing_topic_question.json()["message"] == "Created new topic: Unknown Topic"
+    assert missing_topic_update.status_code == 200
+    assert missing_topic_update.json()["topic"] == "unknown-topic"
     assert all(response.status_code == 201 for response in created_questions)
     assert subtopics.json() == [{"id": "system-design", "question_count": 10}]
     async with skill_admin_db() as db:
         web_security = await db.get(SkillTopic, "web-security")
         assert web_security is not None
+        auto_created_topic = await db.get(SkillTopic, "unknown-topic")
+        assert auto_created_topic is not None
+        assert auto_created_topic.name == "Unknown Topic"
         web_security.active = False
         await db.flush()
         ready_topics = await db.scalars(select(SkillQuestion).where(SkillQuestion.topic == "web-security"))
@@ -234,6 +239,101 @@ async def test_topic_creation_readiness_and_student_visibility(skill_admin_db) -
     assert listed.json() == []
     assert search.json()["items"] == []
     app.dependency_overrides[get_current_user] = lambda: admin
+
+
+@pytest.mark.anyio
+async def test_question_only_topics_are_healed_and_lifecycle_and_edits_work(skill_admin_db) -> None:
+    admin = _user(1, UserRole.ADMIN)
+    async with skill_admin_db() as db:
+        db.add(admin)
+        db.add_all([
+            SkillQuestion(
+                topic="Mongodb",
+                subtopic="aggregation",
+                prompt="MongoDB question",
+                options=["A", "B"],
+                correct_index=0,
+                explanation="Explanation",
+                difficulty="MEDIUM",
+            ),
+            SkillQuestion(
+                topic="Powerbi",
+                subtopic="dashboards",
+                prompt="Power BI question",
+                options=["A", "B"],
+                correct_index=0,
+                explanation="Explanation",
+                difficulty="MEDIUM",
+            ),
+        ])
+        await db.commit()
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        listing = await client.get("/api/v1/skills/admin/skill-topics?include_archived=true")
+        subtopics = await client.get("/api/v1/skills/admin/skill-topics/mongodb/subtopics")
+        impact = await client.get("/api/v1/skills/admin/skill-topics/mongodb/impact")
+        archive = await client.post("/api/v1/skills/admin/skill-topics/mongodb/archive")
+        restore = await client.post("/api/v1/skills/admin/skill-topics/mongodb/restore")
+        history = await client.get("/api/v1/skills/admin/skill-topics/mongodb/history")
+        updated = await client.patch(
+            "/api/v1/skills/admin/questions/1",
+            json={"difficulty": "EASY", "subtopic": "Query Planning"},
+        )
+
+    assert listing.status_code == 200
+    listed_by_slug = {item["topic"]: item for item in listing.json()}
+    assert listed_by_slug["mongodb"]["name"] == "MongoDB"
+    assert listed_by_slug["mongodb"]["icon"] == "✦"
+    assert listed_by_slug["powerbi"]["name"] == "Power BI"
+    assert subtopics.status_code == 200
+    assert subtopics.json() == [{"id": "aggregation", "question_count": 1}]
+    assert impact.status_code == 200
+    assert impact.json()["questions"] == 1
+    assert archive.status_code == 200
+    assert archive.json()["questions"] == 1
+    assert restore.status_code == 200
+    assert history.status_code == 200
+    assert updated.status_code == 200
+    assert updated.json()["difficulty"] == "EASY"
+    assert updated.json()["subtopic"] == "query-planning"
+    assert updated.json()["topic"] == "mongodb"
+    async with skill_admin_db() as db:
+        mongodb = await db.get(SkillTopic, "mongodb")
+        question = await db.get(SkillQuestion, 1)
+        assert mongodb is not None and mongodb.archived_at is None
+        assert question is not None
+        assert question.difficulty == "EASY"
+        assert question.subtopic == "query-planning"
+        assert question.topic == "mongodb"
+
+
+@pytest.mark.anyio
+async def test_import_creates_normalized_topic_and_reports_it(skill_admin_db) -> None:
+    admin = _user(1, UserRole.ADMIN)
+    async with skill_admin_db() as db:
+        db.add(admin)
+        await db.commit()
+    app.dependency_overrides[get_current_user] = lambda: admin
+    content = (
+        "topic,prompt,options,correct_index,explanation,difficulty,subtopic\n"
+        "  Fresh-Skill  ,A new question,A|B,0,Explanation,EASY,basics\n"
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        imported = await client.post(
+            "/api/v1/skills/admin/questions/import",
+            files={"file": ("questions.csv", content.encode(), "text/csv")},
+        )
+
+    assert imported.status_code == 200
+    assert imported.json()["imported"] == 1
+    assert imported.json()["messages"] == ["Created new topic: Fresh Skill"]
+    async with skill_admin_db() as db:
+        topic = await db.get(SkillTopic, "fresh-skill")
+        question = await db.scalar(select(SkillQuestion).where(SkillQuestion.topic == "fresh-skill"))
+        assert topic is not None
+        assert question is not None
 
 
 @pytest.mark.anyio

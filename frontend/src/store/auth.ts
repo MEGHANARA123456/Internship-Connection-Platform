@@ -27,6 +27,7 @@ export const USER_SCOPED_KEYS = [
 ]
 const SESSION_KEY = 'session'
 const SESSION_CHANGED_NOTICE_KEY = 'session_changed_notice'
+const LOGOUT_SYNC_KEY = 'auth_logout_event'
 const LEGACY_SKILL_BADGES_MIGRATION_KEY = 'student_skill_badges_migrated_v1'
 
 if (typeof window !== 'undefined') {
@@ -40,12 +41,15 @@ if (typeof window !== 'undefined') {
 type AuthState = {
   session: Session
   persistence: SessionPersistence
+  authInitialized: boolean
+  authChecking: boolean
   sessionChangedInAnotherTab: boolean
   signedOutDeliberately: boolean
   setSession: (session: Session, persistence?: SessionPersistence) => void
+  setAuthCheckState: (checking: boolean, initialized?: boolean) => void
   updateName: (name: string) => void
   updateAvatar: (avatar_url: string | null) => void
-  logout: (deliberate?: boolean) => void
+  logout: (deliberate?: boolean, syncAcrossTabs?: boolean) => void
   clearSessionChangedNotice: () => void
   clearSignedOutDeliberately: () => void
 }
@@ -103,6 +107,8 @@ const initialSession = getInitialSession()
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   ...initialSession,
+  authInitialized: !initialSession.session,
+  authChecking: false,
   sessionChangedInAnotherTab: sessionStorage.getItem(SESSION_CHANGED_NOTICE_KEY) === 'true',
   signedOutDeliberately: false,
   setSession: (session, requestedPersistence) => {
@@ -121,7 +127,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       removeUserScopedData()
       clearUserCaches()
     }
-    set({ session, persistence, signedOutDeliberately: false })
+    set({
+      session,
+      persistence,
+      authInitialized: true,
+      authChecking: false,
+      signedOutDeliberately: false,
+    })
+  },
+  setAuthCheckState: (checking, initialized = false) => {
+    set({ authChecking: checking, authInitialized: initialized || get().authInitialized })
   },
   updateName: (name) => {
     const { session, persistence } = get()
@@ -139,12 +154,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ session: updated })
     }
   },
-  logout: (deliberate = true) => {
+  logout: (deliberate = true, syncAcrossTabs = true) => {
     storageFor(get().persistence).removeItem(SESSION_KEY)
     removeUserScopedData()
     clearUserCaches()
     sessionStorage.removeItem(SESSION_CHANGED_NOTICE_KEY)
-    set({ session: null, persistence: 'session', sessionChangedInAnotherTab: false, signedOutDeliberately: deliberate })
+    if (syncAcrossTabs) {
+      localStorage.setItem(LOGOUT_SYNC_KEY, `${Date.now()}-${performance.now()}`)
+    }
+    set({
+      session: null,
+      persistence: 'session',
+      authInitialized: true,
+      authChecking: false,
+      sessionChangedInAnotherTab: false,
+      signedOutDeliberately: deliberate,
+    })
   },
   clearSessionChangedNotice: () => {
     sessionStorage.removeItem(SESSION_CHANGED_NOTICE_KEY)
@@ -157,9 +182,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
+    const state = useAuthStore.getState()
+    if (event.key === LOGOUT_SYNC_KEY && state.session) {
+      state.logout(false, false)
+      sessionStorage.setItem(SESSION_CHANGED_NOTICE_KEY, 'true')
+      useAuthStore.setState({ sessionChangedInAnotherTab: true })
+      return
+    }
     if (event.key !== SESSION_KEY || event.storageArea !== localStorage) return
 
-    const { session: current, persistence } = useAuthStore.getState()
+    const { session: current, persistence } = state
     if (persistence !== 'local') return
 
     let nextSession: Session = null
@@ -169,16 +201,24 @@ if (typeof window !== 'undefined') {
       nextSession = null
     }
 
-    if (sessionsHaveDifferentUsers(current, nextSession) || (current && !nextSession)) {
+    if (current && !nextSession) {
+      state.logout(false, false)
+      sessionStorage.setItem(SESSION_CHANGED_NOTICE_KEY, 'true')
+      useAuthStore.setState({ sessionChangedInAnotherTab: true })
+      return
+    }
+
+    if (sessionsHaveDifferentUsers(current, nextSession)) {
       removeUserScopedData()
       clearUserCaches()
       sessionStorage.setItem(SESSION_CHANGED_NOTICE_KEY, 'true')
       useAuthStore.setState({
         session: null,
+        authInitialized: true,
+        authChecking: false,
         sessionChangedInAnotherTab: true,
         signedOutDeliberately: false,
       })
-      window.setTimeout(() => window.location.reload(), 1200)
       return
     }
 

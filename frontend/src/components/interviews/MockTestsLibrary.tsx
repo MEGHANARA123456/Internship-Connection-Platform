@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Eye } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
 import { Card, CardContent } from '../../components/ui/Card'
 import { InterviewErrorNotice, useInterviewError } from './InterviewErrorNotice'
@@ -10,6 +11,7 @@ import {
   getMockTest,
   getMockTestRecommendation,
   listMockTests,
+  listMockTestAttempts,
   startInterviewSession,
 } from '../../services/interviewService'
 import type {
@@ -18,6 +20,7 @@ import type {
   MockTest,
   MockTestAttempt,
   MockTestComparison,
+  MockTestDetail,
   MockTestFormat,
   MockTestRecommendation,
 } from '../../types/interview'
@@ -46,9 +49,10 @@ export function MockTestsLibrary() {
   const requestError = useInterviewError()
   const [tests, setTests] = useState<MockTest[]>([])
   const [recommendation, setRecommendation] = useState<MockTestRecommendation | null>(null)
-  const [selected, setSelected] = useState<MockTest | null>(null)
-  const [comparison, setComparison] = useState<MockTestComparison | null>(null)
+  const [selected, setSelected] = useState<MockTestDetail | null>(null)
+  const [attempts, setAttempts] = useState<MockTestAttempt[]>([])
   const [selectedAttemptIds, setSelectedAttemptIds] = useState<number[]>([])
+  const [comparison, setComparison] = useState<MockTestComparison | null>(null)
   const [category, setCategory] = useState('')
   const [difficulty, setDifficulty] = useState('')
   const [format, setFormat] = useState<MockTestFormat | ''>('')
@@ -92,8 +96,12 @@ export function MockTestsLibrary() {
     setSelectedAttemptIds([])
     setComparison(null)
     try {
-      const detail = await getMockTest(testId)
+      const [detail, testAttempts] = await Promise.all([
+        getMockTest(testId),
+        listMockTestAttempts(testId),
+      ])
       setSelected(detail)
+      setAttempts(testAttempts)
       setSessionType(detail.default_mode)
       setConsent(false)
       setCreatedSessionId(null)
@@ -143,12 +151,8 @@ export function MockTestsLibrary() {
       if (current.includes(attempt.session_id)) {
         return current.filter((id) => id !== attempt.session_id)
       }
-      const selectedVersion = selected?.attempts.find(
-        (item) => current.includes(item.session_id),
-      )?.test_version
-      if (selectedVersion !== undefined && selectedVersion !== attempt.test_version) {
-        return current
-      }
+      const selectedVersion = attempts.find((item) => current.includes(item.session_id))?.test_version
+      if (selectedVersion !== undefined && selectedVersion !== attempt.test_version) return current
       return [...current, attempt.session_id]
     })
   }
@@ -177,14 +181,17 @@ export function MockTestsLibrary() {
         </Card>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <label className="space-y-1 text-sm font-medium text-slate-700 dark:text-slate-300">
-          Category
-          <select aria-label="Filter by category" value={category} onChange={(event) => setCategory(event.target.value)} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-900">
-            <option value="">All categories</option>
-            {['HR', 'TECHNICAL', 'DATA_SCIENCE', 'DATA_ANALYST', 'BEHAVIORAL'].map((value) => <option key={value} value={value}>{titleCase(value)}</option>)}
-          </select>
-        </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex rounded-lg border border-slate-300 p-1 dark:border-slate-700" aria-label="Filter mock tests by category">
+          {(['HR', 'TECHNICAL'] as const).map((value) => (
+            <button key={value} type="button" onClick={() => setCategory(value)} className={`rounded-md px-3 py-1.5 text-sm font-semibold ${category === value ? 'bg-indigo-600 text-white' : 'text-slate-600 dark:text-slate-300'}`}>
+              {value === 'TECHNICAL' ? 'Technical' : 'HR'}
+            </button>
+          ))}
+          <button type="button" onClick={() => setCategory('')} className={`rounded-md px-3 py-1.5 text-sm font-semibold ${category === '' ? 'bg-indigo-600 text-white' : 'text-slate-600 dark:text-slate-300'}`}>
+            All
+          </button>
+        </div>
         <label className="space-y-1 text-sm font-medium text-slate-700 dark:text-slate-300">
           Difficulty
           <select aria-label="Filter by difficulty" value={difficulty} onChange={(event) => setDifficulty(event.target.value)} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-900">
@@ -223,7 +230,7 @@ export function MockTestsLibrary() {
                 {test.attempt_count} previous {test.attempt_count === 1 ? 'attempt' : 'attempts'} · {test.completed_attempt_count} completed
                 {test.latest_score !== null && ` · Latest score ${test.latest_score}/100`}
               </p>
-              <Button variant="outline" onClick={() => void openTest(test.id)}>Test details and attempts</Button>
+              <Button variant="outline" onClick={() => void openTest(test.id)}><Eye aria-hidden="true" size={16} className="mr-2 inline-block" />Test details and attempts</Button>
             </CardContent>
           </Card>
         ))}
@@ -241,12 +248,8 @@ export function MockTestsLibrary() {
             </div>
 
             <div>
-              <h3 className="font-semibold text-slate-900 dark:text-white">Question set</h3>
-              <ol className="mt-2 list-inside list-decimal space-y-2 text-sm text-slate-700 dark:text-slate-300">
-                {(selected.questions ?? []).map((question) => (
-                  <li key={question.position}>{question.prompt} <span className="text-xs text-slate-500">({question.skill_tags.map(titleCase).join(', ')})</span></li>
-                ))}
-              </ol>
+              <p className="text-sm text-slate-600 dark:text-slate-300">{selected.description}</p>
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Questions are revealed during the interview.</p>
             </div>
 
             <form onSubmit={(event) => { event.preventDefault(); void startTest() }} className="space-y-4 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
@@ -272,11 +275,10 @@ export function MockTestsLibrary() {
               </label>
               <Button type="submit" disabled={!consent || starting} isLoading={starting}>Start mock test</Button>
             </form>
-
             <section aria-labelledby="mock-test-attempts-title" className="space-y-3">
               <h3 id="mock-test-attempts-title" className="font-semibold text-slate-900 dark:text-white">Your attempts</h3>
-              {selected.attempts.length === 0 && <p className="text-sm text-slate-600 dark:text-slate-400">No attempts for this test yet.</p>}
-              {selected.attempts.map((attempt) => (
+              {attempts.length === 0 && <p className="text-sm text-slate-600 dark:text-slate-400">No attempts for this test yet.</p>}
+              {attempts.map((attempt) => (
                 <div key={attempt.session_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                   <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                     <input
@@ -285,7 +287,7 @@ export function MockTestsLibrary() {
                       disabled={attempt.status !== 'COMPLETED' || attempt.overall_score === null || (
                         selectedAttemptIds.length > 0
                         && !selectedAttemptIds.includes(attempt.session_id)
-                        && selected.attempts.find((item) => selectedAttemptIds.includes(item.session_id))?.test_version !== attempt.test_version
+                        && attempts.find((item) => selectedAttemptIds.includes(item.session_id))?.test_version !== attempt.test_version
                       )}
                       onChange={() => toggleAttempt(attempt)}
                     />

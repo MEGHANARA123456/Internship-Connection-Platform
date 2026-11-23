@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { api } from '../api/client'
+import { api, refreshSession } from '../api/client'
 import { useAuthStore } from '../store/auth'
 import { isSensitiveNotification, maskCodes, sendSystemNotification } from './notifications'
 
@@ -15,48 +15,25 @@ export function useWebSocketChat(userId?: number) {
   const [typingMap, setTypingMap] = useState<Record<number, boolean>>({})
   const socketRef = useRef<WebSocket | null>(null)
   const onNewMessageRef = useRef<((convId: number, msg: any) => void) | null>(null)
-  const authRefreshAttemptedRef = useRef<{ userId?: number; attempted: boolean }>({ attempted: false })
+  const nextConnectDelayRef = useRef(0)
 
   useEffect(() => {
     if (!userId || !accessToken) return
-    if (authRefreshAttemptedRef.current.userId !== userId) {
-      authRefreshAttemptedRef.current = { userId, attempted: false }
-    }
-
     const apiUrl = new URL(api.defaults.baseURL ?? window.location.origin)
     const protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:'
     const apiPath = apiUrl.pathname.replace(/\/+$/, '')
-    const wsUrl = `${protocol}//${apiUrl.host}${apiPath}/ws/chat/${userId}?token=${encodeURIComponent(accessToken)}`
 
     let socket: WebSocket | null = null
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
     let reconnectAttempts = 0
     let isActive = true
     const maxReconnectAttempts = 8
-    const refreshAccessToken = async () => {
-      const session = useAuthStore.getState().session
-      if (!session?.refreshToken) return
-      try {
-        const response = await api.post('/auth/refresh', { refresh_token: session.refreshToken })
-        const tokens = response.data
-        useAuthStore.getState().setSession({
-          ...session,
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-          role: tokens.role,
-          userId: tokens.user_id,
-          accessTokenExpiresAt: tokens.access_token_expires_at ?? null,
-          refreshTokenExpiresAt: tokens.refresh_token_expires_at ?? null,
-          accessTokenExpiresIn: tokens.access_token_expires_in ?? null,
-          refreshTokenExpiresIn: tokens.refresh_token_expires_in ?? null,
-        })
-      } catch {
-        useAuthStore.getState().logout()
-      }
-    }
 
     const connect = () => {
       try {
+        const freshAccessToken = useAuthStore.getState().session?.accessToken
+        if (!freshAccessToken) return
+        const wsUrl = `${protocol}//${apiUrl.host}${apiPath}/ws/chat/${userId}?token=${encodeURIComponent(freshAccessToken)}`
         socket = new WebSocket(wsUrl)
         socketRef.current = socket
 
@@ -101,10 +78,17 @@ export function useWebSocketChat(userId?: number) {
           setIsConnected(false)
           if (closeCode === 4403) return
           if (closeCode === 4401) {
-            if (!authRefreshAttemptedRef.current.attempted) {
-              authRefreshAttemptedRef.current.attempted = true
-              void refreshAccessToken()
-            }
+            if (!isActive || reconnectAttempts >= maxReconnectAttempts) return
+            const delay = Math.min(1000 * 2 ** reconnectAttempts, 30000)
+            reconnectAttempts += 1
+            nextConnectDelayRef.current = delay
+            void refreshSession().catch(() => {
+              if (!isActive || !useAuthStore.getState().session) return
+              reconnectTimeout = setTimeout(() => {
+                nextConnectDelayRef.current = 0
+                connect()
+              }, delay)
+            })
             return
           }
           if (!isActive || reconnectAttempts >= maxReconnectAttempts) return
@@ -121,7 +105,15 @@ export function useWebSocketChat(userId?: number) {
       }
     }
 
-    connect()
+    const initialDelay = nextConnectDelayRef.current
+    if (initialDelay > 0) {
+      reconnectTimeout = setTimeout(() => {
+        nextConnectDelayRef.current = 0
+        connect()
+      }, initialDelay)
+    } else {
+      connect()
+    }
 
     return () => {
       isActive = false

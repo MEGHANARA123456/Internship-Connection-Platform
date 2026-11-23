@@ -9,6 +9,12 @@
 !**/.env.*.example
 *.md
 !/README.md
+!/docs/Internship_Connection_Platform_Project_Report.md
+!/docs/project-documentation/*.md
+!/backend/kb/admin-moderation.md
+!/backend/kb/admin-users.md
+!/backend/kb/admin-moderation-reports.md
+!/backend/kb/admin-account-suspension.md
 !/backend/kb/overview.md
 !/backend/kb/roles.md
 !/backend/kb/privacy-cookies-data-rights.md
@@ -17,7 +23,11 @@
 !/backend/kb/spotting-internship-scams.md
 !/backend/kb/company-posting-closing.md
 !/backend/kb/admin-analytics-reports.md
-
+!/backend/kb/admin-moderation.md
+!/backend/kb/admin-users.md
+!/backend/kb/admin-moderation-reports.md
+!/backend/kb/admin-account-suspension.md
+!/docs
 
 # Python
 __pycache__/

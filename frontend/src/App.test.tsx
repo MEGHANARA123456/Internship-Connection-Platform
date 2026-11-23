@@ -1,10 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import { BrowserRouter, MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import axios, { AxiosError, type AxiosAdapter, type AxiosResponse } from 'axios'
+import { BrowserRouter, MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { LoginPage } from './pages/AuthPages'
 import { api } from './api/client'
+import { ProtectedRoute } from './components/ProtectedRoute'
 import { useAuthStore } from './store/auth'
 
 function CurrentPath() {
@@ -13,14 +15,43 @@ function CurrentPath() {
 
 function CurrentLocation() {
   const location = useLocation()
-  return <div>{`${location.pathname}${location.search}`}</div>
+  return <div data-testid="current-location">{`${location.pathname}${location.search}`}</div>
+}
+
+function HistoryBackButton() {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate(-1)}>Browser Back</button>
+}
+
+function ProtectedRequestButton() {
+  return <button onClick={() => void api.get('/protected').catch(() => undefined)}>Make protected request</button>
+}
+
+const originalApiAdapter = api.defaults.adapter
+
+function renderLoginWithRoleRoutes(initialEntry: string) {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
+          <Route path="/admin" element={<CurrentPath />} />
+        </Route>
+        <Route element={<ProtectedRoute allowedRoles={['STUDENT']} />}>
+          <Route path="/interview-studio" element={<CurrentPath />} />
+        </Route>
+        <Route path="/opportunities" element={<CurrentPath />} />
+      </Routes>
+    </MemoryRouter>,
+  )
 }
 
 afterEach(() => {
+  api.defaults.adapter = originalApiAdapter
   vi.clearAllTimers()
   vi.useRealTimers()
   vi.restoreAllMocks()
-  useAuthStore.getState().logout()
+  useAuthStore.getState().logout(false, false)
 })
 
 describe('platform shell', () => {
@@ -82,6 +113,141 @@ describe('platform shell', () => {
     expect(useAuthStore.getState().session?.role).toBe('COMPANY')
     expect(sessionStorage.getItem('session')).not.toBeNull()
     expect(localStorage.getItem('session')).toBeNull()
+  })
+
+  it('replaces the login history entry after a successful sign-in', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: {
+        access_token: 'student-access-token',
+        refresh_token: 'student-refresh-token',
+        role: 'STUDENT',
+        user_id: 14,
+      },
+    } as never)
+    render(
+      <MemoryRouter initialEntries={['/opportunities', '/login']}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/opportunities" element={<div>Student home</div>} />
+        </Routes>
+        <HistoryBackButton />
+        <CurrentLocation />
+      </MemoryRouter>,
+    )
+    fireEvent.change(await screen.findByLabelText('Email address'), { target: { value: 'student@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'valid-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByText('/opportunities')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }))
+    expect(screen.getByText('/opportunities')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Sign In' })).not.toBeInTheDocument()
+  })
+
+  it('redirects an authenticated visitor away from the login route to their role home', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'student-access-token',
+      refreshToken: 'student-refresh-token',
+      role: 'STUDENT',
+      userId: 91,
+      email: 'student@example.com',
+    })
+    vi.spyOn(api, 'get').mockImplementation(async (path) => (
+      path === '/auth/me'
+        ? { data: { id: 91, email: 'student@example.com' } } as never
+        : { data: [] } as never
+    ))
+    render(
+      <MemoryRouter initialEntries={['/login']}>
+        <App />
+        <CurrentLocation />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('/opportunities')).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { name: 'Sign In' })).not.toBeInTheDocument()
+  })
+
+  it('does not render a protected page after logout and browser Back', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'admin-access-token',
+      refreshToken: 'admin-refresh-token',
+      role: 'ADMIN',
+      userId: 92,
+      email: 'admin@example.com',
+    })
+    render(
+      <MemoryRouter initialEntries={['/admin/previous', '/admin']}>
+        <Routes>
+          <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
+            <Route
+              path="/admin/*"
+              element={<button onClick={() => useAuthStore.getState().logout()}>Sign out</button>}
+            />
+          </Route>
+          <Route path="/login" element={<div>Login destination</div>} />
+        </Routes>
+        <HistoryBackButton />
+        <CurrentLocation />
+      </MemoryRouter>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByText('/login')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }))
+    await waitFor(() => expect(screen.getByTestId('current-location')).toHaveTextContent('/login'))
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+    expect(screen.getByText('Login destination')).toBeInTheDocument()
+  })
+
+  it('redirects to login when the refresh token is expired', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'expired-access-token',
+      refreshToken: 'expired-refresh-token',
+      role: 'STUDENT',
+      userId: 93,
+      email: 'student@example.com',
+    })
+    api.defaults.adapter = vi.fn<AxiosAdapter>(async (config) => {
+      const response = {
+        config,
+        data: { detail: 'Not authenticated' },
+        headers: {},
+        status: 401,
+        statusText: 'Unauthorized',
+      } as AxiosResponse
+      throw new AxiosError('Unauthorized', AxiosError.ERR_BAD_REQUEST, config, undefined, response)
+    })
+    vi.spyOn(axios, 'post').mockRejectedValue(new AxiosError(
+      'Unauthorized',
+      AxiosError.ERR_BAD_REQUEST,
+      undefined,
+      undefined,
+      {
+        config: {} as never,
+        data: { detail: 'Invalid refresh token' },
+        headers: {},
+        status: 401,
+        statusText: 'Unauthorized',
+      } as AxiosResponse,
+    ))
+    render(
+      <MemoryRouter initialEntries={['/interview-studio']}>
+        <Routes>
+          <Route element={<ProtectedRoute allowedRoles={['STUDENT']} />}>
+            <Route path="/interview-studio" element={<ProtectedRequestButton />} />
+          </Route>
+          <Route path="/login" element={<div>Login destination</div>} />
+        </Routes>
+        <CurrentLocation />
+      </MemoryRouter>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Make protected request' }))
+
+    await waitFor(() => expect(screen.getByTestId('current-location')).toHaveTextContent('/login?next='))
+    expect(screen.getByText('Login destination')).toBeInTheDocument()
+    expect(useAuthStore.getState().session).toBeNull()
   })
 
   it('persists the login session only when the device checkbox is selected', async () => {
@@ -216,7 +382,7 @@ describe('platform shell', () => {
       </MemoryRouter>,
     )
     expect(await screen.findByRole('heading', { name: 'Sign In' })).toBeTruthy()
-    expect(screen.getByText('/login?next=%2Finterviews%3Ftab%3Dupcoming%26highlight%3D17')).toBeTruthy()
+    expect(screen.getByTestId('current-location').textContent).toBe('/login?next=%2Finterviews%3Ftab%3Dupcoming%26highlight%3D17')
   })
 
   it('returns a student to the requested interview page after login', async () => {
@@ -239,11 +405,66 @@ describe('platform shell', () => {
     fireEvent.change(await screen.findByLabelText('Password'), { target: { value: 'valid-password' } })
     fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
 
+    await waitFor(() => {
+      expect(screen.getByTestId('current-location')).toHaveTextContent('/interviews?tab=upcoming&highlight=17')
+    })
     expect(await screen.findByRole('heading', { name: 'Interviews & Meetings' })).toBeTruthy()
     expect(screen.getByText('/interviews?tab=upcoming&highlight=17')).toBeTruthy()
   })
 
-  it('shows a friendly wrong-role screen instead of the landing page for admins', async () => {
+  it('sends an admin to /admin when next points to the student Interview Studio', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: { access_token: 'admin-token', refresh_token: 'admin-refresh', role: 'ADMIN', user_id: 73 },
+    } as never)
+    renderLoginWithRoleRoutes('/login?next=%2Finterview-studio')
+
+    fireEvent.change(await screen.findByLabelText('Email address'), { target: { value: 'admin@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'valid-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByText('/admin')).toBeInTheDocument()
+  })
+
+  it('sends a student to /interview-studio when next requests it', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: { access_token: 'student-token', refresh_token: 'student-refresh', role: 'STUDENT', user_id: 72 },
+    } as never)
+    renderLoginWithRoleRoutes('/login?next=%2Finterview-studio')
+
+    fireEvent.change(await screen.findByLabelText('Email address'), { target: { value: 'student@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'valid-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByText('/interview-studio')).toBeInTheDocument()
+  })
+
+  it('ignores an external next URL and sends the student to their home', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: { access_token: 'student-token', refresh_token: 'student-refresh', role: 'STUDENT', user_id: 72 },
+    } as never)
+    renderLoginWithRoleRoutes('/login?next=https%3A%2F%2Fevil.example')
+
+    fireEvent.change(await screen.findByLabelText('Email address'), { target: { value: 'student@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'valid-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByText('/opportunities')).toBeInTheDocument()
+  })
+
+  it('sends a signed-in admin to /admin from the wrong-role page', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'admin-token',
+      refreshToken: 'admin-refresh',
+      role: 'ADMIN',
+      userId: 73,
+      email: 'admin@example.com',
+    })
+    renderLoginWithRoleRoutes('/interview-studio')
+
+    expect(await screen.findByText('/admin')).toBeInTheDocument()
+  })
+
+  it('redirects an admin opening a student page to the admin home', async () => {
     useAuthStore.getState().setSession({
       accessToken: 'admin-access-token',
       refreshToken: 'admin-refresh-token',
@@ -254,7 +475,7 @@ describe('platform shell', () => {
     vi.spyOn(api, 'get').mockResolvedValue({ data: [] } as never)
     render(<MemoryRouter initialEntries={['/interviews']}><App /></MemoryRouter>)
 
-    expect(await screen.findByRole('heading', { name: "This page isn't available for your account" })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Platform Admin Dashboard' })).toBeTruthy()
     expect(screen.queryByText('Browse Internships')).toBeNull()
   })
 
@@ -267,9 +488,14 @@ describe('platform shell', () => {
       email: 'company@example.com',
     })
     vi.spyOn(api, 'get').mockResolvedValue({ data: [] } as never)
-    render(<MemoryRouter initialEntries={['/interview-studio']}><App /></MemoryRouter>)
+    render(
+      <MemoryRouter initialEntries={['/interview-studio']}>
+        <App />
+        <CurrentLocation />
+      </MemoryRouter>,
+    )
 
-    expect(await screen.findByRole('heading', { name: "This page isn't available for your account" })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId('current-location')).toHaveTextContent('/company/jobs'))
     expect(screen.queryByText('Practice interviews with AI')).not.toBeInTheDocument()
   })
 

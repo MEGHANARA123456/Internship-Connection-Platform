@@ -137,7 +137,7 @@ export function PrivacySecurityPage() {
       })
       showToast('Your account and all associated personal records have been permanently erased.', 'success')
       logout()
-      navigate(routes.login())
+      navigate(routes.login(), { replace: true })
     } catch (err: any) {
       setDeleteError(err.response?.data?.detail || 'Account deletion failed. Check password.')
     } finally {

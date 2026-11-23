@@ -30,7 +30,7 @@ class UserAdminResponse(BaseModel):
     @property
     def email_verification_required(self) -> bool:
         """Report whether this user's role requires email verification under current settings."""
-        role = self.role.value if hasattr(self.role, "value") else str(self.role)
+        role = self.role.value if hasattr(self.role, "value") else str(self.role) # type: ignore
         settings = get_settings()
         if role == "COMPANY":
             return settings.require_company_email_verification

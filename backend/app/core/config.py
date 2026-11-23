@@ -1,9 +1,16 @@
 # Central application configuration.
-# Values are loaded from environment variables and the local .env file.
+# Values are loaded from environment variables, the project-root .env, and the runtime .env.
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_ENV_FILES = tuple(dict.fromkeys((
+    Path(__file__).resolve().parents[3] / ".env",
+    Path.cwd() / ".env",
+)))
+
 
 class Settings(BaseSettings):
     # Database connection used by the app and by Alembic migrations.
@@ -14,6 +21,7 @@ class Settings(BaseSettings):
     admin_emails: str = ""
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+    remember_me_refresh_token_expire_days: int = 30
     mailpit_host: str = "127.0.0.1"
     mailpit_port: int = 1025
     mail_username: str | None = None
@@ -37,6 +45,7 @@ class Settings(BaseSettings):
     rate_limit_backend: Literal["memory", "redis"] = "memory"
     rate_limit_redis_url: str | None = None
     gemini_api_key: str | None = None
+    interview_llm_provider: str = "groq"
     interview_llm_base_url: str = "https://api.groq.com/openai"
     interview_llm_model: str = "openai/gpt-oss-20b"
     interview_llm_api_key: str = Field(default="", repr=False)
@@ -60,7 +69,7 @@ class Settings(BaseSettings):
     require_email_verification: bool = True
     require_company_email_verification: bool = False
     interview_auto_cancel_grace_minutes: int = 60
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILES, extra="ignore")
 
 # Cache settings so environment values are loaded once for the runtime.
 @lru_cache

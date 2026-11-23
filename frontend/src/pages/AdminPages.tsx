@@ -65,6 +65,8 @@ export function AdminDashboardPage() {
   const [pendingJobsList, setPendingJobsList] = useState<any[]>([])
   const [openReportsList, setOpenReportsList] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [dashboardError, setDashboardError] = useState('')
+  const [dashboardEmpty, setDashboardEmpty] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [analysisRefreshKey, setAnalysisRefreshKey] = useState(0)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -78,12 +80,23 @@ export function AdminDashboardPage() {
         api.get('/admin/internships'),
         api.get('/admin/reports'),
       ])
+      const results = [usersResult, companiesResult, jobsResult, reportsResult]
+      const failedRequests = results.filter((result) => result.status === 'rejected').length
+      setDashboardError(failedRequests ? 'Some dashboard data could not be loaded.' : '')
+      const usersData = usersResult.status === 'fulfilled' ? usersResult.value.data || [] : null
+      const companiesData = companiesResult.status === 'fulfilled' ? companiesResult.value.data || [] : null
+      const jobsData = jobsResult.status === 'fulfilled' ? jobsResult.value.data || [] : null
+      const reportsData = reportsResult.status === 'fulfilled' ? reportsResult.value.data || [] : null
+      setDashboardEmpty(
+        failedRequests === 0
+        && [usersData, companiesData, jobsData, reportsData].every((items) => Array.isArray(items) && items.length === 0),
+      )
 
       setStats((previous) => {
-        const users = usersResult.status === 'fulfilled' ? usersResult.value.data || [] : null
-        const companies = companiesResult.status === 'fulfilled' ? companiesResult.value.data || [] : null
-        const jobs = jobsResult.status === 'fulfilled' ? jobsResult.value.data || [] : null
-        const reports = reportsResult.status === 'fulfilled' ? reportsResult.value.data || [] : null
+        const users = usersData
+        const companies = companiesData
+        const jobs = jobsData
+        const reports = reportsData
         return {
           usersCount: users ? users.length : previous.usersCount,
           studentsCount: users ? users.filter((item: any) => item.role === 'STUDENT').length : previous.studentsCount,
@@ -99,7 +112,7 @@ export function AdminDashboardPage() {
       if (jobsResult.status === 'fulfilled') setPendingJobsList((jobsResult.value.data || []).filter((item: any) => item.status === 'PENDING_APPROVAL').slice(0, 4))
       if (reportsResult.status === 'fulfilled') setOpenReportsList((reportsResult.value.data || []).filter((item: any) => item.status === 'OPEN').slice(0, 4))
     } catch {
-      // handled
+      setDashboardError('Dashboard data could not be loaded.')
     } finally {
       if (!silent) setLoading(false)
     }
@@ -182,6 +195,19 @@ export function AdminDashboardPage() {
           </Button>
         </div>
       </div>
+
+      {dashboardError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">
+          <span>{dashboardError}</span>
+          <Button size="sm" variant="outline" onClick={() => void fetchDashboardData()}>Retry</Button>
+        </div>
+      )}
+      {!loading && dashboardEmpty && (
+        <div className="rounded-lg border border-dashed border-slate-300 p-5 text-center text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
+          <p>No dashboard data yet.</p>
+          <Button className="mt-3" size="sm" variant="outline" onClick={() => void fetchDashboardData()}>Retry</Button>
+        </div>
+      )}
 
       {/* KPI Metrics Grid */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
@@ -1702,6 +1728,8 @@ export function AdminSkillAssessmentsPage() {
   const [keyReviewNumbers, setKeyReviewNumbers] = useState<Record<number, string>>({})
   const [topicOptions, setTopicOptions] = useState<string[]>([])
   const [subtopicOptions, setSubtopicOptions] = useState<string[]>(['general'])
+  const [subtopicLoading, setSubtopicLoading] = useState(false)
+  const [subtopicLoadError, setSubtopicLoadError] = useState(false)
   const [resources, setResources] = useState<AdminLearningResource[]>([])
   const [resourceSubtopicFilter, setResourceSubtopicFilter] = useState('ALL')
   const [resourceDraft, setResourceDraft] = useState({ topic: '', subtopic: 'general', title: '', url: '' })
@@ -1949,9 +1977,14 @@ export function AdminSkillAssessmentsPage() {
   const loadSubtopics = useCallback(async function loadSubtopics(signal?: AbortSignal) {
     if (!selectedTopic) {
       setSubtopicOptions(['general'])
+      setSubtopicLoadError(false)
+      setSubtopicLoading(false)
       resolveSectionNotice('subtopics')
       return
     }
+    setSubtopicLoading(true)
+    setSubtopicLoadError(false)
+    setSubtopicOptions([])
     try {
       const response = await api.get<Array<{ id: string; question_count: number }>>(
         `/skills/admin/skill-topics/${encodeURIComponent(selectedTopic)}/subtopics`,
@@ -1970,19 +2003,15 @@ export function AdminSkillAssessmentsPage() {
       const nextSubtopic = savedSubtopic && choices.includes(savedSubtopic) ? savedSubtopic : choices[0]
       setDraft((current) => ({ ...current, topic: selectedTopic, subtopic: nextSubtopic }))
       resolveSectionNotice('subtopics')
-    } catch (requestError) {
+    } catch {
       if (signal?.aborted) return
-      console.error(`Unable to load subtopics for ${selectedTopic}.`, requestError)
+      setSubtopicLoadError(true)
       setSubtopicOptions(['general'])
       setDraft((current) => ({ ...current, topic: selectedTopic, subtopic: 'general' }))
-      reportError(
-        "Couldn't load subtopics",
-        `Subtopic options for ${selectedTopic} could not be loaded. Using general for now.`,
-        () => void loadSubtopics(),
-        'subtopics',
-      )
+    } finally {
+      if (!signal?.aborted) setSubtopicLoading(false)
     }
-  }, [selectedTopic, sessionUserId, resolveSectionNotice, reportError])
+  }, [selectedTopic, sessionUserId, resolveSectionNotice])
 
   useEffect(() => {
     if (notices.length === 0 || !bannerRef.current) return
@@ -2004,9 +2033,10 @@ export function AdminSkillAssessmentsPage() {
   }, [selectedTopic])
 
   useEffect(() => {
-    setDraft((current) => ({ ...current, topic: selectedTopic, subtopic: 'general' }))
+    setDraft((current) => ({ ...current, topic: selectedTopic, subtopic: selectedTopic ? '' : 'general' }))
     setEditingId(null)
-    setSubtopicOptions(['general'])
+    setSubtopicOptions(selectedTopic ? [] : ['general'])
+    setSubtopicLoadError(false)
     subtopicController.current?.abort()
     const controller = new AbortController()
     subtopicController.current = controller
@@ -2067,9 +2097,11 @@ export function AdminSkillAssessmentsPage() {
       source: draft.source.trim(),
     }
     try {
-      if (editingId == null) await api.post('/skills/admin/questions', payload)
-      else await api.patch(`/skills/admin/questions/${editingId}`, payload)
-      reportSuccess(editingId == null ? 'Question created and audit logged.' : 'Question updated and audit logged.')
+      const response = editingId == null
+        ? await api.post('/skills/admin/questions', payload)
+        : await api.patch(`/skills/admin/questions/${editingId}`, payload)
+      const createdTopicMessage = typeof response?.data?.message === 'string' ? `${response.data.message} ` : ''
+      reportSuccess(`${createdTopicMessage}${editingId == null ? 'Question created and audit logged.' : 'Question updated and audit logged.'}`)
       setEditingId(null)
       setValidationErrors({})
       setDraft((current) => ({
@@ -2121,6 +2153,9 @@ export function AdminSkillAssessmentsPage() {
       })
       const imported = Number(response.data?.imported ?? 0)
       const errors = Array.isArray(response.data?.errors) ? response.data.errors : []
+      const topicMessages = Array.isArray(response.data?.messages)
+        ? response.data.messages.filter((message: unknown): message is string => typeof message === 'string')
+        : []
       if (errors.length > 0) {
         reportError(
           'Import review required',
@@ -2130,7 +2165,7 @@ export function AdminSkillAssessmentsPage() {
           errors.slice(0, 10),
         )
       } else {
-        reportSuccess(`${imported} questions imported and audit logged.`)
+        reportSuccess(`${topicMessages.length ? `${topicMessages.join('. ')}. ` : ''}${imported} questions imported and audit logged.`)
       }
       if (importTopic && importTopic !== selectedTopic) changeSelectedTopic(importTopic)
       else await load()
@@ -2430,21 +2465,29 @@ export function AdminSkillAssessmentsPage() {
             {validationErrors.topic && <span className="text-[11px] font-medium text-rose-600">{validationErrors.topic}</span>}
           </label>
           <div>
-            <DropdownSelect
-              label="Subtopic ID"
-              value={draft.subtopic}
-              options={subtopicOptions.map((subtopic) => ({ value: subtopic, label: subtopic }))}
-              onChange={(subtopic) => {
-                setDraft((current) => ({ ...current, subtopic }))
-                try {
-                  window.sessionStorage.setItem(`admin-skill-subtopic:${session?.userId ?? 'anonymous'}:${selectedTopic}`, subtopic)
-                } catch {
-                  // Session storage is optional; the selection remains available for this page session.
-                }
-                clearFieldError('subtopic')
-              }}
-            />
-            <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Choose an existing subtopic for this topic.</p>
+            {subtopicLoading ? (
+              <p role="status" className="mt-2 text-xs text-slate-500">Loading subtopics…</p>
+            ) : (
+              <DropdownSelect
+                label="Subtopic ID"
+                value={draft.subtopic}
+                options={subtopicOptions.map((subtopic) => ({ value: subtopic, label: subtopic }))}
+                onChange={(subtopic) => {
+                  setDraft((current) => ({ ...current, subtopic }))
+                  try {
+                    window.sessionStorage.setItem(`admin-skill-subtopic:${session?.userId ?? 'anonymous'}:${selectedTopic}`, subtopic)
+                  } catch {
+                    // Session storage is optional; the selection remains available for this page session.
+                  }
+                  clearFieldError('subtopic')
+                }}
+              />
+            )}
+            {subtopicLoadError ? (
+              <p role="alert" className="mt-1 text-xs text-rose-700 dark:text-rose-300">
+                Couldn&apos;t load subtopics. Using general for now. <Button type="button" size="sm" variant="outline" onClick={() => void loadSubtopics()}>Retry</Button>
+              </p>
+            ) : !subtopicLoading && <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Choose an existing subtopic for this topic.</p>}
             {validationErrors.subtopic && <span className="text-[11px] font-medium text-rose-600">{validationErrors.subtopic}</span>}
           </div>
           <label className="space-y-1 text-xs font-semibold text-slate-700 dark:text-slate-300">

@@ -15,9 +15,6 @@ from app.models import (
 _CATEGORIES = {
     "HR": "HR and General",
     "TECHNICAL": "Technical",
-    "DATA_SCIENCE": "Data Science",
-    "DATA_ANALYST": "Data Analyst",
-    "BEHAVIORAL": "Behavioral",
 }
 
 # Each item is (bank category, bank question number, skill tags).
@@ -145,11 +142,7 @@ async def seed_mock_test_library(db: AsyncSession) -> int:
         row.code: row
         for row in (await db.scalars(select(InterviewStudioDifficulty))).all()
     }
-    for code, label in (
-        ("BEGINNER", "Beginner"),
-        ("INTERMEDIATE", "Intermediate"),
-        ("ADVANCED", "Advanced"),
-    ):
+    for code, label in (("INTERMEDIATE", "Intermediate"),):
         if code not in difficulties:
             db.add(
                 InterviewStudioDifficulty(code=code, label=label, active=True)
@@ -176,6 +169,10 @@ async def seed_mock_test_library(db: AsyncSession) -> int:
     inserted = 0
     for definition in _TESTS:
         slug = str(definition["slug"])
+        if str(definition["category"]) not in {"HR", "TECHNICAL"}:
+            continue
+        if str(definition["difficulty"]) != "INTERMEDIATE":
+            continue
         questions = list(definition["questions"])
         test = tests.get(slug)
         if test is not None:

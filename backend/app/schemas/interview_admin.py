@@ -5,15 +5,15 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-InterviewCategory = Literal["HR", "TECHNICAL", "DATA_SCIENCE", "BEHAVIORAL"]
-InterviewDifficulty = Literal["BEGINNER", "INTERMEDIATE", "ADVANCED"]
+InterviewCategory = Literal["HR", "TECHNICAL"]
+InterviewDifficulty = Literal["INTERMEDIATE"]
 MockTestFormat = Literal["QUICK_PRACTICE", "STANDARD", "FULL", "TOPIC_WISE"]
 MockTestMode = Literal["PRACTICE", "ASSESSMENT"]
 
 
 class QuestionFields(BaseModel):
     category: InterviewCategory
-    difficulty: InterviewDifficulty
+    difficulty: str | None = None
     prompt: str = Field(min_length=8, max_length=3000)
     hint: str = Field(min_length=3, max_length=1500)
     rubric: str = Field(min_length=5, max_length=2500)
@@ -25,7 +25,7 @@ class QuestionCreate(QuestionFields):
 
 class QuestionUpdate(BaseModel):
     category: InterviewCategory | None = None
-    difficulty: InterviewDifficulty | None = None
+    difficulty: str | None = None
     prompt: str | None = Field(default=None, min_length=8, max_length=3000)
     hint: str | None = Field(default=None, min_length=3, max_length=1500)
     rubric: str | None = Field(default=None, min_length=5, max_length=2500)
@@ -42,7 +42,7 @@ class MockTestFields(BaseModel):
     title: str = Field(min_length=3, max_length=160)
     description: str = Field(min_length=5, max_length=3000)
     category_id: int = Field(gt=0)
-    difficulty: InterviewDifficulty
+    difficulty: str | None = None
     format: MockTestFormat
     default_mode: MockTestMode
     question_count: int = Field(ge=1, le=20)

@@ -68,12 +68,20 @@ def mask_email(email: str) -> str:
         masked_user = user[0] + "*" * (len(user) - 2) + user[-1]
     return f"{masked_user}@{domain}"
 
-def create_token(subject: str, role: str, token_type: str, expires_delta: timedelta) -> str:
+def create_token(
+    subject: str,
+    role: str,
+    token_type: str,
+    expires_delta: timedelta,
+    *,
+    remember_me: bool = False,
+) -> str:
     """Encode an HS256 JWT with subject, role, type, issue/expiry times, and refresh JTI."""
     now = datetime.now(timezone.utc)
     payload = {"sub": subject, "role": role, "type": token_type, "iat": now, "exp": now + expires_delta}
     if token_type == "refresh":
         payload["jti"] = str(uuid4())
+        payload["remember_me"] = remember_me
     return jwt.encode(payload, get_settings().secret_key, algorithm=ALGORITHM)
 
 def decode_token(token: str) -> dict:

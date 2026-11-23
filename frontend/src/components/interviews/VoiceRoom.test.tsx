@@ -125,6 +125,28 @@ describe('VoiceRoom', () => {
     expect(screen.getByLabelText('Transcript / your answer')).toBeInTheDocument()
   })
 
+  it('keeps video interview answers local when speech recognition is unsupported', () => {
+    const onAnswerChange = vi.fn()
+    render(<VoiceRoom
+      sessionId={17}
+      questionId={22}
+      questionText="Describe a project."
+      answer=""
+      disabled={false}
+      allowAudioTranscription={false}
+      onAnswerChange={onAnswerChange}
+      onDurationTokenChange={() => undefined}
+      onBusyChange={() => undefined}
+    />)
+
+    expect(screen.getByText(/Speech recognition is not supported/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Record answer/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Speak answer/ }))
+    expect(screen.getAllByText(/Speech recognition is not supported/)).toHaveLength(2)
+    fireEvent.change(screen.getByLabelText('Transcript / your answer'), { target: { value: 'Typed answer.' } })
+    expect(onAnswerChange).toHaveBeenCalledWith('Typed answer.')
+  })
+
   it('lets the student edit the transcript before submitting it with verified duration', async () => {
     installMediaDevices()
     vi.stubGlobal('MediaRecorder', MockMediaRecorder)

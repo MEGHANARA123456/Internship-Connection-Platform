@@ -143,6 +143,23 @@ def _authenticated_user_id(request: Request) -> str | None:
     except (ValueError, TypeError, KeyError):
         return None
 
+
+def _authenticated_role(request: Request) -> str | None:
+    """Return a normalized role from a valid bearer access token, if present."""
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    try:
+        payload = decode_token(token)
+        if payload.get("type") != "access":
+            return None
+        role = payload.get("role")
+        return role.upper() if isinstance(role, str) else None
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 class SecurityMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         """Initialize in-memory rate state or connect a Redis client from application settings."""
@@ -209,6 +226,12 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         else:
             ip = _client_ip(request, settings.trusted_proxies)
             user_id = _authenticated_user_id(request)
+            admin_studio_read = (
+                request.method == "GET"
+                and path.startswith("/api/v1/admin/interview-studio/")
+                and user_id is not None
+                and _authenticated_role(request) == "ADMIN"
+            )
             is_interview_audio = _interview_audio_route(path)
             is_interview_video_chunk = _interview_video_chunk_route(path)
             audio_limit = min(settings.interview_stt_max_audio_bytes, 10 * 1024 * 1024)
@@ -221,7 +244,11 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 is_interview_video_chunk
                 and _oversized_interview_audio_request(request, video_chunk_limit)
             )
-            if is_interview_audio:
+            if admin_studio_read:
+                limit = settings.rate_limit_requests
+                window = settings.rate_limit_window_seconds
+                keys = []
+            elif is_interview_audio:
                 limit = settings.interview_stt_requests_per_minute
                 window = 60
                 key = f"interview-audio:user:{user_id}" if user_id else f"interview-audio:ip:{ip}"
@@ -278,6 +305,9 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=(), payment=()"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+        if path.startswith("/api/v1/") and request.headers.get("authorization"):
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Pragma"] = "no-cache"
         if not path.startswith(("/docs", "/redoc", "/openapi.json")):
             response.headers["Content-Security-Policy"] = (
                 "default-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"

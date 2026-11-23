@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Clock3, Lightbulb } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
@@ -17,8 +17,13 @@ import { InterviewVideoRecordingPanel } from '../../components/interviews/Interv
 import { routes } from '../../lib/routes'
 import { confirmAction, showToast } from '../../lib/feedback'
 import {
+  retryAfterSecondsFromError,
+  studentProviderFailureMessage,
+} from '../../lib/interviewProviderErrors'
+import {
   acknowledgeInterviewProctoringConsent,
   completeInterviewSession,
+  getInterviewProviderAvailability,
   getInterviewSession,
   getNextInterviewQuestion,
   retryInterviewEvaluation,
@@ -39,28 +44,6 @@ function formatTime(seconds: number): string {
   return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`
 }
 
-function failureMessage(code: string | null): string {
-  if (!code) return 'This answer could not be evaluated. Your answer is saved.'
-  const messages: Record<string, string> = {
-    provider_not_configured: 'Evaluation is temporarily unavailable, please retry later. Your answer is saved.',
-    provider_timeout: 'Evaluation timed out. Your answer is saved.',
-    provider_rate_limited: 'The evaluation service is busy. Your answer is saved.',
-    provider_unavailable: 'The evaluation service is unavailable. Your answer is saved.',
-    provider_rejected_request: 'The evaluation service could not process this answer. Your answer is saved.',
-    invalid_model_output: 'The evaluation service returned an invalid response. Your answer is saved.',
-    evaluation_failed: 'This answer could not be evaluated. Your answer is saved.',
-  }
-  return messages[code] ?? 'This answer could not be evaluated. Your answer is saved.'
-}
-
-function includeQuestion(
-  questions: InterviewQuestion[],
-  question: InterviewQuestion | null,
-): InterviewQuestion[] {
-  if (!question || questions.some((item) => item.id === question.id)) return questions
-  return [...questions, question].sort((a, b) => a.position - b.position)
-}
-
 export function InterviewSessionPage() {
   const { sessionId: rawSessionId } = useParams()
   const sessionId = Number(rawSessionId)
@@ -69,12 +52,15 @@ export function InterviewSessionPage() {
   const headingRef = useRef<HTMLHeadingElement>(null)
   const videoRoomRef = useRef<VideoInterviewRoomHandle>(null)
   const [session, setSession] = useState<InterviewSession | null>(null)
-  const [questions, setQuestions] = useState<InterviewQuestion[]>([])
+  const [answeredCount, setAnsweredCount] = useState(0)
   const [question, setQuestion] = useState<InterviewQuestion | null>(null)
+  const [currentQuestionAnswered, setCurrentQuestionAnswered] = useState(false)
   const [questionLimitReached, setQuestionLimitReached] = useState(false)
   const [answer, setAnswer] = useState('')
   const [evaluation, setEvaluation] = useState<InterviewEvaluation | null>(null)
   const [evaluationFailure, setEvaluationFailure] = useState('')
+  const [providerAvailable, setProviderAvailable] = useState<boolean | null>(null)
+  const [retryWait, setRetryWait] = useState(0)
   const [currentAnswerId, setCurrentAnswerId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -83,6 +69,12 @@ export function InterviewSessionPage() {
   const [audioDurationToken, setAudioDurationToken] = useState<string | null>(null)
   const [voiceBusy, setVoiceBusy] = useState(false)
   const [videoBusy, setVideoBusy] = useState(false)
+
+  useEffect(() => {
+    if (retryWait <= 0) return
+    const timer = window.setTimeout(() => setRetryWait((seconds) => Math.max(0, seconds - 1)), 1000)
+    return () => window.clearTimeout(timer)
+  }, [retryWait])
 
   const loadSession = useCallback(async () => {
     if (!Number.isInteger(sessionId) || sessionId <= 0) {
@@ -95,7 +87,7 @@ export function InterviewSessionPage() {
     try {
       const detail = await getInterviewSession(sessionId)
       let nextSession = detail.session
-      setQuestions(detail.questions)
+      setAnsweredCount(detail.answered_question_count)
       if (
         nextSession.status === 'CREATED'
         && (nextSession.interview_mode === 'VOICE'
@@ -111,13 +103,14 @@ export function InterviewSessionPage() {
       if (nextSession.status !== 'IN_PROGRESS') {
         setQuestion(null)
         setQuestionLimitReached(false)
+        setCurrentQuestionAnswered(false)
         return
       }
       const next = await getNextInterviewQuestion(sessionId)
       setSession((current) => current ? { ...current, status: next.session_status } : current)
       setQuestion(next.question)
       setQuestionLimitReached(next.question_limit_reached)
-      setQuestions((current) => includeQuestion(current, next.question))
+      setCurrentQuestionAnswered(next.question?.answer_submitted ?? false)
       setAnswer('')
       setEvaluation(null)
       setEvaluationFailure('')
@@ -153,14 +146,6 @@ export function InterviewSessionPage() {
     return () => window.clearInterval(interval)
   }, [session?.expires_at])
 
-  const answeredCount = useMemo(
-    () => questions.filter((item) => item.answer_submitted).length,
-    [questions],
-  )
-  const currentQuestionAnswered = question
-    ? questions.some((item) => item.id === question.id && item.answer_submitted)
-    : false
-
   const loadNextQuestion = async () => {
     setBusy(true)
     setError('')
@@ -169,7 +154,7 @@ export function InterviewSessionPage() {
       setSession((current) => current ? { ...current, status: next.session_status } : current)
       setQuestion(next.question)
       setQuestionLimitReached(next.question_limit_reached)
-      setQuestions((current) => includeQuestion(current, next.question))
+      setCurrentQuestionAnswered(next.question?.answer_submitted ?? false)
       setAnswer('')
       setEvaluation(null)
       setEvaluationFailure('')
@@ -194,6 +179,7 @@ export function InterviewSessionPage() {
     }
     setBusy(true)
     setError('')
+    const alreadyAnswered = currentQuestionAnswered
     try {
       const result = await submitInterviewAnswer(
         sessionId,
@@ -204,24 +190,25 @@ export function InterviewSessionPage() {
           : null,
       )
       setCurrentAnswerId(result.answer_id)
-      setQuestions((current) => current.map((item) => item.id === question.id
-        ? { ...item, answer_submitted: true }
-        : item))
+      if (!alreadyAnswered) setAnsweredCount((current) => current + 1)
+      setCurrentQuestionAnswered(true)
       if (session?.session_type === 'PRACTICE') {
         setEvaluation(result.evaluation)
         setEvaluationFailure(result.evaluation_status === 'FAILED' ? result.failure_code ?? 'evaluation_failed' : '')
+        setRetryWait(result.evaluation_status === 'FAILED' ? result.retry_after_seconds ?? 0 : 0)
       } else {
         const next = await getNextInterviewQuestion(sessionId)
         setSession((current) => current ? { ...current, status: next.session_status } : current)
         setQuestion(next.question)
         setQuestionLimitReached(next.question_limit_reached)
-        setQuestions((current) => includeQuestion(current, next.question))
+        setCurrentQuestionAnswered(next.question?.answer_submitted ?? false)
         setAnswer('')
         setEvaluation(null)
         setCurrentAnswerId(null)
         setAudioDurationToken(null)
       }
     } catch (submitError) {
+      setRetryWait(retryAfterSecondsFromError(submitError))
       setError(requestError(submitError, routes.interviewSession(sessionId)))
     } finally {
       setBusy(false)
@@ -238,8 +225,10 @@ export function InterviewSessionPage() {
         if (result?.evaluation) {
           setEvaluation(result.evaluation)
           setEvaluationFailure('')
+          setRetryWait(0)
         } else if (result?.evaluation_status === 'FAILED') {
           setEvaluationFailure(result.failure_code ?? 'evaluation_failed')
+          setRetryWait(result.retry_after_seconds ?? 0)
         } else {
           setError('Evaluation retry completed without a result for this answer. Refresh the session to check its status.')
         }
@@ -247,11 +236,39 @@ export function InterviewSessionPage() {
         setError('The evaluation response was unexpected. Refresh the session to check its status.')
       }
     } catch (retryError) {
+      setRetryWait(retryAfterSecondsFromError(retryError))
       setError(requestError(retryError, routes.interviewSession(sessionId)))
     } finally {
       setBusy(false)
     }
   }
+
+  useEffect(() => {
+    if (!evaluationFailure) {
+      setProviderAvailable(null)
+      setRetryWait(0)
+      return
+    }
+
+    let active = true
+    const checkAvailability = async () => {
+      try {
+        const status = await getInterviewProviderAvailability()
+        if (active) {
+          setProviderAvailable(status.available)
+          setRetryWait(status.retry_after_seconds ?? 0)
+        }
+      } catch {
+        if (active) setProviderAvailable(false)
+      }
+    }
+    void checkAvailability()
+    const interval = window.setInterval(() => void checkAvailability(), 30_000)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+    }
+  }, [evaluationFailure])
 
   const complete = async (endEarly = false) => {
     if (session?.session_type === 'ASSESSMENT' || endEarly) {
@@ -425,6 +442,7 @@ export function InterviewSessionPage() {
                   questionText={question.prompt}
                   answer={answer}
                   disabled={busy || (session.session_type === 'ASSESSMENT' && currentQuestionAnswered)}
+                  allowAudioTranscription={false}
                   sharedStream={sharedStream}
                   onAnswerChange={(value) => {
                     setAnswer(value)
@@ -535,8 +553,12 @@ export function InterviewSessionPage() {
       {session.session_type === 'PRACTICE' && evaluation && <InterviewFeedback evaluation={evaluation} />}
       {session.session_type === 'PRACTICE' && evaluationFailure && (
         <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
-          <p role="status" className="text-sm text-amber-950 dark:text-amber-100">{failureMessage(evaluationFailure)}</p>
-          <Button variant="outline" size="sm" isLoading={busy} onClick={() => void retryPracticeEvaluation()}>Retry evaluation</Button>
+          <p role="status" className="text-sm text-amber-950 dark:text-amber-100">
+            {studentProviderFailureMessage(evaluationFailure)}
+          </p>
+          <Button variant="outline" size="sm" disabled={busy || retryWait > 0 || providerAvailable !== true} isLoading={busy} onClick={() => void retryPracticeEvaluation()}>
+            {retryWait > 0 ? `Try again in ${retryWait}s` : 'Retry evaluation'}
+          </Button>
         </div>
       )}
 

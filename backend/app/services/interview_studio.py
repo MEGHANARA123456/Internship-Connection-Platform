@@ -8,6 +8,7 @@ from statistics import mean
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import ValidationError
 
 from app.core.config import get_settings
 from app.models import (
@@ -45,6 +46,7 @@ from app.schemas.interview import (
 from app.services.interview_llm import (
     InterviewLLMProvider,
     InterviewProviderError,
+    generate_questions,
     get_interview_provider,
 )
 from app.services.interview_voice import (
@@ -73,10 +75,29 @@ _EVALUATION_FIELDS = (
 
 
 class InterviewStudioError(Exception):
-    def __init__(self, status_code: int, code: str):
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        retry_after_seconds: int | None = None,
+    ):
         super().__init__(code)
         self.status_code = status_code
         self.code = code
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _retry_provider_error_code(failure_code: str | None) -> str:
+    return {
+        "provider_not_configured": "evaluation_provider_not_configured",
+        "provider_timeout": "evaluation_provider_timeout",
+        "provider_rate_limited": "evaluation_provider_rate_limited",
+        "provider_insufficient_quota": "evaluation_provider_insufficient_quota",
+        "provider_invalid_key": "evaluation_provider_invalid_key",
+        "provider_model_not_found": "evaluation_provider_model_not_found",
+        "provider_rejected_request": "evaluation_provider_rejected",
+        "provider_unavailable": "evaluation_provider_unavailable",
+    }.get(failure_code or "", "evaluation_failed")
 
 
 def _now() -> datetime:
@@ -183,13 +204,9 @@ async def create_session(
     )
     if student is None:
         raise InterviewStudioError(404, "student_not_found")
-    difficulty_active = await db.scalar(
-        select(InterviewStudioDifficulty.active).where(
-            InterviewStudioDifficulty.code == request.difficulty
-        )
-    )
-    if difficulty_active is False:
-        raise InterviewStudioError(422, "difficulty_unavailable")
+    if request.category not in {"HR", "TECHNICAL"}:
+        raise InterviewStudioError(422, "Category must be HR or TECHNICAL")
+    difficulty = "INTERMEDIATE"
 
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + timedelta(days=1)
@@ -222,17 +239,13 @@ async def create_session(
     if request.retake_of_session_id is not None:
         await _owned_session(db, student_id, request.retake_of_session_id)
 
-    categories = (
-        ("HR", "TECHNICAL", "DATA_SCIENCE", "BEHAVIORAL")
-        if request.category == "MIXED"
-        else (request.category,)
-    )
+    categories = (request.category,)
     available_questions = int(
         await db.scalar(
             select(func.count(InterviewQuestionBank.id)).where(
                 InterviewQuestionBank.active.is_(True),
                 InterviewQuestionBank.category.in_(categories),
-                InterviewQuestionBank.difficulty == request.difficulty,
+                InterviewQuestionBank.difficulty == difficulty,
             )
         )
         or 0
@@ -246,7 +259,7 @@ async def create_session(
         session_type=request.session_type,
         interview_mode=request.interview_mode,
         category=request.category,
-        difficulty=request.difficulty,
+        difficulty=difficulty,
         question_count=request.question_count,
         time_limit_seconds=SESSION_TIME_LIMIT_SECONDS,
         status="CREATED",
@@ -257,6 +270,33 @@ async def create_session(
         created_at=now,
     )
     db.add(session)
+    await db.flush()
+
+    generated_questions = None
+    try:
+        generated_questions = await generate_questions(
+            request.category,
+            difficulty,
+            request.question_count,
+        )
+    except (InterviewProviderError, ValidationError, ValueError, TypeError, AttributeError):
+        generated_questions = None
+
+    if generated_questions:
+        for position, generated in enumerate(generated_questions, start=1):
+            db.add(
+                InterviewQuestion(
+                    session_id=session.id,
+                    question_bank_id=None,
+                    position=position,
+                    prompt=generated.prompt,
+                    hint=generated.hint,
+                    rubric=generated.rubric,
+                    skill_tags=[generated.skill_tag],
+                    is_follow_up=False,
+                    source_metadata={"source": "AI"},
+                )
+            )
     await db.commit()
     await db.refresh(session)
     return _session_view(session)
@@ -317,13 +357,14 @@ async def create_mock_test_session(
     if test_and_category is None:
         raise InterviewStudioError(404, "mock_test_not_found")
     test, category = test_and_category
-    difficulty_active = await db.scalar(
-        select(InterviewStudioDifficulty.active).where(
-            InterviewStudioDifficulty.code == test.difficulty
-        )
+    category_slug = category.slug.upper()
+    mapped_category = (
+        "HR" if category_slug in {"HR", "BEHAVIORAL"}
+        else "TECHNICAL" if category_slug in {"TECHNICAL", "DATA_SCIENCE", "DATA_ANALYST"}
+        else None
     )
-    if difficulty_active is False:
-        raise InterviewStudioError(422, "difficulty_unavailable")
+    if mapped_category is None:
+        raise InterviewStudioError(422, "Category must be HR or TECHNICAL")
     question_rows = int(
         await db.scalar(
             select(func.count(MockTestQuestion.id)).where(
@@ -352,8 +393,8 @@ async def create_mock_test_session(
         mock_test_version=test.version,
         session_type=request.session_type or test.default_mode,
         interview_mode=request.interview_mode,
-        category="DATA_SCIENCE" if category.slug == "DATA_ANALYST" else category.slug,
-        difficulty=test.difficulty,
+        category=mapped_category,
+        difficulty="INTERMEDIATE",
         question_count=test.question_count,
         time_limit_seconds=min(test.time_limit_seconds, SESSION_TIME_LIMIT_SECONDS),
         status="CREATED",
@@ -399,37 +440,17 @@ async def get_session_detail(
     session = await _owned_session(db, student_id, session_id, lock=True)
     if _expire_if_due(session, _now()):
         await db.commit()
-    questions = list(
-        (
-            await db.scalars(
-                select(InterviewQuestion)
-                .where(InterviewQuestion.session_id == session.id)
-                .order_by(InterviewQuestion.position)
-            )
-        ).all()
+    answered_question_count = int(
+        await db.scalar(
+            select(func.count(func.distinct(InterviewAnswer.question_id)))
+            .join(InterviewQuestion, InterviewQuestion.id == InterviewAnswer.question_id)
+            .where(InterviewQuestion.session_id == session.id)
+        )
+        or 0
     )
-    answered_ids = set(
-        (
-            await db.scalars(
-                select(InterviewAnswer.question_id)
-                .where(InterviewAnswer.question_id.in_([question.id for question in questions]))
-                .distinct()
-            )
-        ).all()
-    ) if questions else set()
     return {
         "session": _session_view(session),
-        "questions": [
-            InterviewQuestionView(
-                id=question.id,
-                position=question.position,
-                prompt=question.prompt,
-                hint=question.hint if session.session_type == "PRACTICE" else None,
-                is_follow_up=question.is_follow_up,
-                answer_submitted=question.id in answered_ids,
-            )
-            for question in questions
-        ],
+        "answered_question_count": answered_question_count,
     }
 
 
@@ -494,6 +515,11 @@ async def start_session(
     session_id: int,
 ) -> InterviewSessionView:
     session = await _owned_session(db, student_id, session_id, lock=True)
+    if session.status == "IN_PROGRESS":
+        if _expire_if_due(session, _now()):
+            await db.commit()
+            await db.refresh(session)
+        return _session_view(session)
     if session.status != "CREATED":
         raise InterviewStudioError(409, "invalid_session_transition")
     if (
@@ -564,15 +590,18 @@ async def _next_bank_question(
             )
         ).all()
     )
+    category = str(session.category).strip().upper()
     categories = (
-        ("HR", "TECHNICAL", "DATA_SCIENCE", "BEHAVIORAL")
-        if session.category == "MIXED"
-        else (session.category,)
+        ("HR",)
+        if category in {"HR", "BEHAVIORAL"}
+        else ("TECHNICAL",)
+        if category in {"TECHNICAL", "DATA_SCIENCE", "DATA_ANALYST"}
+        else ("HR", "TECHNICAL")
     )
     base_query = select(InterviewQuestionBank).where(
         InterviewQuestionBank.active.is_(True),
         InterviewQuestionBank.category.in_(categories),
-        InterviewQuestionBank.difficulty == session.difficulty,
+        InterviewQuestionBank.difficulty == "INTERMEDIATE",
     )
     bank_question = None
     if recent_question_ids:
@@ -595,6 +624,7 @@ async def _next_bank_question(
         rubric=bank_question.rubric,
         skill_tags=[],
         is_follow_up=False,
+        source_metadata={"source": "BANK"},
     )
     db.add(question)
     await db.flush()
@@ -699,12 +729,12 @@ async def _evaluate_with_usage(
     answer: str,
     rubric: str,
     allow_follow_up: bool,
-) -> tuple[InterviewLLMEvaluation | None, str | None, int, int, int, int]:
+) -> tuple[InterviewLLMEvaluation | None, str | None, int, int, int, int, int | None]:
     started = time.perf_counter()
     try:
         usage_call = getattr(provider, "evaluate_with_usage", None)
         if callable(usage_call):
-            result, prompt_tokens, completion_tokens, retry_count = await usage_call(
+            result, prompt_tokens, completion_tokens, retry_count, retry_after = await usage_call(
                 question=question,
                 answer=answer,
                 rubric=rubric,
@@ -718,6 +748,7 @@ async def _evaluate_with_usage(
                 allow_follow_up=allow_follow_up,
             )
             prompt_tokens = completion_tokens = retry_count = 0
+            retry_after = None
         return (
             result,
             None,
@@ -725,6 +756,7 @@ async def _evaluate_with_usage(
             prompt_tokens,
             completion_tokens,
             retry_count,
+            retry_after,
         )
     except InterviewProviderError as error:
         return (
@@ -734,6 +766,7 @@ async def _evaluate_with_usage(
             error.prompt_tokens,
             error.completion_tokens,
             error.retry_count,
+            error.retry_after_seconds,
         )
 
 
@@ -853,7 +886,15 @@ async def submit_answer(
         and question_count < session.question_count
         and session.mock_test_id is None
     )
-    result, failure_code, duration_ms, prompt_tokens, completion_tokens, retry_count = (
+    (
+        result,
+        failure_code,
+        duration_ms,
+        prompt_tokens,
+        completion_tokens,
+        retry_count,
+        retry_after_seconds,
+    ) = (
         await _evaluate_with_usage(
             provider,
             question=question.prompt,
@@ -881,6 +922,7 @@ async def submit_answer(
             answer_id=answer.id,
             evaluation_status="FAILED",
             failure_code=evaluation.failure_code,
+            retry_after_seconds=retry_after_seconds,
         )
 
     _apply_evaluation(evaluation, result, provider.model_name)
@@ -1288,6 +1330,7 @@ async def _run_evaluations(
     provider: InterviewLLMProvider,
     *,
     finalize: bool,
+    retryable_failure_codes: tuple[str, ...] | None = None,
 ) -> InterviewReportView | list[InterviewAnswerView]:
     evaluation_by_answer: dict[int, InterviewEvaluation] = {}
     for answer, _question in pairs:
@@ -1306,12 +1349,19 @@ async def _run_evaluations(
         (answer, question)
         for answer, question in pairs
         if evaluation_by_answer[answer.id].status != "COMPLETED"
+        and (
+            retryable_failure_codes is None
+            or (
+                evaluation_by_answer[answer.id].status == "FAILED"
+                and evaluation_by_answer[answer.id].failure_code in retryable_failure_codes
+            )
+        )
     ]
 
     async def evaluate_one(
         answer: InterviewAnswer,
         question: InterviewQuestion,
-    ) -> tuple[int, InterviewLLMEvaluation | None, str | None, int, int, int, int]:
+    ) -> tuple[int, InterviewLLMEvaluation | None, str | None, int, int, int, int, int | None]:
         (
             result,
             failure_code,
@@ -1319,6 +1369,7 @@ async def _run_evaluations(
             prompt_tokens,
             completion_tokens,
             retry_count,
+            retry_after_seconds,
         ) = await _evaluate_with_usage(
             provider,
             question=question.prompt,
@@ -1334,11 +1385,17 @@ async def _run_evaluations(
             prompt_tokens,
             completion_tokens,
             retry_count,
+            retry_after_seconds,
         )
 
-    outcomes = await asyncio.gather(
-        *(evaluate_one(answer, question) for answer, question in to_evaluate)
-    )
+    outcomes = []
+    for answer, question in to_evaluate:
+        outcomes.append(await evaluate_one(answer, question))
+    retry_after_by_answer = {
+        outcome[0]: outcome[7]
+        for outcome in outcomes
+        if outcome[7] is not None
+    }
     for (
         answer_id,
         result,
@@ -1347,6 +1404,7 @@ async def _run_evaluations(
         prompt_tokens,
         completion_tokens,
         retry_count,
+        _retry_after_seconds,
     ) in outcomes:
         evaluation = evaluation_by_answer[answer_id]
         if result is None:
@@ -1385,6 +1443,7 @@ async def _run_evaluations(
                 answer_id=answer.id,
                 evaluation_status=evaluation_by_answer[answer.id].status,
                 failure_code=evaluation_by_answer[answer.id].failure_code,
+                retry_after_seconds=retry_after_by_answer.get(answer.id),
                 evaluation=_evaluation_view(evaluation_by_answer[answer.id]),
             )
             for answer, _question in pairs
@@ -1416,7 +1475,17 @@ async def _run_evaluations(
     else:
         _complete_report(report, session, latest_evaluations, pairs)
     await db.commit()
-    return await _report_view(db, session, report)
+    report_view = await _report_view(db, session, report)
+    report_view.retry_after_seconds = next(
+        (
+            retry_after_by_answer.get(evaluation.answer_id)
+            for evaluation in latest_evaluations
+            if evaluation.status == "FAILED"
+            and retry_after_by_answer.get(evaluation.answer_id) is not None
+        ),
+        None,
+    )
+    return report_view
 
 
 async def complete_session(
@@ -1475,6 +1544,7 @@ async def retry_evaluation(
     student_id: int,
     session_id: int,
     provider: InterviewLLMProvider | None = None,
+    retryable_failure_codes: tuple[str, ...] | None = None,
 ) -> InterviewReportView | list[InterviewAnswerView]:
     session = await _owned_session(db, student_id, session_id, lock=True)
     await _require_not_expired(db, session)
@@ -1503,9 +1573,16 @@ async def retry_evaluation(
             pairs,
             provider or get_interview_provider(),
             finalize=True,
+            retryable_failure_codes=retryable_failure_codes,
         )
         if not isinstance(result, InterviewReportView):
             raise RuntimeError("Retried interview evaluation did not produce a report.")
+        if result.status == "FAILED":
+            raise InterviewStudioError(
+                503,
+                _retry_provider_error_code(result.failure_code),
+                retry_after_seconds=result.retry_after_seconds,
+            )
         return result
 
     if session.session_type != "PRACTICE":
@@ -1517,9 +1594,17 @@ async def retry_evaluation(
                 InterviewEvaluation.answer_id == answer.id
             )
         )
-        if evaluation is not None and evaluation.status == "FAILED":
-            evaluation.status = "PENDING"
-            evaluation.failure_code = None
+        if (
+            evaluation is not None
+            and evaluation.status == "FAILED"
+            and (
+                retryable_failure_codes is None
+                or evaluation.failure_code in retryable_failure_codes
+            )
+        ):
+            if retryable_failure_codes is None:
+                evaluation.status = "PENDING"
+                evaluation.failure_code = None
             failed_pairs.append((answer, question))
     if not failed_pairs:
         raise InterviewStudioError(409, "no_failed_evaluations")
@@ -1530,9 +1615,20 @@ async def retry_evaluation(
         failed_pairs,
         provider or get_interview_provider(),
         finalize=False,
+        retryable_failure_codes=retryable_failure_codes,
     )
     if isinstance(result, InterviewReportView):
         raise RuntimeError("Practice answer retry unexpectedly produced a report.")
+    failed_result = next(
+        (item for item in result if item.evaluation_status == "FAILED"),
+        None,
+    )
+    if failed_result is not None:
+        raise InterviewStudioError(
+            503,
+            _retry_provider_error_code(failed_result.failure_code),
+            retry_after_seconds=failed_result.retry_after_seconds,
+        )
     return result
 
 

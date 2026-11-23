@@ -72,7 +72,7 @@ export function GoogleSignInButton({
     }, keepSignedIn ? 'local' : 'session')
 
     const target = resolvePostLoginTarget(data.role, searchParams.get('next'))
-    navigate(target)
+    navigate(target, { replace: true })
   }
 
   // Initialize Google Identity Services when its async script becomes available.

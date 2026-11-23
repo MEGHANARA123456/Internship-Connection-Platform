@@ -5,7 +5,7 @@ import io
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
@@ -39,17 +39,20 @@ from app.schemas.interview_admin import (
 )
 from app.services.interview_studio import InterviewStudioError
 from app.schemas.interview import InterviewAnswerView
+from app.services.interview_llm import get_interview_provider_status
 
-_QUESTION_CSV_COLUMNS = {
-    "seed_key",
-    "category",
-    "difficulty",
-    "prompt",
-    "hint",
-    "rubric",
-}
-_QUESTION_CATEGORIES = {"HR", "TECHNICAL", "DATA_SCIENCE", "BEHAVIORAL"}
-_DIFFICULTIES = {"BEGINNER", "INTERMEDIATE", "ADVANCED"}
+_QUESTION_CSV_COLUMNS = {"seed_key", "category", "prompt", "hint", "rubric"}
+_QUESTION_CATEGORIES = {"HR", "TECHNICAL"}
+_DIFFICULTIES = {"INTERMEDIATE"}
+
+
+def _map_category(value: str) -> str:
+    normalized = value.strip().upper()
+    if normalized in {"BEHAVIORAL"}:
+        return "HR"
+    if normalized in {"DATA_SCIENCE", "DATA_ANALYST"}:
+        return "TECHNICAL"
+    return normalized
 _SETTINGS_RANGES = {
     "retention_days": (1, 365),
     "sessions_per_day": (1, 50),
@@ -57,10 +60,16 @@ _SETTINGS_RANGES = {
 
 
 class InterviewAdminError(Exception):
-    def __init__(self, status_code: int, code: str):
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        retry_after_seconds: int | None = None,
+    ):
         super().__init__(code)
         self.status_code = status_code
         self.code = code
+        self.retry_after_seconds = retry_after_seconds
 
 
 def _now() -> datetime:
@@ -116,8 +125,6 @@ async def list_questions(
     statement = select(InterviewQuestionBank)
     if category:
         statement = statement.where(InterviewQuestionBank.category == category)
-    if difficulty:
-        statement = statement.where(InterviewQuestionBank.difficulty == difficulty)
     if active is not None:
         statement = statement.where(InterviewQuestionBank.active.is_(active))
     if search.strip():
@@ -135,7 +142,18 @@ async def list_questions(
         ]
     total = len(rows)
     page = rows[offset:offset + min(max(limit, 1), 200)]
-    return {"items": [_question_view(row) for row in page], "total": total}
+    counts = {
+        category_name: sum(
+            row.category == category_name
+            for row in rows
+        )
+        for category_name in ("HR", "TECHNICAL")
+    }
+    return {
+        "items": [_question_view(row) for row in page],
+        "total": total,
+        "counts": counts,
+    }
 
 
 async def create_question(
@@ -145,12 +163,10 @@ async def create_question(
 ) -> dict[str, Any]:
     if payload.category not in _QUESTION_CATEGORIES:
         raise InterviewAdminError(422, "invalid_question_category")
-    if payload.difficulty not in _DIFFICULTIES:
-        raise InterviewAdminError(422, "invalid_question_difficulty")
     question = InterviewQuestionBank(
         seed_key=payload.seed_key,
         category=payload.category,
-        difficulty=payload.difficulty,
+        difficulty="INTERMEDIATE",
         prompt=payload.prompt.strip(),
         hint=payload.hint.strip(),
         rubric=payload.rubric.strip(),
@@ -232,6 +248,9 @@ async def update_question(
     if question is None:
         raise InterviewAdminError(404, "question_not_found")
     changes = payload.model_dump(exclude_unset=True, exclude_none=True)
+    changes.pop("difficulty", None)
+    if "category" in changes and changes["category"] not in _QUESTION_CATEGORIES:
+        raise InterviewAdminError(422, "Category must be HR or TECHNICAL")
     if not changes:
         raise InterviewAdminError(422, "no_question_changes")
     content_changed = any(
@@ -328,7 +347,12 @@ async def import_questions_csv(
     if len(contents.encode("utf-8")) > 1_000_000:
         raise InterviewAdminError(413, "csv_too_large")
     reader = csv.DictReader(io.StringIO(contents))
-    if reader.fieldnames is None or set(reader.fieldnames) != _QUESTION_CSV_COLUMNS:
+    if reader.fieldnames is None:
+        raise InterviewAdminError(422, "invalid_csv_columns")
+    normalized_headers = {header.strip().lower() for header in reader.fieldnames}
+    if not _QUESTION_CSV_COLUMNS.issubset(normalized_headers):
+        raise InterviewAdminError(422, "invalid_csv_columns")
+    if normalized_headers - (_QUESTION_CSV_COLUMNS | {"difficulty"}):
         raise InterviewAdminError(422, "invalid_csv_columns")
     parsed: list[dict[str, str]] = []
     seen_keys: set[str] = set()
@@ -340,10 +364,9 @@ async def import_questions_csv(
         values = {key: (row.get(key) or "").strip() for key in _QUESTION_CSV_COLUMNS}
         if any(not value for value in values.values()):
             raise InterviewAdminError(422, f"invalid_csv_row_{line_number}")
+        values["category"] = _map_category(values["category"])
         if values["category"] not in _QUESTION_CATEGORIES:
-            raise InterviewAdminError(422, f"invalid_csv_category_row_{line_number}")
-        if values["difficulty"] not in _DIFFICULTIES:
-            raise InterviewAdminError(422, f"invalid_csv_difficulty_row_{line_number}")
+            raise InterviewAdminError(422, "Category must be HR or TECHNICAL")
         if values["seed_key"] in seen_keys:
             raise InterviewAdminError(422, f"duplicate_csv_seed_key_row_{line_number}")
         seen_keys.add(values["seed_key"])
@@ -363,9 +386,11 @@ async def import_questions_csv(
     if existing:
         raise InterviewAdminError(409, "question_seed_key_exists")
     for values in parsed:
+        values.pop("difficulty", None)
         db.add(
             InterviewQuestionBank(
                 **values,
+                difficulty="INTERMEDIATE",
                 active=True,
                 source_metadata={"status": "DRAFT-for-review", "source": "admin_csv"},
             )
@@ -391,6 +416,8 @@ async def _validate_test_questions(
     category = await db.get(MockTestCategory, payload.category_id)
     if category is None:
         raise InterviewAdminError(422, "invalid_test_category")
+    if category.slug not in _QUESTION_CATEGORIES:
+        raise InterviewAdminError(422, "Category must be HR or TECHNICAL")
     if payload.active and not category.active:
         raise InterviewAdminError(422, "test_category_inactive")
     question_ids = [item.question_id for item in payload.questions]
@@ -418,7 +445,7 @@ def _test_view(
         "title": test.title,
         "description": test.description,
         "category_id": test.category_id,
-        "category": category.title,
+        "category": category.slug,
         "difficulty": test.difficulty,
         "format": test.format,
         "default_mode": test.default_mode,
@@ -459,11 +486,22 @@ async def _test_detail(db: AsyncSession, test: MockTest) -> dict[str, Any]:
     return _test_view(test, category, assignments)
 
 
-async def list_tests(db: AsyncSession) -> list[dict[str, Any]]:
-    tests = (
-        await db.execute(select(MockTest).order_by(MockTest.id.desc()))
-    ).scalars().all()
-    return [await _test_detail(db, test) for test in tests]
+async def list_tests(db: AsyncSession, category: str | None = None) -> dict[str, Any]:
+    statement = select(MockTest).join(
+        MockTestCategory,
+        MockTestCategory.id == MockTest.category_id,
+    )
+    if category:
+        if category not in _QUESTION_CATEGORIES:
+            raise InterviewAdminError(422, "Category must be HR or TECHNICAL")
+        statement = statement.where(MockTestCategory.slug == category)
+    tests = (await db.execute(statement.order_by(MockTest.id.desc()))).scalars().all()
+    items = [await _test_detail(db, test) for test in tests]
+    counts = {
+        "HR": sum(item["category"] == "HR" for item in items),
+        "TECHNICAL": sum(item["category"] == "TECHNICAL" for item in items),
+    }
+    return {"items": items, "counts": counts, "total": len(items)}
 
 
 async def create_test(
@@ -477,7 +515,7 @@ async def create_test(
         title=payload.title.strip(),
         description=payload.description.strip(),
         category_id=payload.category_id,
-        difficulty=payload.difficulty,
+        difficulty="INTERMEDIATE",
         format=payload.format,
         default_mode=payload.default_mode,
         question_count=payload.question_count,
@@ -534,7 +572,7 @@ async def update_test(
         "title": payload.title.strip(),
         "description": payload.description.strip(),
         "category_id": payload.category_id,
-        "difficulty": payload.difficulty,
+        "difficulty": "INTERMEDIATE",
         "format": payload.format,
         "default_mode": payload.default_mode,
         "question_count": payload.question_count,
@@ -637,6 +675,8 @@ async def create_category(
     actor: User,
     payload: CategoryCreate,
 ) -> dict[str, Any]:
+    if payload.slug not in _QUESTION_CATEGORIES:
+        raise InterviewAdminError(422, "Category must be HR or TECHNICAL")
     category = MockTestCategory(
         slug=payload.slug,
         title=payload.label.strip(),
@@ -663,20 +703,18 @@ async def create_category(
 
 async def list_taxonomy(db: AsyncSession) -> dict[str, list[dict[str, Any]]]:
     categories = (
-        await db.execute(select(MockTestCategory).order_by(MockTestCategory.title))
-    ).scalars().all()
-    difficulties = (
-        await db.execute(select(InterviewStudioDifficulty).order_by(InterviewStudioDifficulty.code))
+        await db.execute(
+            select(MockTestCategory)
+            .where(MockTestCategory.slug.in_(("HR", "TECHNICAL")))
+            .order_by(MockTestCategory.title)
+        )
     ).scalars().all()
     return {
         "categories": [
             {"id": item.id, "slug": item.slug, "label": item.title, "active": item.active}
             for item in categories
         ],
-        "difficulties": [
-            {"code": item.code, "label": item.label, "active": item.active}
-            for item in difficulties
-        ],
+        "difficulties": [],
     }
 
 
@@ -940,15 +978,24 @@ async def get_failure_monitor(db: AsyncSession) -> dict[str, Any]:
     }
 
 
-async def list_audit_events(db: AsyncSession, limit: int = 100) -> list[dict[str, Any]]:
+async def list_audit_events(
+    db: AsyncSession,
+    limit: int = 30,
+    offset: int = 0,
+    action: str | None = None,
+) -> list[dict[str, Any]]:
+    statement = select(InterviewStudioAdminAudit)
+    if action:
+        statement = statement.where(InterviewStudioAdminAudit.action == action)
     rows = (
         await db.execute(
-            select(InterviewStudioAdminAudit)
+            statement
             .order_by(
                 InterviewStudioAdminAudit.created_at.desc(),
                 InterviewStudioAdminAudit.id.desc(),
             )
-            .limit(min(max(limit, 1), 200))
+            .limit(min(max(limit, 1), 100))
+            .offset(max(offset, 0))
         )
     ).scalars().all()
     return [
@@ -972,6 +1019,38 @@ async def retry_failed_evaluations(
 ) -> dict[str, int]:
     from app.services.interview_studio import retry_evaluation
 
+    provider_status = await get_interview_provider_status()
+    if not provider_status["configured"]:
+        raise InterviewAdminError(
+            503,
+            "evaluation_provider_not_configured",
+            retry_after_seconds=provider_status.get("retry_after_seconds"),
+        )
+    if provider_status["last_error"] is not None:
+        retry_errors = {
+            "provider_timeout": "evaluation_provider_timeout",
+            "provider_rate_limited": "evaluation_provider_rate_limited",
+            "provider_insufficient_quota": "evaluation_provider_insufficient_quota",
+            "provider_invalid_key": "evaluation_provider_invalid_key",
+            "provider_model_not_found": "evaluation_provider_model_not_found",
+            "provider_rejected_request": "evaluation_provider_rejected",
+            "provider_unavailable": "evaluation_provider_unavailable",
+        }
+        raise InterviewAdminError(
+            503,
+            retry_errors.get(
+                str(provider_status["last_error"]),
+                "evaluation_provider_unavailable",
+            ),
+            retry_after_seconds=provider_status.get("retry_after_seconds"),
+        )
+
+    retryable_failure_codes = (
+        "provider_not_configured",
+        "provider_timeout",
+        "provider_unavailable",
+        "provider_rate_limited",
+    )
     session_ids = (
         await db.execute(
             select(InterviewSession.id, InterviewSession.student_id)
@@ -986,8 +1065,16 @@ async def retry_failed_evaluations(
                 InterviewSession.status.in_(
                     ("EVALUATION_FAILED", "EVALUATION_PENDING", "IN_PROGRESS")
                 ),
-                (InterviewEvaluation.status == "FAILED")
-                | (InterviewReport.status == "FAILED"),
+                or_(
+                    and_(
+                        InterviewEvaluation.status == "FAILED",
+                        InterviewEvaluation.failure_code.in_(retryable_failure_codes),
+                    ),
+                    and_(
+                        InterviewReport.status == "FAILED",
+                        InterviewReport.failure_code.in_(retryable_failure_codes),
+                    ),
+                ),
             )
             .distinct()
             .order_by(InterviewReport.created_at)
@@ -998,7 +1085,12 @@ async def retry_failed_evaluations(
     failed = 0
     for session_id, student_id in session_ids:
         try:
-            result = await retry_evaluation(db, student_id, session_id)
+            result = await retry_evaluation(
+                db,
+                student_id,
+                session_id,
+                retryable_failure_codes=retryable_failure_codes,
+            )
             recovered = getattr(result, "status", None) == "COMPLETED"
             if isinstance(result, list):
                 recovered = bool(result) and all(
@@ -1010,8 +1102,14 @@ async def retry_failed_evaluations(
                 completed += 1
             else:
                 failed += 1
-        except InterviewStudioError:
+        except InterviewStudioError as error:
             await db.rollback()
+            if error.code.startswith("evaluation_provider_"):
+                raise InterviewAdminError(
+                    error.status_code,
+                    error.code,
+                    retry_after_seconds=error.retry_after_seconds,
+                ) from error
             failed += 1
     await _audit(
         db, actor, "evaluation_retry_batch", "evaluation", None,

@@ -44,18 +44,107 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-let isRefreshing = false
-let failedQueue: Array<{
-  resolve: (value?: unknown) => void
-  reject: (reason?: unknown) => void
-}> = []
+let refreshPromise: Promise<NonNullable<Session>> | null = null
 
-const processQueue = (error: unknown, token: string | null = null) => {
-  failedQueue.forEach((prom) => {
-    if (error) prom.reject(error)
-    else prom.resolve(token)
-  })
-  failedQueue = []
+function readPersistentSession(): Session {
+  try {
+    return JSON.parse(localStorage.getItem('session') || 'null') as Session
+  } catch {
+    return null
+  }
+}
+
+function expireSession(userId?: number): void {
+  const currentSession = useAuthStore.getState().session
+  if (userId !== undefined && currentSession?.userId !== userId) return
+  if (typeof window !== 'undefined') {
+    window.sessionStorage.setItem('session_expired_message', 'true')
+  }
+  useAuthStore.getState().logout(false)
+}
+
+async function refreshSessionRequest(): Promise<NonNullable<Session>> {
+  const snapshot = useAuthStore.getState().session
+  if (!snapshot?.refreshToken) throw new Error('No refresh token is available.')
+  const refreshUserId = snapshot.userId
+
+  const refresh = async (): Promise<NonNullable<Session>> => {
+    const state = useAuthStore.getState()
+    const currentSession = state.persistence === 'local'
+      ? readPersistentSession() ?? state.session
+      : state.session
+    if (!currentSession || currentSession.userId !== refreshUserId) {
+      throw new Error('Session changed while refreshing the access token.')
+    }
+    if (currentSession.accessToken !== snapshot.accessToken) {
+      useAuthStore.getState().setSession(currentSession, state.persistence)
+      return currentSession
+    }
+
+    const response = await axios.post(
+      `${api.defaults.baseURL}/auth/refresh`,
+      { refresh_token: currentSession.refreshToken },
+    )
+    const tokens = response.data
+    const updatedSession = {
+      ...currentSession,
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      role: tokens.role,
+      userId: tokens.user_id ?? currentSession.userId,
+      accessTokenExpiresAt: tokens.access_token_expires_at ?? null,
+      refreshTokenExpiresAt: tokens.refresh_token_expires_at ?? null,
+      accessTokenExpiresIn: tokens.access_token_expires_in ?? null,
+      refreshTokenExpiresIn: tokens.refresh_token_expires_in ?? null,
+    }
+    useAuthStore.getState().setSession(updatedSession, state.persistence)
+    return updatedSession
+  }
+
+  try {
+    const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined
+    return useAuthStore.getState().persistence === 'local' && lockManager
+      ? await lockManager.request('internship-auth-refresh', refresh)
+      : await refresh()
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      expireSession(refreshUserId)
+    }
+    throw error
+  }
+}
+
+export async function refreshSession(): Promise<string> {
+  if (!refreshPromise) {
+    refreshPromise = refreshSessionRequest().finally(() => {
+      refreshPromise = null
+    })
+  }
+  return (await refreshPromise).accessToken
+}
+
+export function getAccessTokenExpirationMs(session: Session): number | null {
+  if (!session) return null
+  try {
+    const payload = session.accessToken.split('.')[1]
+    if (payload) {
+      const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+      const decoded = JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '='))) as { exp?: unknown }
+      if (typeof decoded.exp === 'number' && Number.isFinite(decoded.exp)) return decoded.exp * 1000
+    }
+  } catch {
+    // Use the server-provided expiry metadata for non-JWT test or legacy tokens.
+  }
+  if (session.accessTokenExpiresAt) {
+    const expiresAt = Date.parse(session.accessTokenExpiresAt)
+    if (Number.isFinite(expiresAt)) return expiresAt
+  }
+  return null
+}
+
+function isTokenIssuanceEndpoint(url: string | undefined): boolean {
+  const path = (url ?? '').split('?')[0]
+  return /\/auth\/(login|refresh|google|mfa\/verify-login)(?:$|\/)/.test(path)
 }
 
 api.interceptors.response.use(
@@ -90,83 +179,24 @@ api.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
+    if (
+      error.response?.status === 401
+      && originalRequest
+      && !originalRequest._retry
+      && !isTokenIssuanceEndpoint(originalRequest.url)
+    ) {
       const session = useAuthStore.getState().session
       if (!session?.refreshToken) {
-        if (typeof window !== 'undefined') {
-          window.sessionStorage.setItem('session_expired_message', 'true')
-        }
-        useAuthStore.getState().logout()
+        expireSession(session?.userId)
         return Promise.reject(error)
       }
-      const refreshUserId = session.userId
-
-      if (isRefreshing) {
-        return new Promise((resolve, reject) => {
-          failedQueue.push({ resolve, reject })
-        })
-          .then((token) => {
-            originalRequest.headers.Authorization = `Bearer ${token}`
-            return api(originalRequest)
-          })
-      }
-
       originalRequest._retry = true
-      isRefreshing = true
-
       try {
-        const refresh = async () => {
-          let persistentSession: Session = null
-          if (useAuthStore.getState().persistence === 'local') {
-            try {
-              persistentSession = JSON.parse(localStorage.getItem('session') || 'null') as Session
-            } catch {
-              persistentSession = null
-            }
-          }
-          const currentSession = persistentSession ?? useAuthStore.getState().session
-          if (!currentSession || currentSession.userId !== refreshUserId) {
-            throw new Error('Session changed while refreshing the access token.')
-          }
-          if (currentSession.accessToken !== session.accessToken) return currentSession
-
-          const response = await axios.post(
-            `${api.defaults.baseURL}/auth/refresh`,
-            { refresh_token: currentSession.refreshToken },
-          )
-          const tokens = response.data
-          const updatedSession = {
-            ...currentSession,
-            accessToken: tokens.access_token,
-            refreshToken: tokens.refresh_token,
-            role: tokens.role,
-            accessTokenExpiresAt: tokens.access_token_expires_at ?? null,
-            refreshTokenExpiresAt: tokens.refresh_token_expires_at ?? null,
-            accessTokenExpiresIn: tokens.access_token_expires_in ?? null,
-            refreshTokenExpiresIn: tokens.refresh_token_expires_in ?? null,
-          }
-          useAuthStore.getState().setSession(updatedSession)
-          return updatedSession
-        }
-
-        const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined
-        const updatedSession = useAuthStore.getState().persistence === 'local' && lockManager
-          ? await lockManager.request('internship-auth-refresh', refresh)
-          : await refresh()
-        processQueue(null, updatedSession.accessToken)
-        originalRequest.headers.Authorization = `Bearer ${updatedSession.accessToken}`
+        const accessToken = await refreshSession()
+        originalRequest.headers.Authorization = `Bearer ${accessToken}`
         return api(originalRequest)
       } catch (refreshError) {
-        processQueue(refreshError, null)
-        if (useAuthStore.getState().session?.userId === refreshUserId) {
-          if (typeof window !== 'undefined') {
-            window.sessionStorage.setItem('session_expired_message', 'true')
-          }
-          useAuthStore.getState().logout()
-        }
-        return Promise.reject(error)
-      } finally {
-        isRefreshing = false
+        return Promise.reject(refreshError)
       }
     }
 

@@ -55,6 +55,8 @@ TOPIC_INFO: dict[str, dict[str, str]] = {
     "devops": {"name": "Cloud, Docker & DevOps", "icon": "☁️", "badge_title": "Verified Cloud & DevOps Specialist", "description": "Understand cloud infrastructure and delivery workflows."},
     "security": {"name": "Web Security & System Design", "icon": "🛡️", "badge_title": "Verified Security & Systems Pro", "description": "Apply secure design principles to web systems."},
     "typescript": {"name": "JavaScript & TypeScript Mastery", "icon": "🔷", "badge_title": "Verified TypeScript Specialist", "description": "Strengthen typed JavaScript and application design."},
+    "mongodb": {"name": "MongoDB", "icon": "✦", "badge_title": "Verified MongoDB Specialist", "description": "Show what you know and build a verified skill."},
+    "powerbi": {"name": "Power BI", "icon": "✦", "badge_title": "Verified Power BI Specialist", "description": "Show what you know and build a verified skill."},
 }
 DIFFICULTIES = set(DIFFICULTY_WEIGHTS)
 QUESTION_TYPES = {"SINGLE", "MULTI", "TRUE_FALSE"}
@@ -147,9 +149,10 @@ class SkillQuestionCreate(BaseModel):
     @classmethod
     def validate_topic(cls, value: str) -> str:
         """Normalize a topic identifier to lowercase and reject characters outside its identifier format."""
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value.lower()):
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", normalized):
             raise ValueError("Topic must be a lowercase id using letters, numbers, '-' or '_'")
-        return value.lower()
+        return normalized
 
     @field_validator("options")
     @classmethod
@@ -723,13 +726,73 @@ async def _assert_unique_prompt(
 ) -> None:
     """Reject a question prompt that duplicates another question in the same topic."""
     query = select(SkillQuestion.id).where(
-        SkillQuestion.topic == topic,
+        func.lower(func.trim(SkillQuestion.topic)) == topic.strip().lower(),
         func.lower(SkillQuestion.prompt) == prompt.casefold(),
     )
     if exclude_id is not None:
         query = query.where(SkillQuestion.id != exclude_id)
     if await db.scalar(query) is not None:
         raise HTTPException(409, "A question with this topic and prompt already exists")
+
+
+def _topic_defaults(slug: str) -> dict[str, str]:
+    known = TOPIC_INFO.get(slug)
+    if known is not None:
+        return known
+    name = slug.replace("-", " ").replace("_", " ").title()
+    return {
+        "name": name,
+        "description": "Show what you know and build a verified skill.",
+        "icon": "✦",
+        "badge_title": f"Verified {name} Specialist",
+    }
+
+
+async def _ensure_skill_topic(db: DbSession, slug: str) -> tuple[SkillTopic, bool]:
+    """Create missing topic metadata for a normalized question-bank topic."""
+    normalized = slug.strip().lower()
+    metadata = await db.get(SkillTopic, normalized)
+    if metadata is not None:
+        return metadata, False
+    defaults = _topic_defaults(normalized)
+    metadata = SkillTopic(
+        slug=normalized,
+        name=defaults["name"],
+        description=defaults.get("description", ""),
+        icon=defaults.get("icon", "✦"),
+        badge_title=defaults.get("badge_title", f"Verified {defaults['name']} Specialist"),
+    )
+    try:
+        async with db.begin_nested():
+            db.add(metadata)
+            await db.flush()
+    except IntegrityError:
+        existing = await db.get(SkillTopic, normalized)
+        if existing is None:
+            raise
+        return existing, False
+    logger.info("Created missing skill-topic metadata for '%s'.", normalized)
+    return metadata, True
+
+
+async def _topic_for_update(db: DbSession, topic: str) -> SkillTopic:
+    normalized = topic.strip().lower()
+    metadata = await db.scalar(
+        select(SkillTopic).where(SkillTopic.slug == normalized).with_for_update()
+    )
+    if metadata is not None:
+        return metadata
+    has_questions = await db.scalar(
+        select(SkillQuestion.id)
+        .where(func.lower(func.trim(SkillQuestion.topic)) == normalized)
+        .limit(1)
+    )
+    if has_questions is not None:
+        metadata, created = await _ensure_skill_topic(db, normalized)
+        if created:
+            await db.commit()
+        return metadata
+    raise HTTPException(404, "Skill topic not found")
 
 
 @router.get("/topics")
@@ -789,7 +852,7 @@ async def list_assessment_topics(user: student_only, db: DbSession) -> list[dict
             ]
             if missing:
                 continue
-            defaults = TOPIC_INFO.get(topic, {})
+            defaults = _topic_defaults(topic)
             attempt = student_attempts.get(topic, {})
             topics.append({
                 "id": topic,
@@ -1321,7 +1384,7 @@ async def list_skill_questions(
     query = select(SkillQuestion).order_by(SkillQuestion.topic, SkillQuestion.id)
     selected_topic = topic_id or topic
     if selected_topic:
-        query = query.where(SkillQuestion.topic == selected_topic.strip().lower())
+        query = query.where(func.lower(func.trim(SkillQuestion.topic)) == selected_topic.strip().lower())
     if active is not None:
         query = query.where(SkillQuestion.active.is_(active))
     questions = list(await db.scalars(query))
@@ -1412,10 +1475,9 @@ async def create_skill_question(
     db: DbSession,
 ) -> dict[str, Any]:
     """Validate and create a skill question, recording the administrator action."""
-    if await db.get(SkillTopic, data.topic) is None:
-        raise HTTPException(404, "Skill topic not found")
     _validate_question(data.options, data.correct_index, data.correct_answers, data.question_type)
     await _assert_unique_prompt(db, data.topic, data.prompt)
+    topic_metadata, topic_created = await _ensure_skill_topic(db, data.topic)
     values = data.model_dump(exclude={"correct_option_number", "correct_option_numbers"})
     if values["correct_index"] is None:
         values["correct_index"] = values["correct_answers"][0]
@@ -1453,7 +1515,10 @@ async def create_skill_question(
     )
     await db.commit()
     await db.refresh(question)
-    return _question_dict(question)
+    response = _question_dict(question)
+    if topic_created:
+        response["message"] = f"Created new topic: {topic_metadata.name}"
+    return response
 
 
 @router.patch("/admin/questions/{question_id}")
@@ -1490,8 +1555,6 @@ async def update_skill_question(
         raise HTTPException(422, "Prompt and explanation cannot be blank")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", merged["topic"]):
         raise HTTPException(422, "Topic must be a lowercase id using letters, numbers, '-' or '_'")
-    if await db.get(SkillTopic, merged["topic"]) is None:
-        raise HTTPException(404, "Skill topic not found")
     if not 2 <= len(merged["subtopic"]) <= 40 or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", merged["subtopic"]):
         raise HTTPException(422, "Subtopic must be 2-40 characters using lowercase letters, numbers, and hyphens.")
     merged["difficulty"] = {
@@ -1524,7 +1587,9 @@ async def update_skill_question(
         or merged["correct_answers"] != question.correct_answers
     )
     await _assert_unique_prompt(db, merged["topic"], merged["prompt"], exclude_id=question.id)
+    topic_metadata, topic_created = await _ensure_skill_topic(db, merged["topic"])
     before = {key: getattr(question, key) for key in values}
+    question.topic = merged["topic"]
     for key, value in values.items():
         setattr(question, key, merged.get(key, value))
     if key_changed:
@@ -1540,7 +1605,10 @@ async def update_skill_question(
     )
     await db.commit()
     await db.refresh(question)
-    return _question_dict(question)
+    response = _question_dict(question)
+    if topic_created:
+        response["message"] = f"Created new topic: {topic_metadata.name}"
+    return response
 
 
 @router.delete("/admin/questions/{question_id}", status_code=204)
@@ -1777,6 +1845,12 @@ async def import_skill_questions(
         result["imported"] = 0
         return result
 
+    created_topic_messages = []
+    for slug in sorted({question.topic for question in valid_questions}):
+        metadata, created = await _ensure_skill_topic(db, slug)
+        if created:
+            created_topic_messages.append(f"Created new topic: {metadata.name}")
+
     db.add_all(valid_questions)
     await db.flush()
     for resource in created_resources:
@@ -1801,6 +1875,7 @@ async def import_skill_questions(
     )
     await db.commit()
     result["imported"] = len(valid_questions)
+    result["messages"] = created_topic_messages
     return result
 
 
@@ -1950,19 +2025,20 @@ async def get_skill_assessment_stats(
     question_query = select(SkillQuestion).order_by(SkillQuestion.topic, SkillQuestion.id)
     attempt_query = select(SkillAttempt)
     if selected_topic:
-        question_query = question_query.where(SkillQuestion.topic == selected_topic)
-        attempt_query = attempt_query.where(SkillAttempt.topic == selected_topic)
+        question_query = question_query.where(func.lower(func.trim(SkillQuestion.topic)) == selected_topic)
+        attempt_query = attempt_query.where(func.lower(func.trim(SkillAttempt.topic)) == selected_topic)
     questions = list(await db.scalars(question_query))
     attempts = list(await db.scalars(attempt_query))
     attempts_by_topic: dict[str, list[SkillAttempt]] = {}
     question_rates: dict[int, list[float]] = {}
     weakest_subtopics: dict[str, dict[str, list[float]]] = {}
     for attempt in attempts:
-        attempts_by_topic.setdefault(attempt.topic, []).append(attempt)
+        topic_slug = attempt.topic.strip().lower()
+        attempts_by_topic.setdefault(topic_slug, []).append(attempt)
         if attempt.status not in {"COMPLETED", "SUBMITTED"}:
             continue
         for subtopic, result in (attempt.subtopic_scores or {}).items():
-            scores = weakest_subtopics.setdefault(attempt.topic, {}).setdefault(subtopic, [])
+            scores = weakest_subtopics.setdefault(topic_slug, {}).setdefault(subtopic, [])
             scores.append(float(result.get("percentage", 0)))
         if attempt.answers is None:
             continue
@@ -1983,8 +2059,8 @@ async def get_skill_assessment_stats(
         topic.slug: topic
         for topic in await db.scalars(topic_metadata_query)
     }
-    known_topics = {question.topic for question in questions} | set(topic_metadata) | {
-        attempt.topic for attempt in attempts
+    known_topics = {question.topic.strip().lower() for question in questions} | set(topic_metadata) | {
+        attempt.topic.strip().lower() for attempt in attempts
     }
     topics = (
         [selected_topic] if selected_topic in known_topics
@@ -2002,7 +2078,7 @@ async def get_skill_assessment_stats(
             "expired": sum(attempt.status == "EXPIRED" for attempt in topic_attempts),
             "in_progress": sum(attempt.status == "IN_PROGRESS" for attempt in topic_attempts),
         }
-        topic_questions = [question for question in questions if question.topic == topic]
+        topic_questions = [question for question in questions if question.topic.strip().lower() == topic]
         active_by_difficulty = {
             difficulty: sum(
                 question.active and question.difficulty.upper() == difficulty
@@ -2025,6 +2101,10 @@ async def get_skill_assessment_stats(
             for difficulty, count in ASSESSMENT_MIX.items()
             if active_by_difficulty[difficulty] < count
         }
+        missing_pool = [
+            f"{missing} more {difficulty.lower()}"
+            for difficulty, missing in missing_mix.items()
+        ]
         hardest = sorted(
             (
                 {
@@ -2070,10 +2150,7 @@ async def get_skill_assessment_stats(
             "active_questions": sum(question.active for question in topic_questions),
             "difficulty_pool_sizes": active_by_difficulty,
             "question_pool_sizes": pool_sizes,
-            "bank_warnings": [
-                f"Add {missing} active {difficulty.lower()} question(s) for the required 4/4/2 attempt mix."
-                for difficulty, missing in missing_mix.items()
-            ],
+            "bank_warnings": [f"Needs {' and '.join(missing_pool)} questions"] if missing_pool else [],
             "hardest_questions": hardest,
             "weakest_subtopics": [
                 {
@@ -2097,18 +2174,21 @@ async def _topic_readiness(db: DbSession, topic: str) -> tuple[dict[str, int], l
     counts = {
         difficulty: int(await db.scalar(
             select(func.count(SkillQuestion.id)).where(
-                SkillQuestion.topic == topic,
+                func.lower(func.trim(SkillQuestion.topic)) == topic.strip().lower(),
                 SkillQuestion.active.is_(True),
                 SkillQuestion.difficulty == difficulty,
             )
         ) or 0)
         for difficulty in ASSESSMENT_MIX
     }
-    warnings = [
-        f"{difficulty.title()}: {counts[difficulty]}/{required} active questions (need {required - counts[difficulty]} more)"
+    missing = [
+        f"{required - counts[difficulty]} more {difficulty.lower()}"
         for difficulty, required in ASSESSMENT_MIX.items()
         if counts[difficulty] < required
     ]
+    missing_count = sum(required - counts[difficulty] for difficulty, required in ASSESSMENT_MIX.items())
+    question_label = "question" if missing_count == 1 else "questions"
+    warnings = [f"Needs {' and '.join(missing)} {question_label}"] if missing else []
     return counts, warnings
 
 
@@ -2141,7 +2221,7 @@ async def _topic_history_events(db: DbSession, topic: str) -> list[dict[str, Any
     events: list[dict[str, Any]] = []
     for row in rows:
         metadata = row.metadata_ or {}
-        if metadata.get("topic") != topic and row.target_type != "skill_topic":
+        if str(metadata.get("topic", "")).strip().lower() != topic.strip().lower() and row.target_type != "skill_topic":
             continue
         label = {
             "skill_topic_created": "Created",
@@ -2170,13 +2250,6 @@ async def _topic_history_events(db: DbSession, topic: str) -> list[dict[str, Any
     return events
 
 
-async def _topic_for_update(db: DbSession, topic: str) -> SkillTopic:
-    metadata = await db.scalar(select(SkillTopic).where(SkillTopic.slug == topic).with_for_update())
-    if metadata is None:
-        raise HTTPException(404, "Skill topic not found")
-    return metadata
-
-
 async def _topic_impact_counts(db: DbSession, topic: str) -> dict[str, int]:
     now = datetime.now(timezone.utc)
     attempt_rows = list(await db.scalars(select(SkillAttempt).where(SkillAttempt.topic == topic)))
@@ -2200,7 +2273,9 @@ async def _topic_impact_counts(db: DbSession, topic: str) -> dict[str, int]:
         "active_badges": sum(_utc(badge.expires_at) > now for badge in badges),
         "expiring_badges": sum(now < _utc(badge.expires_at) <= now + timedelta(days=30) for badge in badges),
         "questions": int(await db.scalar(
-            select(func.count(SkillQuestion.id)).where(SkillQuestion.topic == topic)
+            select(func.count(SkillQuestion.id)).where(
+                func.lower(func.trim(SkillQuestion.topic)) == topic.strip().lower()
+            )
         ) or 0),
         "resources": int(await db.scalar(
             select(func.count(SkillLearningResource.id)).where(SkillLearningResource.topic == topic)
@@ -2216,6 +2291,20 @@ async def list_admin_skill_topics(
     include_archived: bool = False,
 ) -> list[dict[str, Any]]:
     """Return persisted topic metadata with question-pool and attempt analytics."""
+    question_topics = list(await db.scalars(select(SkillQuestion.topic).distinct()))
+    attempt_topics = list(await db.scalars(select(SkillAttempt.topic).distinct()))
+    created_metadata = False
+    for raw_topic in [*question_topics, *attempt_topics]:
+        if not isinstance(raw_topic, str):
+            continue
+        slug = raw_topic.strip().lower()
+        if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,99}", slug):
+            _, created = await _ensure_skill_topic(db, slug)
+            created_metadata = created_metadata or created
+        else:
+            logger.warning("Skipping unmanageable skill topic slug %r in admin topic list.", raw_topic)
+    if created_metadata:
+        await db.commit()
     stats = await get_skill_assessment_stats(user, db, topic_id)
     if not include_archived:
         stats = [item for item in stats if item.get("archived_at") is None]
@@ -2240,11 +2329,10 @@ async def list_admin_skill_topic_subtopics(
 ) -> list[dict[str, Any]]:
     """Return unique question subtopics for an existing skill topic."""
     slug = topic.strip().lower()
-    if await db.get(SkillTopic, slug) is None:
-        raise HTTPException(404, "Skill topic not found")
+    await _topic_for_update(db, slug)
     rows = (await db.execute(
         select(SkillQuestion.subtopic, func.count(SkillQuestion.id))
-        .where(SkillQuestion.topic == slug)
+        .where(func.lower(func.trim(SkillQuestion.topic)) == slug)
         .group_by(SkillQuestion.subtopic)
         .order_by(SkillQuestion.subtopic)
     )).all()
@@ -2258,8 +2346,7 @@ async def get_admin_skill_topic_impact(
     db: DbSession,
 ) -> dict[str, int]:
     slug = topic.strip().lower()
-    if await db.get(SkillTopic, slug) is None:
-        raise HTTPException(404, "Skill topic not found")
+    await _topic_for_update(db, slug)
     return await _topic_impact_counts(db, slug)
 
 
@@ -2385,8 +2472,7 @@ async def get_admin_skill_topic_history(
     db: DbSession,
 ) -> dict[str, Any]:
     slug = topic.strip().lower()
-    if await db.get(SkillTopic, slug) is None:
-        raise HTTPException(404, "Skill topic not found")
+    await _topic_for_update(db, slug)
     return {"topic": slug, "events": await _topic_history_events(db, slug)}
 
 
@@ -2416,7 +2502,9 @@ async def delete_admin_skill_topic(
             "message": "This topic has historical attempts or badges. Archive it instead to preserve history.",
             **impacts,
         })
-    for question in await db.scalars(select(SkillQuestion).where(SkillQuestion.topic == slug)):
+    for question in await db.scalars(
+        select(SkillQuestion).where(func.lower(func.trim(SkillQuestion.topic)) == slug)
+    ):
         await db.delete(question)
     for resource in await db.scalars(select(SkillLearningResource).where(SkillLearningResource.topic == slug)):
         await db.delete(resource)

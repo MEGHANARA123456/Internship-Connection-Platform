@@ -1,5 +1,5 @@
-export type InterviewCategory = 'HR' | 'TECHNICAL' | 'DATA_SCIENCE' | 'BEHAVIORAL' | 'MIXED'
-export type InterviewDifficulty = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED'
+export type InterviewCategory = 'HR' | 'TECHNICAL'
+export type InterviewDifficulty = 'INTERMEDIATE'
 export type InterviewSessionType = 'PRACTICE' | 'ASSESSMENT'
 export type InterviewMode = 'TEXT' | 'VOICE' | 'VIDEO'
 export type InterviewSessionStatus =
@@ -44,7 +44,7 @@ export interface InterviewQuestion {
 
 export interface InterviewSessionDetail {
   session: InterviewSession
-  questions: InterviewQuestion[]
+  answered_question_count: number
 }
 
 export interface InterviewNextQuestion {
@@ -56,7 +56,7 @@ export interface InterviewNextQuestion {
 export interface InterviewSessionCreate {
   session_type: InterviewSessionType
   category: InterviewCategory
-  difficulty: InterviewDifficulty
+  difficulty?: InterviewDifficulty
   question_count: 5 | 10
   interview_mode: InterviewMode
   consent_acknowledged: true
@@ -78,6 +78,7 @@ export interface InterviewAnswerResult {
   answer_id: number
   evaluation_status: InterviewEvaluationStatus
   failure_code: string | null
+  retry_after_seconds?: number | null
   evaluation: InterviewEvaluation | null
 }
 
@@ -185,6 +186,7 @@ export interface InterviewReport {
   answer_count: number
   summary: string | null
   failure_code: string | null
+  retry_after_seconds?: number | null
   evaluations: InterviewAnswerReview[]
   skill_breakdown?: Record<string, number> | null
   voice_metrics: InterviewVoiceMetrics | null
@@ -206,12 +208,6 @@ export interface MockTestAttempt {
   skill_breakdown: Record<string, number> | null
 }
 
-export interface MockTestQuestion {
-  position: number
-  prompt: string
-  skill_tags: string[]
-}
-
 export interface MockTest {
   id: number
   slug: string
@@ -231,8 +227,20 @@ export interface MockTest {
   completed_attempt_count: number
   latest_score: number | null
   latest_status: InterviewSessionStatus | null
-  questions: MockTestQuestion[] | null
   attempts: MockTestAttempt[]
+}
+
+export interface MockTestDetail {
+  id: number
+  title: string
+  description: string
+  category: string
+  difficulty: InterviewDifficulty
+  default_mode: InterviewSessionType
+  question_count: number
+  time_limit_seconds: number
+  estimated_duration_minutes: number
+  version: number
 }
 
 export interface MockTestComparison {
@@ -243,5 +251,5 @@ export interface MockTestComparison {
 
 export interface MockTestRecommendation {
   weakest_skill: string | null
-  recommended_test: MockTest | null
+  recommended_test: MockTestDetail | null
 }

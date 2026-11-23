@@ -13,6 +13,7 @@ import type {
   InterviewVideoRecording,
   InterviewVideoRecordingState,
   MockTest,
+  MockTestDetail,
   MockTestAttempt,
   MockTestComparison,
   MockTestFormat,
@@ -20,6 +21,16 @@ import type {
 } from '../types/interview'
 
 const sessionsPath = '/interviews/sessions'
+
+export interface InterviewProviderAvailability {
+  available: boolean
+  retry_after_seconds: number | null
+}
+
+export async function getInterviewProviderAvailability(): Promise<InterviewProviderAvailability> {
+  const { data } = await api.get<InterviewProviderAvailability>('/interviews/provider-status')
+  return data
+}
 
 export async function createInterviewSession(input: InterviewSessionCreate): Promise<InterviewSession> {
   const { data } = await api.post<InterviewSession>(sessionsPath, input)
@@ -192,15 +203,14 @@ export async function deleteInterviewSession(sessionId: number): Promise<void> {
 
 export async function listMockTests(filters: {
   category?: string
-  difficulty?: string
   format?: MockTestFormat
 } = {}): Promise<MockTest[]> {
   const { data } = await api.get<MockTest[]>('/interviews/mock-tests', { params: filters })
   return data
 }
 
-export async function getMockTest(testId: number): Promise<MockTest> {
-  const { data } = await api.get<MockTest>(`/interviews/mock-tests/${testId}`)
+export async function getMockTest(testId: number): Promise<MockTestDetail> {
+  const { data } = await api.get<MockTestDetail>(`/interviews/mock-tests/${testId}`)
   return data
 }
 

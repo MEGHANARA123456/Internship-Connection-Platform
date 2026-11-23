@@ -118,6 +118,18 @@ function displayStatus(status: string): string {
   return status.charAt(0) + status.slice(1).toLowerCase()
 }
 
+function getReadinessMessage(sizes: Record<string, number>): string {
+  const missing = [
+    { difficulty: 'easy', count: Math.max(0, 4 - (sizes.EASY ?? 0)) },
+    { difficulty: 'medium', count: Math.max(0, 4 - (sizes.MEDIUM ?? 0)) },
+    { difficulty: 'hard', count: Math.max(0, 2 - (sizes.HARD ?? 0)) },
+  ].filter((item) => item.count > 0)
+  if (!missing.length) return 'Ready'
+  const missingCount = missing.reduce((total, item) => total + item.count, 0)
+  const questionLabel = missingCount === 1 ? 'question' : 'questions'
+  return `Needs ${missing.map((item) => `${item.count} more ${item.difficulty}`).join(' and ')} ${questionLabel}`
+}
+
 export function AdminSkillTopicsPanel({
   selectedTopic: controlledTopic,
   onSelectedTopicChange,
@@ -155,8 +167,10 @@ export function AdminSkillTopicsPanel({
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [impact, setImpact] = useState<TopicImpact | null>(null)
   const [impactLoading, setImpactLoading] = useState(false)
+  const [impactError, setImpactError] = useState(false)
   const [historyTopic, setHistoryTopic] = useState<Topic | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState(false)
   const [historyEntries, setHistoryEntries] = useState<Array<{ id: number; action: string; label: string; admin_email: string | null; created_at: string; details: Record<string, unknown> }>>([])
   const impactController = useRef<AbortController | null>(null)
   const detailController = useRef<AbortController | null>(null)
@@ -398,6 +412,7 @@ export function AdminSkillTopicsPanel({
     setLifecycleAction(action)
     setDeleteConfirm('')
     setImpact(null)
+    setImpactError(false)
     setImpactLoading(true)
     try {
       const response = await api.get<TopicImpact>(
@@ -405,16 +420,9 @@ export function AdminSkillTopicsPanel({
         { signal: controller.signal },
       )
       if (!controller.signal.aborted) setImpact(response.data)
-    } catch (requestError) {
+    } catch {
       if (!controller.signal.aborted) {
-        console.error(`Unable to load lifecycle impact for skill topic ${item.topic}.`, requestError)
-        reportError(
-          "Couldn't load topic impact",
-          getErrorMessage(requestError, 'Topic impact could not be loaded.'),
-          () => void openLifecycleDialog(item, action),
-          `topic-impact-${item.topic}`,
-        )
-        setLifecycleAction(null)
+        setImpactError(true)
       }
     } finally {
       if (!controller.signal.aborted) setImpactLoading(false)
@@ -461,20 +469,14 @@ export function AdminSkillTopicsPanel({
     setHistoryTopic(item)
     setHistoryEntries([])
     setHistoryLoading(true)
+    setHistoryError(false)
     try {
       const response = await api.get<{ topic: string; events: Array<{ id: number; action: string; label: string; admin_email: string | null; created_at: string; details: Record<string, unknown> }> }>(
         `/skills/admin/skill-topics/${encodeURIComponent(item.topic)}/history`,
       )
       setHistoryEntries(response.data.events ?? [])
-    } catch (requestError) {
-      console.error(`Unable to load history for skill topic ${item.topic}.`, requestError)
-      reportError(
-        "Couldn't load topic history",
-        getErrorMessage(requestError, 'Topic history could not be loaded.'),
-        () => void openHistory(item),
-        `topic-history-${item.topic}`,
-      )
-      setHistoryTopic(null)
+    } catch {
+      setHistoryError(true)
     } finally {
       setHistoryLoading(false)
     }
@@ -526,10 +528,10 @@ export function AdminSkillTopicsPanel({
 
   const visibleTopics = topics.filter((item) => Boolean(item.archived_at) === showArchived)
   const readinessTargets = { EASY: 4, MEDIUM: 4, HARD: 2 }
-  const currentTopicReady = currentTopic
-    ? Object.entries(readinessTargets).every(([difficulty, required]) =>
-      (currentTopic.difficulty_pool_sizes[difficulty] ?? 0) >= required)
-    : false
+  const currentTopicReadiness = currentTopic
+    ? getReadinessMessage(currentTopic.difficulty_pool_sizes ?? {})
+    : ''
+  const currentTopicReady = currentTopicReadiness === 'Ready'
 
   return (
     <section aria-labelledby="admin-skill-topics-heading" className="glass-strong space-y-4 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:p-5">
@@ -554,8 +556,8 @@ export function AdminSkillTopicsPanel({
       ) : (
         <div role="list" aria-label="Assessment topics" className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
           {visibleTopics.map((item) => {
-            const ready = Object.entries(readinessTargets).every(([difficulty, required]) =>
-              (item.difficulty_pool_sizes[difficulty] ?? 0) >= required)
+            const readinessMessage = getReadinessMessage(item.difficulty_pool_sizes ?? {})
+            const ready = readinessMessage === 'Ready'
             const fill = Object.entries(readinessTargets).reduce((sum, [difficulty, required]) =>
               sum + Math.min(item.difficulty_pool_sizes[difficulty] ?? 0, required), 0)
             return (
@@ -567,7 +569,7 @@ export function AdminSkillTopicsPanel({
                       <h3 className="truncate text-sm font-semibold text-slate-900 dark:text-white">{item.name}</h3>
                       {!item.archived_at && (
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${ready ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'}`}>
-                          {ready ? 'Ready' : 'Needs questions'}
+                          {readinessMessage}
                         </span>
                       )}
                     </div>
@@ -645,11 +647,9 @@ export function AdminSkillTopicsPanel({
                 <div><p className="text-xs text-slate-500">Attempts</p><p className="font-semibold">{currentTopic.attempts}</p><p className="mt-1 text-[11px] text-slate-500">{currentTopic.attempt_status_counts.completed} completed · {currentTopic.attempt_status_counts.expired} expired · {currentTopic.attempt_status_counts.in_progress} in progress</p></div>
                 <div><p className="text-xs text-slate-500">Pass rate</p><p className="font-semibold">{currentTopic.pass_rate}%</p><p className="text-[11px] text-slate-500">Completed attempts only</p></div>
                 <div><p className="text-xs text-slate-500">Average score</p><p className="font-semibold">{currentTopic.average_score == null ? '—' : `${currentTopic.average_score}%`}</p><p className="text-[11px] text-slate-500">Completed attempts only</p></div>
-                <div><p className="mb-2 text-xs text-slate-500">Question pool</p><DifficultyPoolChips sizes={currentTopic.difficulty_pool_sizes ?? {}} /><p className="mt-2 text-[11px] text-slate-500">{currentTopic.active_questions} active questions · {currentTopicReady ? 'Ready' : 'Needs questions'}</p></div>
+                <div><p className="mb-2 text-xs text-slate-500">Question pool</p><DifficultyPoolChips sizes={currentTopic.difficulty_pool_sizes ?? {}} /><p className="mt-2 text-[11px] text-slate-500">{currentTopic.active_questions} active questions · {currentTopicReadiness}</p></div>
               </div>
-              {currentTopic.bank_warnings.length > 0
-                ? <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-amber-700 dark:text-amber-300">{currentTopic.bank_warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
-                : <p className="mt-3 text-xs text-emerald-700 dark:text-emerald-300"></p>}
+              {!currentTopicReady && <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">{currentTopicReadiness}</p>}
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <div><h4 className="text-xs font-semibold uppercase text-slate-500">Weakest subtopics</h4>{!currentTopic.analytics_ready ? <p className="mt-2 text-xs text-slate-500">Not enough data yet (fewer than 5 completed attempts).</p> : currentTopic.weakest_subtopics.length ? <ul className="mt-2 space-y-1 text-xs">{currentTopic.weakest_subtopics.map((item) => <li key={item.subtopic} className="flex justify-between gap-2"><span>{item.subtopic}</span><span>{item.average_percentage}% · {item.attempts} attempts</span></li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No completed subtopic results.</p>}</div>
                 <div><h4 className="text-xs font-semibold uppercase text-slate-500">Hardest questions</h4>{!currentTopic.analytics_ready ? <p className="mt-2 text-xs text-slate-500">Not enough data yet (fewer than 5 completed attempts).</p> : currentTopic.hardest_questions.length ? <ul className="mt-2 space-y-1 text-xs">{currentTopic.hardest_questions.slice(0, 3).map((item) => <li key={item.question_id} className="flex justify-between gap-2"><span className="line-clamp-1">{item.prompt}</span><span>{item.correct_rate == null ? 'No data' : `${item.correct_rate}%`}</span></li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No completed question results.</p>}</div>
@@ -755,7 +755,11 @@ export function AdminSkillTopicsPanel({
         {lifecycleTopic && (
           <div className="space-y-4">
             <p className="font-medium text-slate-900 dark:text-white">{lifecycleTopic.name} ({lifecycleTopic.topic})</p>
-            {impactLoading ? <div role="status" className="h-20 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-800" /> : impact && (
+            {impactLoading ? <div role="status" className="h-20 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-800" /> : impactError ? (
+              <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
+                Couldn&apos;t load topic impact. <Button type="button" size="sm" variant="outline" onClick={() => lifecycleAction && void openLifecycleDialog(lifecycleTopic, lifecycleAction)}>Retry</Button>
+              </p>
+            ) : impact && (
               <dl className="grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
                 <div><dt className="text-slate-500">Attempts</dt><dd className="font-semibold">{impact.total_attempts} ({impact.completed_attempts} completed, {impact.expired_attempts} expired, {impact.in_progress_attempts} in progress)</dd></div>
                 <div><dt className="text-slate-500">Badges</dt><dd className="font-semibold">{impact.total_badges} ({impact.active_badges} valid, {impact.expiring_badges} expiring within 30 days)</dd></div>
@@ -777,7 +781,7 @@ export function AdminSkillTopicsPanel({
             )}
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => { setLifecycleAction(null); setLifecycleTopic(null); setDeleteConfirm('') }}>Cancel</Button>
-              <Button variant={lifecycleAction === 'delete' ? 'danger' : 'primary'} size="sm" disabled={impactLoading || !impact || (lifecycleAction === 'delete' && Boolean(impact.total_attempts || impact.total_badges)) || (lifecycleAction === 'delete' && deleteConfirm !== lifecycleTopic.topic)} isLoading={saving} onClick={() => void finishLifecycleAction()}>
+              <Button variant={lifecycleAction === 'delete' ? 'danger' : 'primary'} size="sm" disabled={impactLoading || impactError || !impact || (lifecycleAction === 'delete' && Boolean(impact.total_attempts || impact.total_badges)) || (lifecycleAction === 'delete' && deleteConfirm !== lifecycleTopic.topic)} isLoading={saving} onClick={() => void finishLifecycleAction()}>
                 {lifecycleAction === 'archive' ? 'Archive topic' : 'Delete permanently'}
               </Button>
             </div>
@@ -794,6 +798,10 @@ export function AdminSkillTopicsPanel({
       >
         {historyLoading ? (
           <div role="status" className="h-24 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-800" />
+        ) : historyError && historyTopic ? (
+          <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
+            Couldn&apos;t load topic history. <Button type="button" size="sm" variant="outline" onClick={() => void openHistory(historyTopic)}>Retry</Button>
+          </p>
         ) : historyEntries.length ? (
           <ul className="space-y-3">
             {historyEntries.map((entry) => (

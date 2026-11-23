@@ -16,6 +16,26 @@ import { Logo } from '../components/layout/Logo'
 import { routes } from '../lib/routes'
 import { resolvePostLoginTarget } from '../lib/postLoginTarget'
 
+const NETWORK_ERROR_MESSAGE = "Can't reach the server. Please check your connection or try again shortly."
+
+function isNetworkError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const requestError = error as {
+    response?: unknown
+    isAxiosError?: unknown
+    code?: unknown
+    message?: unknown
+    request?: unknown
+  }
+  if (requestError.response !== undefined && requestError.response !== null) return false
+  return requestError.isAxiosError === true
+    || requestError.request !== undefined
+    || ['ERR_NETWORK', 'ERR_CONNECTION_REFUSED', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT']
+      .includes(String(requestError.code ?? ''))
+    || (typeof requestError.message === 'string'
+      && /network error|connection refused|timeout/i.test(requestError.message))
+}
+
 // --- Validation Schemas ---
 
 const loginSchema = z.object({
@@ -114,7 +134,7 @@ export function LoginPage() {
       setDemoMailOpen(true)
       return false
     }
-    navigate(target)
+    navigate(target, { replace: true })
   }
 
   const {
@@ -159,6 +179,7 @@ export function LoginPage() {
       const res = await api.post('/auth/mfa/verify-login', {
         mfa_ticket: mfaChallenge.ticket,
         otp: mfaOtp.trim(),
+        ...(keepSignedIn ? { keep_signed_in: true } : {}),
       })
       const { access_token, refresh_token, role, user_id, name, access_token_expires_in, refresh_token_expires_in, access_token_expires_at, refresh_token_expires_at } = res.data
       setSession({
@@ -223,6 +244,7 @@ export function LoginPage() {
       const response = await api.post('/auth/login', {
         ...data,
         email: data.email.trim().toLowerCase(),
+        ...(keepSignedIn ? { keep_signed_in: true } : {}),
       })
 
       // Check if MFA is required for this account
@@ -253,21 +275,25 @@ export function LoginPage() {
 
       finishLogin(role, response.data?.is_first_login === true)
     } catch (err: any) {
+      if (isNetworkError(err)) {
+        setServerError(NETWORK_ERROR_MESSAGE)
+        return
+      }
       if (err.response?.status >= 500) {
         setServerError('Server error, please try again')
         return
       }
       const detail = err.response?.data?.detail
-      if (detail) {
+      if (err.response?.status === 400 || err.response?.status === 401) {
+        setServerError('Sign in failed. Please check your credentials and try again.')
+      } else if (detail) {
         setServerError(detail)
       } else if (err.response?.status === 404) {
         setServerError('No account registered with this email. Please sign up first.')
-      } else if (err.response?.status === 401) {
-        setServerError('Incorrect password. Please verify your credentials or use Forgot Password.')
       } else if (err.response?.status === 403) {
         setServerError('Account access restricted or email verification required.')
       } else {
-        setServerError('Sign in failed. Please check your credentials and try again.')
+        setServerError('Sign in failed. Please try again.')
       }
     }
   }
@@ -410,6 +436,11 @@ export function LoginPage() {
                 </Button>
               </div>
             )}
+            {serverError === NETWORK_ERROR_MESSAGE && (
+              <Button type="submit" variant="outline" size="sm" isLoading={isSubmitting}>
+                Retry
+              </Button>
+            )}
           </div>
         )}
 
@@ -485,7 +516,7 @@ export function LoginPage() {
         isOpen={demoMailOpen}
         onClose={() => {
           setDemoMailOpen(false)
-          navigate(postLoginPath)
+          navigate(postLoginPath, { replace: true })
         }}
         title="Your emails are delivered to the demo mail inbox"
         description="After this, find all your emails under Notifications & Mailbox."
@@ -501,7 +532,7 @@ export function LoginPage() {
           )}
           <Button type="button" variant="outline" className="w-full" onClick={() => {
             setDemoMailOpen(false)
-            navigate(postLoginPath)
+            navigate(postLoginPath, { replace: true })
           }}>
             Continue to company dashboard
           </Button>
@@ -558,7 +589,9 @@ export function StudentRegisterPage() {
       window.localStorage.setItem('pendingVerificationEmail', data.email)
       setCreatedUser(res.data)
     } catch (err: any) {
-      if (err.response?.status === 409) {
+      if (isNetworkError(err)) {
+        setServerError(NETWORK_ERROR_MESSAGE)
+      } else if (err.response?.status === 409) {
         setServerError('An account with this email already exists.')
       } else {
         setServerError('Registration failed. Please check the fields and try again.')
@@ -599,6 +632,11 @@ export function StudentRegisterPage() {
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700 font-medium">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{serverError}</span>
+              {serverError === NETWORK_ERROR_MESSAGE && (
+                <Button type="submit" variant="outline" size="sm" isLoading={isSubmitting}>
+                  Retry
+                </Button>
+              )}
             </div>
           )}
 
@@ -803,7 +841,9 @@ export function CompanyRegisterPage() {
       setDocumentsSubmitted(true)
       return true
     } catch (err: any) {
-      setServerError(err.response?.data?.detail || 'We could not upload all documents. Your files are still selected; please retry.')
+      setServerError(isNetworkError(err)
+        ? NETWORK_ERROR_MESSAGE
+        : err.response?.data?.detail || 'We could not upload all documents. Your files are still selected; please retry.')
       return false
     } finally {
       setSubmittingDocuments(false)
@@ -842,7 +882,9 @@ export function CompanyRegisterPage() {
         setDemoMailOpen(true)
       }
     } catch (err: any) {
-      setServerError(err.response?.data?.detail || err.message || 'Your account was created, but sign-in or document upload did not complete. Your selected files are retained; retry to continue.')
+      setServerError(isNetworkError(err)
+        ? NETWORK_ERROR_MESSAGE
+        : err.response?.data?.detail || err.message || 'Your account was created, but sign-in or document upload did not complete. Your selected files are retained; retry to continue.')
     } finally {
       setSubmittingDocuments(false)
     }
@@ -877,7 +919,9 @@ export function CompanyRegisterPage() {
       await loginAndUpload()
     } catch (err: any) {
       const detail = err.response?.data?.detail
-      if (detail) {
+      if (isNetworkError(err)) {
+        setServerError(NETWORK_ERROR_MESSAGE)
+      } else if (detail) {
         setServerError(detail)
       } else if (err.response?.status === 409) {
         setServerError('An account with this email is already registered.')
@@ -948,6 +992,11 @@ export function CompanyRegisterPage() {
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-2 text-xs text-rose-700 font-medium">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{serverError}</span>
+              {serverError === NETWORK_ERROR_MESSAGE && (
+                <Button type="submit" variant="outline" size="sm" isLoading={isSubmitting}>
+                  Retry
+                </Button>
+              )}
             </div>
           )}
 
@@ -1109,10 +1158,12 @@ export function ForgotPasswordPage() {
   const [success, setSuccess] = useState(false)
   const [resending, setResending] = useState(false)
   const [resendStatus, setResendStatus] = useState('')
+  const [networkRetryAction, setNetworkRetryAction] = useState<'send' | 'resend' | 'reset' | null>(null)
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault()
     setServerError('')
+    setNetworkRetryAction(null)
     if (!email || !email.includes('@')) {
       setServerError('Please enter a valid email address.')
       return
@@ -1124,7 +1175,10 @@ export function ForgotPasswordPage() {
       setStep('verify')
     } catch (err: any) {
       const detail = err.response?.data?.detail
-      if (detail) {
+      if (isNetworkError(err)) {
+        setServerError(NETWORK_ERROR_MESSAGE)
+        setNetworkRetryAction('send')
+      } else if (detail) {
         setServerError(detail)
       } else if (err.response?.status === 404) {
         setServerError(`No account found with email '${email}'. Please check for typos or register.`)
@@ -1141,13 +1195,19 @@ export function ForgotPasswordPage() {
     setResending(true)
     setResendStatus('')
     setServerError('')
+    setNetworkRetryAction(null)
     try {
       const res = await api.post('/auth/forgot-password', { email: email.trim().toLowerCase() })
       setResendStatus(res.data?.message || 'A fresh verification code has been dispatched!')
       setTimeout(() => setResendStatus(''), 4000)
     } catch (err: any) {
-      const detail = err.response?.data?.detail || 'Could not resend code. Please try again.'
-      setServerError(detail)
+      if (isNetworkError(err)) {
+        setServerError(NETWORK_ERROR_MESSAGE)
+        setNetworkRetryAction('resend')
+      } else {
+        const detail = err.response?.data?.detail || 'Could not resend code. Please try again.'
+        setServerError(detail)
+      }
     } finally {
       setResending(false)
     }
@@ -1156,6 +1216,7 @@ export function ForgotPasswordPage() {
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault()
     setServerError('')
+    setNetworkRetryAction(null)
 
     const cleanOtp = otp.trim()
     if (!cleanOtp || cleanOtp.length !== 6 || !/^\d+$/.test(cleanOtp)) {
@@ -1184,7 +1245,12 @@ export function ForgotPasswordPage() {
       setTimeout(() => navigate(routes.login()), 2500)
     } catch (err: any) {
       const detail = err.response?.data?.detail
-      setServerError(detail || 'Verification code is invalid or has expired. Please request a new one.')
+      if (isNetworkError(err)) {
+        setServerError(NETWORK_ERROR_MESSAGE)
+        setNetworkRetryAction('reset')
+      } else {
+        setServerError(detail || 'Verification code is invalid or has expired. Please request a new one.')
+      }
     } finally {
       setIsSubmitting(false)
     }
@@ -1221,6 +1287,11 @@ export function ForgotPasswordPage() {
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{serverError}</span>
+              {serverError === NETWORK_ERROR_MESSAGE && networkRetryAction === 'send' && (
+                <Button type="submit" variant="outline" size="sm" isLoading={isSubmitting}>
+                  Retry
+                </Button>
+              )}
             </div>
           )}
 
@@ -1253,6 +1324,16 @@ export function ForgotPasswordPage() {
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{serverError}</span>
+              {serverError === NETWORK_ERROR_MESSAGE && networkRetryAction === 'resend' && (
+                <Button type="button" variant="outline" size="sm" isLoading={resending} onClick={() => void handleResend()}>
+                  Retry
+                </Button>
+              )}
+              {serverError === NETWORK_ERROR_MESSAGE && networkRetryAction === 'reset' && (
+                <Button type="submit" variant="outline" size="sm" isLoading={isSubmitting}>
+                  Retry
+                </Button>
+              )}
             </div>
           )}
 
@@ -1396,7 +1477,9 @@ export function ResetPasswordPage() {
       setTimeout(() => navigate(routes.login()), 2000)
     } catch (err: any) {
       const detail = err.response?.data?.detail
-      setServerError(detail || 'Invalid or expired verification code. Please request a new link.')
+      setServerError(isNetworkError(err)
+        ? NETWORK_ERROR_MESSAGE
+        : detail || 'Invalid or expired verification code. Please request a new link.')
     } finally {
       setIsSubmitting(false)
     }
@@ -1431,6 +1514,11 @@ export function ResetPasswordPage() {
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-xs text-rose-700">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{serverError}</span>
+              {serverError === NETWORK_ERROR_MESSAGE && (
+                <Button type="submit" variant="outline" size="sm" isLoading={isSubmitting}>
+                  Retry
+                </Button>
+              )}
             </div>
           )}
 

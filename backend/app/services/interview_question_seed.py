@@ -11,7 +11,7 @@ from app.models import InterviewQuestionBank
 
 _QUESTION_SETS: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {
     "HR": {
-        "BEGINNER": (
+        "INTERMEDIATE": (
             ("Tell me about yourself and what you are studying.", "Give a short introduction, then connect one interest to this internship."),
             ("Why are you interested in this internship?", "Mention one thing you want to learn and one way you can contribute."),
             ("What do you know about the role you applied for?", "Refer to a responsibility or skill in the role description."),
@@ -180,7 +180,11 @@ async def seed_interview_question_bank(db: AsyncSession) -> int:
     }
     inserted = 0
     for category, difficulties in _QUESTION_SETS.items():
+        if category not in {"HR", "TECHNICAL"}:
+            continue
         for difficulty, questions in difficulties.items():
+            if difficulty != "INTERMEDIATE":
+                continue
             for index, (prompt, hint) in enumerate(questions, start=1):
                 seed_key = f"{category.lower()}-{difficulty.lower()}-{index:02d}-v1"
                 if seed_key in existing:

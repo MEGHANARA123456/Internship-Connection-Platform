@@ -35,11 +35,11 @@ class InterviewSession(Base):
             name="ck_interview_sessions_type",
         ),
         CheckConstraint(
-            "category IN ('HR', 'TECHNICAL', 'DATA_SCIENCE', 'BEHAVIORAL', 'MIXED')",
+            "category IN ('HR', 'TECHNICAL')",
             name="ck_interview_sessions_category",
         ),
         CheckConstraint(
-            "difficulty IN ('BEGINNER', 'INTERMEDIATE', 'ADVANCED')",
+            "difficulty IN ('INTERMEDIATE')",
             name="ck_interview_sessions_difficulty",
         ),
         CheckConstraint(
@@ -47,7 +47,7 @@ class InterviewSession(Base):
             name="ck_interview_sessions_question_count",
         ),
         CheckConstraint(
-            "question_count = 5 OR category = 'MIXED' OR mock_test_id IS NOT NULL",
+            "question_count IN (5, 10) OR mock_test_id IS NOT NULL",
             name="ck_interview_sessions_ten_questions_mixed_only",
         ),
         CheckConstraint("time_limit_seconds > 0", name="ck_interview_sessions_time_limit"),
@@ -71,6 +71,8 @@ class InterviewSession(Base):
     )
     category: Mapped[str] = mapped_column(String(30), nullable=False)
     difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
+    legacy_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    legacy_difficulty: Mapped[str | None] = mapped_column(String(50), nullable=True)
     question_count: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     time_limit_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1200, server_default="1200"
@@ -112,11 +114,11 @@ class InterviewQuestionBank(Base):
     __table_args__ = (
         UniqueConstraint("seed_key", name="uq_interview_question_bank_seed_key"),
         CheckConstraint(
-            "category IN ('HR', 'TECHNICAL', 'DATA_SCIENCE', 'BEHAVIORAL')",
+            "category IN ('HR', 'TECHNICAL')",
             name="ck_interview_question_bank_category",
         ),
         CheckConstraint(
-            "difficulty IN ('BEGINNER', 'INTERMEDIATE', 'ADVANCED')",
+            "difficulty IN ('INTERMEDIATE')",
             name="ck_interview_question_bank_difficulty",
         ),
         Index(
@@ -131,6 +133,8 @@ class InterviewQuestionBank(Base):
     seed_key: Mapped[str] = mapped_column(String(100), nullable=False)
     category: Mapped[str] = mapped_column(String(30), nullable=False)
     difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
+    legacy_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    legacy_difficulty: Mapped[str | None] = mapped_column(String(50), nullable=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     hint: Mapped[str] = mapped_column(Text, nullable=False)
     rubric: Mapped[str] = mapped_column(Text, nullable=False)
@@ -157,6 +161,8 @@ class MockTestCategory(Base):
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=true()
     )
+    legacy_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    legacy_difficulty: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 
 class MockTest(Base):
@@ -164,7 +170,7 @@ class MockTest(Base):
     __table_args__ = (
         UniqueConstraint("slug", name="uq_mock_tests_slug"),
         CheckConstraint(
-            "difficulty IN ('BEGINNER', 'INTERMEDIATE', 'ADVANCED')",
+            "difficulty IN ('INTERMEDIATE')",
             name="ck_mock_tests_difficulty",
         ),
         CheckConstraint(
@@ -185,6 +191,8 @@ class MockTest(Base):
         ForeignKey("mock_test_categories.id", ondelete="RESTRICT"), nullable=False
     )
     difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
+    legacy_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    legacy_difficulty: Mapped[str | None] = mapped_column(String(50), nullable=True)
     format: Mapped[str] = mapped_column(String(30), nullable=False)
     default_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="PRACTICE")
     question_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -241,6 +249,8 @@ class InterviewStudioDifficulty(Base):
     code: Mapped[str] = mapped_column(String(20), primary_key=True)
     label: Mapped[str] = mapped_column(String(40), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+    legacy_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    legacy_difficulty: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 
 class InterviewStudioSetting(Base):
@@ -255,6 +265,8 @@ class InterviewStudioSetting(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
+    legacy_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    legacy_difficulty: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 
 class InterviewStudioAdminAudit(Base):
@@ -334,6 +346,7 @@ class InterviewQuestion(Base):
     hint: Mapped[str | None] = mapped_column(Text, nullable=True)
     rubric: Mapped[str] = mapped_column(Text, nullable=False)
     skill_tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    source_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     is_follow_up: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )

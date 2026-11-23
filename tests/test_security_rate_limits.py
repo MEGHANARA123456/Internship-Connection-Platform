@@ -1,11 +1,12 @@
 from datetime import timedelta
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from app.core.config import get_settings
 from app.core.security import create_token
+from app.main import ApplicationCORSMiddleware
 from app.middleware.security import SecurityMiddleware
 
 
@@ -113,4 +114,79 @@ async def test_interview_audio_rate_limit_uses_per_student_buckets(monkeypatch: 
     assert first_b.status_code == 200
     assert second_a.status_code == 429
     assert int(second_a.headers["retry-after"]) >= 1
+    get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_authenticated_admin_interview_studio_reads_are_exempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
+    get_settings.cache_clear()
+    app = _limited_app()
+
+    @app.get("/api/v1/admin/interview-studio/analytics")
+    async def admin_analytics() -> dict[str, str]:
+        return {"status": "ok"}
+
+    admin_token = create_token("401", "ADMIN", "access", timedelta(minutes=5))
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("203.0.113.13", 4567)),
+        base_url="http://rate-limit-test",
+    ) as client:
+        responses = [
+            await client.get("/api/v1/admin/interview-studio/analytics", headers=headers)
+            for _ in range(3)
+        ]
+
+    assert [response.status_code for response in responses] == [200, 200, 200]
+    get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_outer_cors_wraps_rate_limit_and_server_error_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
+    get_settings.cache_clear()
+    api = _limited_app()
+
+    @api.get("/api/v1/failure")
+    async def failure() -> dict[str, str]:
+        raise RuntimeError("expected test failure")
+
+    @api.get("/api/v1/unauthorized")
+    async def unauthorized() -> dict[str, str]:
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    app = ApplicationCORSMiddleware(
+        app=api,
+        allow_origins=["http://localhost:5173"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("203.0.113.14", 4567), raise_app_exceptions=False),
+        base_url="http://rate-limit-test",
+    ) as client:
+        await client.get("/api/v1/items", headers={"Origin": "http://localhost:5173"})
+        rate_limited = await client.get("/api/v1/items", headers={"Origin": "http://localhost:5173"})
+        server_error = await client.get(
+            "/api/v1/failure",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Authorization": f"Bearer {create_token('501', 'STUDENT', 'access', timedelta(minutes=5))}",
+            },
+        )
+        unauthorized = await client.get(
+            "/api/v1/unauthorized",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Authorization": f"Bearer {create_token('502', 'STUDENT', 'access', timedelta(minutes=5))}",
+            },
+        )
+
+    assert rate_limited.status_code == 429
+    assert rate_limited.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert unauthorized.status_code == 401
+    assert unauthorized.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert server_error.status_code == 500
+    assert server_error.headers["access-control-allow-origin"] == "http://localhost:5173"
     get_settings.cache_clear()

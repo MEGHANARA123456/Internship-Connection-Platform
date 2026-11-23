@@ -5,8 +5,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 
 
-InterviewCategory = Literal["HR", "TECHNICAL", "DATA_SCIENCE", "BEHAVIORAL", "MIXED"]
-InterviewDifficulty = Literal["BEGINNER", "INTERMEDIATE", "ADVANCED"]
+InterviewCategory = Literal["HR", "TECHNICAL"]
+InterviewDifficulty = Literal["INTERMEDIATE"]
 InterviewSessionType = Literal["PRACTICE", "ASSESSMENT"]
 InterviewStatus = Literal[
     "CREATED",
@@ -23,18 +23,13 @@ MockTestAttemptMode = Literal["TEXT", "VOICE", "VIDEO"]
 
 class InterviewSessionCreate(BaseModel):
     session_type: InterviewSessionType
-    category: InterviewCategory
-    difficulty: InterviewDifficulty
+    category: Literal["HR", "TECHNICAL"]
+    difficulty: str | None = None
     question_count: Literal[5, 10] = 5
-    interview_mode: Literal["TEXT", "VOICE", "VIDEO"] = "TEXT"
+    interview_mode: Literal["VIDEO"] = "VIDEO"
     consent_acknowledged: Literal[True]
     retake_of_session_id: int | None = Field(default=None, gt=0)
 
-    @model_validator(mode="after")
-    def validate_mixed_question_count(self) -> "InterviewSessionCreate":
-        if self.question_count == 10 and self.category != "MIXED":
-            raise ValueError("Ten-question sessions are available only for MIXED interviews")
-        return self
 
 
 class InterviewAnswerSubmit(BaseModel):
@@ -102,6 +97,7 @@ class InterviewAnswerView(BaseModel):
     answer_id: int
     evaluation_status: Literal["PENDING", "COMPLETED", "FAILED"]
     failure_code: str | None = None
+    retry_after_seconds: int | None = Field(default=None, ge=0)
     evaluation: InterviewEvaluationView | None = None
 
 
@@ -218,6 +214,7 @@ class InterviewReportView(BaseModel):
     answer_count: int
     summary: str | None = None
     failure_code: str | None = None
+    retry_after_seconds: int | None = Field(default=None, ge=0)
     evaluations: list[InterviewAnswerReview] = Field(default_factory=list)
     skill_breakdown: dict[str, float] | None = None
     voice_metrics: InterviewVoiceMetrics | None = None
@@ -244,12 +241,6 @@ class MockTestAttemptSummary(BaseModel):
     skill_breakdown: dict[str, float] | None = None
 
 
-class MockTestQuestionView(BaseModel):
-    position: int
-    prompt: str
-    skill_tags: list[str]
-
-
 class MockTestView(BaseModel):
     id: int
     slug: str
@@ -269,8 +260,20 @@ class MockTestView(BaseModel):
     completed_attempt_count: int
     latest_score: float | None = None
     latest_status: InterviewStatus | None = None
-    questions: list[MockTestQuestionView] | None = None
     attempts: list[MockTestAttemptSummary] = Field(default_factory=list)
+
+
+class MockTestDetailView(BaseModel):
+    id: int
+    title: str
+    description: str
+    category: str
+    difficulty: InterviewDifficulty
+    default_mode: InterviewSessionType
+    question_count: int
+    time_limit_seconds: int
+    estimated_duration_minutes: int
+    version: int
 
 
 class MockTestComparisonRequest(BaseModel):
@@ -292,11 +295,29 @@ class MockTestComparisonView(BaseModel):
 
 class MockTestRecommendationView(BaseModel):
     weakest_skill: str | None
-    recommended_test: MockTestView | None
+    recommended_test: MockTestDetailView | None
 
 
 RubricScore = Annotated[StrictInt, Field(ge=0, le=10)]
 FeedbackItem = Annotated[str, Field(min_length=1, max_length=300)]
+
+class InterviewGeneratedQuestion(BaseModel):
+    prompt: str = Field(min_length=1, max_length=500)
+    hint: str = Field(min_length=1, max_length=300)
+    rubric: str = Field(min_length=1, max_length=800)
+    skill_tag: str = Field(min_length=1, max_length=100)
+
+    @field_validator("prompt", "hint", "rubric", "skill_tag")
+    @classmethod
+    def trim_generated_question_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Generated question text cannot be empty")
+        return value
+
+
+class InterviewGeneratedQuestionList(BaseModel):
+    questions: list[InterviewGeneratedQuestion] = Field(min_length=1, max_length=10)
 
 
 class InterviewLLMEvaluation(BaseModel):

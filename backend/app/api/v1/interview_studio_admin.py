@@ -40,6 +40,7 @@ from app.services.interview_studio_admin import (
     update_settings,
     update_test,
 )
+from app.services.interview_llm import get_interview_provider_status
 
 router = APIRouter(
     prefix="/admin/interview-studio",
@@ -53,7 +54,15 @@ async def _execute(operation: Any) -> Any:
     try:
         return await operation
     except InterviewAdminError as error:
-        raise HTTPException(status_code=error.status_code, detail=error.code) from error
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=error.code,
+            headers=(
+                {"Retry-After": str(error.retry_after_seconds)}
+                if error.retry_after_seconds is not None
+                else None
+            ),
+        ) from error
 
 
 @router.get("/questions")
@@ -119,8 +128,11 @@ async def post_import_questions(
 
 
 @router.get("/tests")
-async def get_tests(db: DbSession) -> list[dict[str, Any]]:
-    return await _execute(list_tests(db))
+async def get_tests(
+    db: DbSession,
+    category: str | None = None,
+) -> dict[str, Any]:
+    return await _execute(list_tests(db, category=category))
 
 
 @router.post("/tests", status_code=201)
@@ -185,6 +197,11 @@ async def get_interview_settings(db: DbSession) -> dict[str, Any]:
     return await get_settings_view(db)
 
 
+@router.get("/provider-status")
+async def get_interview_llm_status() -> dict[str, bool | str | int | None]:
+    return await get_interview_provider_status()
+
+
 @router.patch("/settings")
 async def patch_interview_settings(
     payload: InterviewStudioSettingsUpdate,
@@ -219,6 +236,8 @@ async def post_retry_failed_evaluations(
 @router.get("/audit")
 async def get_interview_audit(
     db: DbSession,
-    limit: int = Query(default=100, ge=1, le=200),
+    action: str | None = Query(default=None, max_length=60),
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
-    return await list_audit_events(db, limit)
+    return await list_audit_events(db, limit=limit, offset=offset, action=action)

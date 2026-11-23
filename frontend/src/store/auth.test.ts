@@ -95,4 +95,18 @@ describe('tab-scoped authentication storage', () => {
     expect(localStorage.getItem('verified_server_badges')).toBe('server-owned')
     expect(useAuthStore.getState().session).toBeNull()
   })
+
+  it('signs out this tab when another tab broadcasts a logout', () => {
+    useAuthStore.getState().setSession(student, 'local')
+
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'auth_logout_event',
+      newValue: 'logout-from-another-tab',
+      storageArea: localStorage,
+    }))
+
+    expect(useAuthStore.getState().session).toBeNull()
+    expect(useAuthStore.getState().sessionChangedInAnotherTab).toBe(true)
+    expect(sessionStorage.getItem('session_changed_notice')).toBe('true')
+  })
 })

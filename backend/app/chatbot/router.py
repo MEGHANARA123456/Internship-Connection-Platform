@@ -168,7 +168,7 @@ async def ask(
                 tool_result = await execute_read_tool(
                     intent.tool_name,
                     dict(intent.args),
-                    user,
+                    user, # type: ignore
                     db,
                 )
                 live_answer = tool_result.answer

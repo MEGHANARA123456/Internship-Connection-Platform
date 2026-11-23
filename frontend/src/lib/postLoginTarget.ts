@@ -27,10 +27,17 @@ export function isRouteAllowedForRole(role: string | null | undefined, path: str
   if (
     pathname === routes.login() ||
     pathname === '/login' ||
+    pathname === routes.register ||
+    pathname === routes.studentJoin ||
     pathname === routes.studentRegister ||
     pathname === '/register-student' ||
     pathname === routes.companyRegister ||
     pathname === '/register-company' ||
+    pathname === routes.forgotPassword ||
+    pathname === routes.resetPassword ||
+    pathname === routes.verifyEmail ||
+    pathname === routes.verify() ||
+    pathname.startsWith('/verify/') ||
     pathname === routes.dashboard ||
     pathname === '/dashboard'
   ) {

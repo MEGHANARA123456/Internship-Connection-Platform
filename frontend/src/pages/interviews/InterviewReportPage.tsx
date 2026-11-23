@@ -8,8 +8,13 @@ import { InterviewPageLayout } from '../../components/interviews/InterviewPageLa
 import { InterviewVideoRecordingPanel } from '../../components/interviews/InterviewVideoRecordingPanel'
 import { routes } from '../../lib/routes'
 import {
+  retryAfterSecondsFromError,
+  studentProviderFailureMessage,
+} from '../../lib/interviewProviderErrors'
+import {
   getInterviewReport,
   getInterviewSession,
+  getInterviewProviderAvailability,
   retryInterviewEvaluation,
 } from '../../services/interviewService'
 import type { InterviewReport, InterviewSession } from '../../types/interview'
@@ -24,6 +29,14 @@ export function InterviewReportPage() {
   const [loading, setLoading] = useState(true)
   const [retrying, setRetrying] = useState(false)
   const [error, setError] = useState('')
+  const [providerAvailable, setProviderAvailable] = useState<boolean | null>(null)
+  const [retryWait, setRetryWait] = useState(0)
+
+  useEffect(() => {
+    if (retryWait <= 0) return
+    const timer = window.setTimeout(() => setRetryWait((seconds) => Math.max(0, seconds - 1)), 1000)
+    return () => window.clearTimeout(timer)
+  }, [retryWait])
 
   const loadReport = useCallback(async (silent = false) => {
     if (!Number.isInteger(sessionId) || sessionId <= 0) {
@@ -49,7 +62,9 @@ export function InterviewReportPage() {
         setReport(null)
         return
       }
-      setReport(await getInterviewReport(sessionId))
+      const reportData = await getInterviewReport(sessionId)
+      setReport(reportData)
+      setRetryWait(reportData.retry_after_seconds ?? 0)
     } catch (loadError) {
       if (!silent) setError(requestError(loadError, routes.interviewReport(sessionId)))
     } finally {
@@ -60,6 +75,35 @@ export function InterviewReportPage() {
   useEffect(() => {
     void loadReport()
   }, [loadReport])
+  const evaluationNeedsProvider = session?.status === 'EVALUATION_FAILED' || report?.status === 'FAILED'
+  useEffect(() => {
+    if (!evaluationNeedsProvider) {
+      setProviderAvailable(null)
+      return
+    }
+
+    let active = true
+    const checkAvailability = async () => {
+      try {
+        const status = await getInterviewProviderAvailability()
+        if (active) {
+          setProviderAvailable(status.available)
+          setRetryWait(status.retry_after_seconds ?? 0)
+        }
+      } catch {
+        if (active) {
+          setProviderAvailable(false)
+          setRetryWait(0)
+        }
+      }
+    }
+    void checkAvailability()
+    const interval = window.setInterval(() => void checkAvailability(), 30_000)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+    }
+  }, [evaluationNeedsProvider])
   useAutoRefresh(
     () => loadReport(true),
     15_000,
@@ -71,8 +115,10 @@ export function InterviewReportPage() {
     setError('')
     try {
       await retryInterviewEvaluation(sessionId)
+      setRetryWait(0)
       await loadReport(true)
     } catch (retryError) {
+      setRetryWait(retryAfterSecondsFromError(retryError))
       setError(requestError(retryError, routes.interviewReport(sessionId)))
     } finally {
       setRetrying(false)
@@ -156,12 +202,14 @@ export function InterviewReportPage() {
           <div>
             <p className="font-semibold">Evaluation failed</p>
             <p className="mt-1">
-              {report.failure_code === 'provider_not_configured'
-                ? 'Evaluation is temporarily unavailable, please retry later. Your answers are preserved.'
-                : 'Your answers are preserved. Retry to evaluate unanswered or failed results; successful evaluations will be kept.'}
+              {studentProviderFailureMessage(
+                report.failure_code ?? failedEvaluations.find((item) => item.failure_code)?.failure_code,
+              )}
             </p>
           </div>
-          <Button variant="outline" isLoading={retrying} disabled={retrying} onClick={() => void retryEvaluation()}>Retry evaluation</Button>
+          <Button variant="outline" isLoading={retrying} disabled={retrying || retryWait > 0 || providerAvailable !== true} onClick={() => void retryEvaluation()}>
+            {retryWait > 0 ? `Try again in ${retryWait}s` : 'Retry evaluation'}
+          </Button>
         </div>
       )}
 

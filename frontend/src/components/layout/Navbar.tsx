@@ -284,7 +284,7 @@ export function Navbar() {
   const handleSignOut = () => {
     setNavMenuOpen(false)
     logout()
-    navigate(routes.login())
+    navigate(routes.login(), { replace: true })
   }
 
   const handleAction = (item: NavigationItem) => {

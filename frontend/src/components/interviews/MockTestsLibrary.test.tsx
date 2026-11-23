@@ -8,9 +8,10 @@ import {
   getMockTest,
   getMockTestRecommendation,
   listMockTests,
+  listMockTestAttempts,
   startInterviewSession,
 } from '../../services/interviewService'
-import type { InterviewSession, MockTest, MockTestComparison } from '../../types/interview'
+import type { InterviewSession, MockTest, MockTestAttempt, MockTestDetail } from '../../types/interview'
 import { MockTestsLibrary } from './MockTestsLibrary'
 
 vi.mock('../../services/interviewService', () => ({
@@ -19,6 +20,7 @@ vi.mock('../../services/interviewService', () => ({
   getMockTest: vi.fn(),
   getMockTestRecommendation: vi.fn(),
   listMockTests: vi.fn(),
+  listMockTestAttempts: vi.fn(),
   startInterviewSession: vi.fn(),
 }))
 
@@ -28,7 +30,7 @@ const mockTest: MockTest = {
   title: 'HR Foundations: Quick Practice',
   description: 'Practice interview introductions.',
   category: 'HR',
-  difficulty: 'BEGINNER',
+  difficulty: 'INTERMEDIATE',
   format: 'QUICK_PRACTICE',
   default_mode: 'PRACTICE',
   question_count: 5,
@@ -41,32 +43,46 @@ const mockTest: MockTest = {
   completed_attempt_count: 2,
   latest_score: 78,
   latest_status: 'COMPLETED',
-  questions: [{ position: 1, prompt: 'Tell me about yourself.', skill_tags: ['motivation'] }],
-  attempts: [
-    {
-      session_id: 18,
-      test_version: 1,
-      session_type: 'PRACTICE',
-      interview_mode: 'TEXT',
-      status: 'COMPLETED',
-      created_at: '2026-11-18T10:00:00Z',
-      completed_at: '2026-11-18T10:10:00Z',
-      overall_score: 70,
-      skill_breakdown: { motivation: 70 },
-    },
-    {
-      session_id: 19,
-      test_version: 1,
-      session_type: 'PRACTICE',
-      interview_mode: 'VOICE',
-      status: 'COMPLETED',
-      created_at: '2026-11-19T10:00:00Z',
-      completed_at: '2026-11-19T10:10:00Z',
-      overall_score: 78,
-      skill_breakdown: { motivation: 78 },
-    },
-  ],
+  attempts: [],
 }
+
+const mockTestDetail: MockTestDetail = {
+  id: 8,
+  title: 'HR Foundations: Quick Practice',
+  description: 'Practice interview introductions.',
+  category: 'HR',
+  difficulty: 'INTERMEDIATE',
+  default_mode: 'PRACTICE',
+  question_count: 5,
+  time_limit_seconds: 600,
+  estimated_duration_minutes: 10,
+  version: 1,
+}
+
+const mockAttempts: MockTestAttempt[] = [
+  {
+    session_id: 18,
+    test_version: 1,
+    session_type: 'PRACTICE',
+    interview_mode: 'TEXT',
+    status: 'COMPLETED',
+    created_at: '2026-11-18T10:00:00Z',
+    completed_at: '2026-11-18T10:10:00Z',
+    overall_score: 72,
+    skill_breakdown: { motivation: 72 },
+  },
+  {
+    session_id: 19,
+    test_version: 1,
+    session_type: 'PRACTICE',
+    interview_mode: 'TEXT',
+    status: 'COMPLETED',
+    created_at: '2026-11-19T10:00:00Z',
+    completed_at: '2026-11-19T10:10:00Z',
+    overall_score: 78,
+    skill_breakdown: { motivation: 78 },
+  },
+]
 
 function LocationProbe() {
   const location = useLocation()
@@ -86,13 +102,19 @@ beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(listMockTests).mockResolvedValue([mockTest])
   vi.mocked(getMockTestRecommendation).mockResolvedValue({ weakest_skill: null, recommended_test: null })
-  vi.mocked(getMockTest).mockResolvedValue(mockTest)
+  vi.mocked(getMockTest).mockResolvedValue(mockTestDetail)
+  vi.mocked(listMockTestAttempts).mockResolvedValue(mockAttempts)
+  vi.mocked(compareMockTestAttempts).mockResolvedValue({
+    mock_test_id: 8,
+    test_version: 1,
+    attempts: mockAttempts,
+  })
   vi.mocked(createMockTestAttempt).mockResolvedValue({
     id: 25,
     session_type: 'PRACTICE',
     interview_mode: 'TEXT',
     category: 'HR',
-    difficulty: 'BEGINNER',
+    difficulty: 'INTERMEDIATE',
     question_count: 5,
     time_limit_seconds: 1200,
     status: 'CREATED',
@@ -110,7 +132,7 @@ beforeEach(() => {
     session_type: 'PRACTICE',
     interview_mode: 'TEXT',
     category: 'HR',
-    difficulty: 'BEGINNER',
+    difficulty: 'INTERMEDIATE',
     question_count: 5,
     time_limit_seconds: 1200,
     status: 'IN_PROGRESS',
@@ -124,11 +146,6 @@ beforeEach(() => {
     completed_at: null,
   }
   vi.mocked(startInterviewSession).mockResolvedValue(startedSession)
-  vi.mocked(compareMockTestAttempts).mockResolvedValue({
-    mock_test_id: 8,
-    test_version: 1,
-    attempts: mockTest.attempts,
-  } satisfies MockTestComparison)
 })
 
 describe('MockTestsLibrary', () => {
@@ -136,14 +153,12 @@ describe('MockTestsLibrary', () => {
     renderLibrary()
     await screen.findByText('HR Foundations: Quick Practice')
 
-    fireEvent.change(screen.getByLabelText('Filter by category'), { target: { value: 'DATA_ANALYST' } })
-    fireEvent.change(screen.getByLabelText('Filter by difficulty'), { target: { value: 'BEGINNER' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Technical' }))
     fireEvent.change(screen.getByLabelText('Filter by format'), { target: { value: 'TOPIC_WISE' } })
 
     await waitFor(() => {
       expect(listMockTests).toHaveBeenLastCalledWith({
-        category: 'DATA_ANALYST',
-        difficulty: 'BEGINNER',
+        category: 'TECHNICAL',
         format: 'TOPIC_WISE',
       })
     })
@@ -151,8 +166,9 @@ describe('MockTestsLibrary', () => {
 
   it('requires AI consent and starts the chosen mode in a new session', async () => {
     renderLibrary()
-    fireEvent.click(await screen.findByRole('button', { name: 'Test details and attempts' }))
-    expect(await screen.findByText('Tell me about yourself.')).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: /Test details and attempts/ }))
+    expect(await screen.findByText('Questions are revealed during the interview.')).toBeInTheDocument()
+    expect(screen.queryByText('Tell me about yourself.')).not.toBeInTheDocument()
     const startButton = screen.getByRole('button', { name: 'Start mock test' })
     expect(startButton).toBeDisabled()
 
@@ -172,9 +188,9 @@ describe('MockTestsLibrary', () => {
     })
   })
 
-  it('compares completed attempts and allows a retake to create a fresh session', async () => {
+  it('keeps question text hidden while preserving attempt comparison and retake actions', async () => {
     renderLibrary()
-    fireEvent.click(await screen.findByRole('button', { name: 'Test details and attempts' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Test details and attempts/ }))
     await screen.findByText('Your attempts')
     const attemptCheckboxes = screen.getAllByRole('checkbox')
     expect(attemptCheckboxes).toHaveLength(3)
@@ -192,5 +208,12 @@ describe('MockTestsLibrary', () => {
       consent_acknowledged: true,
       retake_of_session_id: 18,
     }))
+    expect(await screen.findByRole('heading', { name: 'HR Foundations: Quick Practice', level: 2 })).toBeInTheDocument()
+    expect(screen.getByText('Version 1 · 5 questions · ~10 minutes')).toBeInTheDocument()
+    const questionNote = screen.getByText('Questions are revealed during the interview.')
+    expect(questionNote.parentElement).toHaveTextContent('Practice interview introductions.')
+    expect(screen.getByRole('heading', { name: 'Start a new attempt' })).toBeInTheDocument()
+    expect(screen.queryByText('Tell me about yourself.')).not.toBeInTheDocument()
+    await waitFor(() => expect(getMockTest).toHaveBeenCalledWith(8))
   })
 })

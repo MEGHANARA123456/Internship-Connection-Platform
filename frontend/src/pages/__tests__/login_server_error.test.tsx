@@ -10,6 +10,31 @@ afterEach(() => {
 })
 
 describe('login server errors', () => {
+  it('shows a retryable connection message when the server cannot be reached', async () => {
+    const post = vi.spyOn(api, 'post').mockRejectedValue({
+      isAxiosError: true,
+      code: 'ERR_NETWORK',
+      message: 'Network Error',
+    })
+
+    render(<MemoryRouter><LoginPage /></MemoryRouter>)
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'person@example.test' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'test-password' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByText(
+      "Can't reach the server. Please check your connection or try again shortly.",
+    )).toBeInTheDocument()
+    expect(screen.queryByText(/check your credentials/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2))
+  })
+
   it('shows a generic message without exposing the server response body', async () => {
     vi.spyOn(api, 'post').mockRejectedValue({
       response: {

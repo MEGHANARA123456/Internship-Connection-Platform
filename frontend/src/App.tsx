@@ -1,33 +1,51 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { Route, Routes, Navigate, Outlet, useParams } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Route, Routes, Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
 import { Navbar } from './components/layout/Navbar'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { GuestRoute } from './components/GuestRoute'
 import { api } from './api/client'
 import { useAuthStore } from './store/auth'
 import { PageLoader } from './components/ui/LoadingSkeleton'
 import { FeedbackHost } from './components/ui/FeedbackHost'
+import { SessionTimeoutManager } from './components/auth/SessionTimeoutManager'
 import { routes } from './lib/routes'
 import { NotFoundPage } from './pages/RouteFallbacks'
 
 export function SessionIdentityVerifier() {
   const session = useAuthStore((state) => state.session)
   const setSession = useAuthStore((state) => state.setSession)
+  const setAuthCheckState = useAuthStore((state) => state.setAuthCheckState)
+  const location = useLocation()
+  const [historyCheck, setHistoryCheck] = useState(0)
   const identityKey = session
     ? `${session.userId ?? ''}:${session.email?.trim().toLowerCase() ?? ''}`
     : null
-  const verificationKey = session && identityKey
-    ? `${identityKey}:${session.accessToken}`
+  const verificationKey = session
+    ? `${session.accessToken}:${location.key}:${historyCheck}`
     : null
-  const verifiedSessionRef = useRef<string | null>(null)
+  const requestId = useRef(0)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const handlePopState = () => setHistoryCheck((value) => value + 1)
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setHistoryCheck((value) => value + 1)
+    }
+    window.addEventListener('popstate', handlePopState)
+    window.addEventListener('pageshow', handlePageShow)
+    return () => {
+      window.removeEventListener('popstate', handlePopState)
+      window.removeEventListener('pageshow', handlePageShow)
+    }
+  }, [])
+
+  useLayoutEffect(() => {
     if (!session?.accessToken || !verificationKey || !identityKey) {
-      verifiedSessionRef.current = null
+      setAuthCheckState(false, true)
       return
     }
-    if (verifiedSessionRef.current === verificationKey) return
+    const currentRequestId = ++requestId.current
+    setAuthCheckState(true)
 
-    verifiedSessionRef.current = verificationKey
     const accessToken = session.accessToken
     void api.get('/auth/me')
       .then(({ data }) => {
@@ -35,8 +53,6 @@ export function SessionIdentityVerifier() {
         const currentSession = useAuthStore.getState().session
         if (currentSession?.accessToken !== accessToken) return
 
-        const serverIdentityKey = `${data.id}:${String(data.email).trim().toLowerCase()}`
-        verifiedSessionRef.current = `${serverIdentityKey}:${accessToken}`
         setSession({
           ...currentSession,
           userId: data.id,
@@ -44,10 +60,15 @@ export function SessionIdentityVerifier() {
           name: data.name ?? undefined,
         })
       })
-      .catch((error: unknown) => {
-        console.error('Unable to verify the current session with /auth/me.', error)
+      .catch(() => {
+        // A network outage should not discard a locally stored session.
       })
-  }, [identityKey, verificationKey, session?.accessToken, setSession])
+      .finally(() => {
+        if (requestId.current === currentRequestId) {
+          setAuthCheckState(false, true)
+        }
+      })
+  }, [identityKey, location.key, historyCheck, verificationKey, session?.accessToken, setAuthCheckState, setSession])
 
   return null
 }
@@ -65,7 +86,7 @@ function SessionChangedBanner() {
   if (!changed) return null
   return (
     <div role="alert" className={`fixed top-3 left-1/2 ${Z_INDEX.notifications} -translate-x-1/2 rounded-lg bg-amber-100 px-4 py-3 text-sm font-medium text-amber-950 shadow-lg`}>
-      Your session changed in another tab. This tab has been reloaded.
+      Your session changed in another tab. This tab has been signed out.
     </div>
   )
 }
@@ -197,6 +218,7 @@ export default function App() {
     <MobileViewSimulator>
       <div className="min-h-screen flex flex-col bg-transparent text-slate-900 dark:text-slate-100 font-sans antialiased transition-colors">
         <SessionIdentityVerifier />
+        <SessionTimeoutManager />
         <SessionChangedBanner />
         <RateLimitNotice />
         <FeedbackHost />
@@ -213,13 +235,18 @@ export default function App() {
             <Route path={routes.dashboard} element={<DashboardRedirect />} />
 
             {/* Authentication */}
-            <Route path={routes.login()} element={<LoginPage />} />
-            <Route path={routes.studentRegister} element={<StudentRegisterPage />} />
-            <Route path={routes.companyRegister} element={<CompanyRegisterPage />} />
-            <Route path={routes.forgotPassword} element={<ForgotPasswordPage />} />
+            <Route element={<GuestRoute />}>
+              <Route path={routes.login()} element={<LoginPage />} />
+              <Route path={routes.register} element={<StudentRegisterPage />} />
+              <Route path={routes.studentJoin} element={<StudentRegisterPage />} />
+              <Route path={routes.studentRegister} element={<StudentRegisterPage />} />
+              <Route path={routes.companyRegister} element={<CompanyRegisterPage />} />
+              <Route path={routes.forgotPassword} element={<ForgotPasswordPage />} />
+              <Route path={routes.verifyEmail} element={<VerifyEmailPage />} />
+              <Route path={routes.verify()} element={<VerifyEmailPage />} />
+              <Route path={routes.verifyTokenRoute} element={<VerifyEmailPage />} />
+            </Route>
             <Route path={routes.resetPassword} element={<ResetPasswordPage />} />
-            <Route path={routes.verify()} element={<VerifyEmailPage />} />
-            <Route path={routes.verifyTokenRoute} element={<VerifyEmailPage />} />
 
             {/* Unified Profile Route */}
             <Route path={routes.profile} element={<ProfileRedirect />} />

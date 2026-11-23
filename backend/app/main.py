@@ -135,9 +135,16 @@ async def lifespan(app: FastAPI):
     """Migrate the database, ingest enabled chatbot knowledge, start workers, and stop them on shutdown."""
     await run_database_migrations()
     settings = get_settings()
+    logger.info(
+        "INTERVIEW_LLM_API_KEY set: %s, provider: %s, model: %s",
+        bool(settings.interview_llm_api_key.strip()),
+        settings.interview_llm_provider.strip() or "unknown",
+        settings.interview_llm_model.strip() or "unknown",
+    )
     missing_interview_settings = [
         name
         for name, value in (
+            ("INTERVIEW_LLM_PROVIDER", settings.interview_llm_provider),
             ("INTERVIEW_LLM_API_KEY", settings.interview_llm_api_key),
             ("INTERVIEW_LLM_MODEL", settings.interview_llm_model),
             ("INTERVIEW_LLM_BASE_URL", settings.interview_llm_base_url),
@@ -148,6 +155,11 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "AI provider not configured: set %s",
             ", ".join(missing_interview_settings),
+        )
+    if settings.secret_key == "change-me-in-development" or len(settings.secret_key) < 32:
+        logger.warning(
+            "SECRET_KEY is using a development or short value; configure one stable secret "
+            "shared by all API workers.",
         )
     await seed_interview_catalog()
     from app.chatbot.chatbot_config import load_config
@@ -192,9 +204,21 @@ async def lifespan(app: FastAPI):
 configure_logging()
 
 # Create the API app and attach middleware and API routes.
-app = FastAPI(title="Internship Connection Platform API", version="0.1.0", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
+api_app = FastAPI(title="Internship Connection Platform API", version="0.1.0", lifespan=lifespan)
+api_app.add_middleware(SecurityMiddleware)
+api_app.add_exception_handler(Exception, unhandled_exception_handler)
+api_app.include_router(api_router, prefix="/api/v1")
+
+
+class ApplicationCORSMiddleware(CORSMiddleware):
+    """Keep FastAPI application attributes accessible while wrapping its full ASGI stack."""
+
+    def __getattr__(self, name: str):
+        return getattr(self.app, name)
+
+
+app = ApplicationCORSMiddleware(
+    app=api_app,
     allow_origins=[
         get_settings().frontend_url,
         "http://localhost:5173",
@@ -210,6 +234,3 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Retry-After"],
 )
-app.add_middleware(SecurityMiddleware)
-app.add_exception_handler(Exception, unhandled_exception_handler)
-app.include_router(api_router, prefix="/api/v1")

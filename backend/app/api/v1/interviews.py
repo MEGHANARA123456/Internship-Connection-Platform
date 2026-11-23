@@ -26,6 +26,7 @@ from app.schemas.interview import (
     MockTestAttemptSummary,
     MockTestComparisonRequest,
     MockTestComparisonView,
+    MockTestDetailView,
     MockTestRecommendationView,
     MockTestView,
 )
@@ -46,6 +47,7 @@ from app.services.interview_studio import (
     start_session,
     submit_answer,
     transcribe_voice_answer,
+
 )
 from app.services.mock_test_library import (
     compare_mock_test_attempts,
@@ -54,6 +56,7 @@ from app.services.mock_test_library import (
     list_mock_tests,
     recommend_mock_test,
 )
+from app.services.interview_llm import get_interview_provider_status
 from app.services.interview_video import (
     InterviewVideoError,
     VIDEO_RECORDING_CONSENT_VERSION,
@@ -79,12 +82,28 @@ async def _execute(operation: Awaitable[Any]) -> Any:
         raise HTTPException(
             status_code=error.status_code,
             detail=error.code,
+            headers=(
+                {"Retry-After": str(error.retry_after_seconds)}
+                if error.retry_after_seconds is not None
+                else None
+            ),
         ) from error
     except InterviewVideoError as error:
         raise HTTPException(
             status_code=error.status_code,
             detail=error.code,
         ) from error
+
+
+@router.get("/provider-status")
+async def get_student_interview_provider_status(
+    _user: student_only,
+) -> dict[str, bool | int | None]:
+    status_view = await get_interview_provider_status()
+    return {
+        "available": bool(status_view["configured"] and status_view["last_error"] is None),
+        "retry_after_seconds": status_view.get("retry_after_seconds"),
+    }
 
 
 @router.get(
@@ -158,13 +177,13 @@ async def compare_interview_test_attempts(
     )
 
 
-@router.get("/mock-tests/{test_id}", response_model=MockTestView)
+@router.get("/mock-tests/{test_id}", response_model=MockTestDetailView)
 async def get_mock_test(
     test_id: int,
     user: student_only,
     db: DbSession,
-) -> MockTestView:
-    return await _execute(get_mock_test_detail(db, user.id, test_id))
+) -> MockTestDetailView:
+    return await _execute(get_mock_test_detail(db, test_id))
 
 
 @router.post(

@@ -12,6 +12,7 @@ interface VoiceRoomProps {
   questionText: string
   answer: string
   disabled: boolean
+  allowAudioTranscription?: boolean
   sharedStream?: MediaStream | null
   onAnswerChange: (value: string) => void
   onDurationTokenChange: (value: string | null) => void
@@ -19,11 +20,42 @@ interface VoiceRoomProps {
 }
 
 const ANSWER_LIMIT = 5000
-const ttsProvider = import.meta.env.VITE_INTERVIEW_TTS_PROVIDER ?? 'browser'
+
+interface SpeechRecognitionEventLike extends Event {
+  resultIndex: number
+  results: {
+    length: number
+    [index: number]: {
+      isFinal: boolean
+      [index: number]: { transcript: string }
+    }
+  }
+}
+
+interface SpeechRecognitionLike {
+  continuous: boolean
+  interimResults: boolean
+  lang: string
+  start(): void
+  stop(): void
+  abort(): void
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null
+  onerror: ((event: Event & { error?: string }) => void) | null
+  onend: (() => void) | null
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
+
+function getSpeechRecognition(): SpeechRecognitionConstructor | null {
+  const speechWindow = window as typeof window & {
+    SpeechRecognition?: SpeechRecognitionConstructor
+    webkitSpeechRecognition?: SpeechRecognitionConstructor
+  }
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null
+}
 
 function speechSynthesisAvailable(): boolean {
-  return ttsProvider === 'browser'
-    && typeof window !== 'undefined'
+  return typeof window !== 'undefined'
     && typeof window.speechSynthesis?.speak === 'function'
     && typeof SpeechSynthesisUtterance !== 'undefined'
 }
@@ -78,6 +110,7 @@ export function VoiceRoom({
   questionText,
   answer,
   disabled,
+  allowAudioTranscription = true,
   sharedStream,
   onAnswerChange,
   onDurationTokenChange,
@@ -91,6 +124,9 @@ export function VoiceRoom({
   const [clipDuration, setClipDuration] = useState<number | null>(null)
   const [muted, setMuted] = useState(false)
   const [speaking, setSpeaking] = useState(false)
+  const [listeningForAnswer, setListeningForAnswer] = useState(false)
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const recognitionBaseRef = useRef('')
   const streamRef = useRef<MediaStream | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -211,6 +247,8 @@ export function VoiceRoom({
       recorderRef.current.onstop = null
       recorderRef.current.stop()
     }
+    recognitionRef.current?.abort()
+    recognitionRef.current = null
     stopTracks()
     if (typeof window.speechSynthesis?.cancel === 'function') window.speechSynthesis.cancel()
   }, [stopTracks])
@@ -307,12 +345,58 @@ export function VoiceRoom({
   }, [questionText])
 
   useEffect(() => {
-    if (!muted && ttsProvider === 'browser') speakQuestion()
+    if (!muted) speakQuestion()
     else if (typeof window.speechSynthesis?.cancel === 'function') window.speechSynthesis.cancel()
     return () => {
       if (typeof window.speechSynthesis?.cancel === 'function') window.speechSynthesis.cancel()
     }
   }, [muted, questionId, speakQuestion])
+
+  const startSpeakingAnswer = () => {
+    if (disabled || listeningForAnswer) return
+    const Recognition = getSpeechRecognition()
+    if (!Recognition) {
+      setSpeechNotice('Speech recognition is not supported in this browser. Type your answer in the transcript box instead.')
+      return
+    }
+    try {
+      const recognition = new Recognition()
+      recognition.continuous = true
+      recognition.interimResults = true
+      recognition.lang = 'en-US'
+      recognitionBaseRef.current = answer
+      recognition.onresult = (event) => {
+        let transcript = ''
+        for (let index = 0; index < event.results.length; index += 1) {
+          transcript += event.results[index][0]?.transcript ?? ''
+        }
+        if (transcript.trim()) {
+          const base = recognitionBaseRef.current.trim()
+          onAnswerChange(base ? `${base} ${transcript.trim()}` : transcript.trim())
+        }
+      }
+      recognition.onerror = (event) => {
+        setListeningForAnswer(false)
+        setError(event.error === 'not-allowed'
+          ? 'Microphone permission was denied. Allow microphone access or type your answer.'
+          : 'Speech recognition failed. Review or type your answer.')
+      }
+      recognition.onend = () => setListeningForAnswer(false)
+      recognitionRef.current = recognition
+      setError('')
+      setListeningForAnswer(true)
+      recognition.start()
+    } catch {
+      setListeningForAnswer(false)
+      setError('Speech recognition could not start. Type your answer instead.')
+    }
+  }
+
+  const stopSpeakingAnswer = () => {
+    recognitionRef.current?.stop()
+    recognitionRef.current = null
+    setListeningForAnswer(false)
+  }
 
   const rerecord = () => {
     if (answer.trim() && !window.confirm('Replace the current transcript or answer with a new recording?')) return
@@ -339,7 +423,9 @@ export function VoiceRoom({
 
   const liveStatus = recorderStatus === 'processing'
     ? 'Processing audio'
-    : speaking
+    : listeningForAnswer
+      ? 'Listening for answer'
+      : speaking
       ? 'Speaking'
       : recorderStatus === 'recording'
         ? 'Listening'
@@ -349,41 +435,56 @@ export function VoiceRoom({
             ? 'Transcript ready for review'
             : microphoneNotice || 'Text entry is always available'
 
+  const speechRecognitionSupported = Boolean(getSpeechRecognition())
+
   return (
     <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900" aria-label="Voice interview controls">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p role="status" aria-live="polite" className="text-sm font-medium text-slate-700 dark:text-slate-200">{liveStatus}</p>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" disabled={disabled || recorderStatus === 'processing'} onClick={() => void requestMicrophone()}>
-            <Mic className="mr-2 h-4 w-4" aria-hidden="true" /> Test microphone
-          </Button>
-          {streamRef.current && !sharedStream && (
-            <Button type="button" variant="outline" size="sm" disabled={recorderStatus === 'recording' || recorderStatus === 'paused' || recorderStatus === 'processing'} onClick={releaseMicrophone}>
-              <MicOff className="mr-2 h-4 w-4" aria-hidden="true" /> Release microphone
+          {listeningForAnswer ? (
+            <Button type="button" variant="outline" size="sm" onClick={stopSpeakingAnswer}>
+              <MicOff className="mr-2 h-4 w-4" aria-hidden="true" /> Stop speaking
+            </Button>
+          ) : (
+            <Button type="button" variant="outline" size="sm" disabled={disabled || recorderStatus === 'processing'} onClick={startSpeakingAnswer}>
+              <Mic className="mr-2 h-4 w-4" aria-hidden="true" /> Speak answer
             </Button>
           )}
-          <Button type="button" variant="outline" size="sm" disabled={disabled || recorderStatus === 'recording' || recorderStatus === 'paused' || recorderStatus === 'processing'} onClick={() => void startRecording()}>
-            <Mic className="mr-2 h-4 w-4" aria-hidden="true" /> Record answer
-          </Button>
-          {recorderStatus === 'recording' && (
+          {allowAudioTranscription && (
+            <>
+              <Button type="button" variant="outline" size="sm" disabled={disabled || recorderStatus === 'processing'} onClick={() => void requestMicrophone()}>
+                <Mic className="mr-2 h-4 w-4" aria-hidden="true" /> Test microphone
+              </Button>
+              {streamRef.current && !sharedStream && (
+                <Button type="button" variant="outline" size="sm" disabled={recorderStatus === 'recording' || recorderStatus === 'paused' || recorderStatus === 'processing'} onClick={releaseMicrophone}>
+                  <MicOff className="mr-2 h-4 w-4" aria-hidden="true" /> Release microphone
+                </Button>
+              )}
+              <Button type="button" variant="outline" size="sm" disabled={disabled || recorderStatus === 'recording' || recorderStatus === 'paused' || recorderStatus === 'processing'} onClick={() => void startRecording()}>
+                <Mic className="mr-2 h-4 w-4" aria-hidden="true" /> Record answer
+              </Button>
+            </>
+          )}
+          {allowAudioTranscription && recorderStatus === 'recording' && (
             <Button type="button" variant="outline" size="sm" onClick={() => recorderRef.current?.pause()}>
               <Pause className="mr-2 h-4 w-4" aria-hidden="true" /> Pause
             </Button>
           )}
-          {recorderStatus === 'paused' && (
+          {allowAudioTranscription && recorderStatus === 'paused' && (
             <Button type="button" variant="outline" size="sm" onClick={() => recorderRef.current?.resume()}>
               <Play className="mr-2 h-4 w-4" aria-hidden="true" /> Resume
             </Button>
           )}
-          {(recorderStatus === 'recording' || recorderStatus === 'paused') && (
+          {allowAudioTranscription && (recorderStatus === 'recording' || recorderStatus === 'paused') && (
             <Button type="button" variant="outline" size="sm" onClick={stopRecording}>Stop and transcribe</Button>
           )}
-          {blobRef.current && recorderStatus !== 'processing' && (
+          {allowAudioTranscription && blobRef.current && recorderStatus !== 'processing' && (
             <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => void transcribe(blobRef.current as Blob)}>
               Retry transcription
             </Button>
           )}
-          {(recorderStatus === 'review' || blobRef.current) && (
+          {allowAudioTranscription && (recorderStatus === 'review' || blobRef.current) && (
             <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={rerecord}>
               <RotateCcw className="mr-2 h-4 w-4" aria-hidden="true" /> Re-record
             </Button>
@@ -396,7 +497,7 @@ export function VoiceRoom({
       </div>
       {error && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">{error}</p>}
       {speechNotice && <p role="status" className="text-sm text-amber-800 dark:text-amber-200">{speechNotice}</p>}
-      {ttsProvider === 'none' && <p role="status" className="text-sm text-slate-600 dark:text-slate-300">Spoken question playback is disabled. Read the question text above.</p>}
+      {!speechRecognitionSupported && <p role="status" className="text-sm text-amber-800 dark:text-amber-200">Speech recognition is not supported in this browser. Type your answer in the transcript box; no audio will be uploaded.</p>}
 
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" size="sm" disabled={speaking || recorderStatus === 'recording' || recorderStatus === 'paused' || !speechSynthesisAvailable()} onClick={speakQuestion}>

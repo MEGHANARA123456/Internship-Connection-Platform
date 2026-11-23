@@ -136,7 +136,12 @@ async def verify_google_credential(
 
 
 async def issue_tokens(
-    user: User, db: DbSession, *, record_first_login: bool = False, commit: bool = True
+    user: User,
+    db: DbSession,
+    *,
+    record_first_login: bool = False,
+    keep_signed_in: bool = False,
+    commit: bool = True,
 ) -> TokenResponse:
     """Issue access and refresh tokens for a user and optionally record first-login metadata."""
     settings = get_settings()
@@ -144,10 +149,21 @@ async def issue_tokens(
     if is_first_login:
         user.first_login_at = datetime.now(timezone.utc)
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    refresh_expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
+    refresh_days = (
+        settings.remember_me_refresh_token_expire_days
+        if keep_signed_in
+        else settings.refresh_token_expire_days
+    )
+    refresh_expires_at = datetime.now(timezone.utc) + timedelta(days=refresh_days)
 
     access = create_token(str(user.id), user.role.value, "access", timedelta(minutes=settings.access_token_expire_minutes))
-    refresh = create_token(str(user.id), user.role.value, "refresh", timedelta(days=settings.refresh_token_expire_days))
+    refresh = create_token(
+        str(user.id),
+        user.role.value,
+        "refresh",
+        timedelta(days=refresh_days),
+        remember_me=keep_signed_in,
+    )
     payload = decode_token(refresh)
     db.add(RefreshToken(jti=payload["jti"], user_id=user.id, expires_at=datetime.fromtimestamp(payload["exp"], timezone.utc)))
     await db.flush()
@@ -183,7 +199,7 @@ async def issue_tokens(
         email=user.email,
         avatar_url=avatar_url,
         access_token_expires_in=int(settings.access_token_expire_minutes * 60),
-        refresh_token_expires_in=int(settings.refresh_token_expire_days * 24 * 60 * 60),
+        refresh_token_expires_in=int(refresh_days * 24 * 60 * 60),
         access_token_expires_at=access_expires_at,
         refresh_token_expires_at=refresh_expires_at,
     )
@@ -469,7 +485,12 @@ async def login(data: LoginRequest, db: DbSession) -> Any:
             message="Two-factor authentication code sent to your email",
         )
 
-    return await issue_tokens(user, db, record_first_login=True)
+    return await issue_tokens(
+        user,
+        db,
+        record_first_login=True,
+        keep_signed_in=data.keep_signed_in,
+    )
 
 
 @router.post("/mfa/verify-login", response_model=TokenResponse)
@@ -495,14 +516,24 @@ async def verify_mfa_login(data: MFALoginVerifyRequest, db: DbSession) -> TokenR
         raise HTTPException(status_code=404, detail="User account not found or deactivated.")
 
     if not user.mfa_enabled:
-        return await issue_tokens(user, db, record_first_login=True)
+        return await issue_tokens(
+            user,
+            db,
+            record_first_login=True,
+            keep_signed_in=data.keep_signed_in,
+        )
 
     clean_otp = data.otp.strip()
     if getattr(user, "mfa_type", "EMAIL") == "TOTP":
         if not user.mfa_secret or not pyotp.TOTP(user.mfa_secret).verify(clean_otp, valid_window=1):
             raise HTTPException(status_code=400, detail="Invalid authenticator app code. Please try again.")
         await db.commit()
-        return await issue_tokens(user, db, record_first_login=True)
+        return await issue_tokens(
+            user,
+            db,
+            record_first_login=True,
+            keep_signed_in=data.keep_signed_in,
+        )
 
     if not user.mfa_otp or user.mfa_otp != clean_otp:
         raise HTTPException(status_code=400, detail="Invalid two-factor authentication code. Please try again.")
@@ -514,7 +545,12 @@ async def verify_mfa_login(data: MFALoginVerifyRequest, db: DbSession) -> TokenR
     user.mfa_otp_expires_at = None
     await db.commit()
 
-    return await issue_tokens(user, db, record_first_login=True)
+    return await issue_tokens(
+        user,
+        db,
+        record_first_login=True,
+        keep_signed_in=data.keep_signed_in,
+    )
 
 
 @router.get("/mfa/status", response_model=MFAStatusResponse)
@@ -747,7 +783,13 @@ async def refresh(data: RefreshRequest, db: DbSession) -> TokenResponse:
         )
         user_id = int(payload["sub"])
         user = await db.scalar(select(User).where(User.id == user_id))
-        if token is None or token.user_id != user_id or _is_expired(token.expires_at) or user is None:
+        if (
+            token is None
+            or token.user_id != user_id
+            or _is_expired(token.expires_at)
+            or user is None
+            or not user.is_active
+        ):
             raise ValueError
         now = datetime.now(timezone.utc)
         if token.revoked_at is not None:
@@ -762,7 +804,12 @@ async def refresh(data: RefreshRequest, db: DbSession) -> TokenResponse:
                 await db.commit()
             raise ValueError
 
-        rotated = await issue_tokens(user, db, commit=False)
+        rotated = await issue_tokens(
+            user,
+            db,
+            keep_signed_in=payload.get("remember_me") is True,
+            commit=False,
+        )
         token.revoked_at = now
         token.rotated_at = now
         token.reuse_until = now + timedelta(seconds=30)

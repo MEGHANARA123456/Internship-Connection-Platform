@@ -8,7 +8,7 @@ import { InterviewSessionPage } from './InterviewSessionPage'
 import { InterviewSetupPage } from './InterviewSetupPage'
 import { InterviewStudioPage } from './InterviewStudioPage'
 import * as interviewService from '../../services/interviewService'
-import { confirmAction } from '../../lib/feedback'
+import { confirmAction, showToast } from '../../lib/feedback'
 import type {
   InterviewEvaluation,
   InterviewQuestion,
@@ -24,6 +24,7 @@ vi.mock('../../services/interviewService', () => ({
   deleteInterviewSession: vi.fn(),
   getInterviewReport: vi.fn(),
   getInterviewSession: vi.fn(),
+  getInterviewProviderAvailability: vi.fn(),
   getNextInterviewQuestion: vi.fn(),
   listInterviewSessions: vi.fn(),
   retryInterviewEvaluation: vi.fn(),
@@ -53,7 +54,7 @@ function makeSession(overrides: Partial<InterviewSession> = {}): InterviewSessio
     session_type: 'PRACTICE',
     interview_mode: 'TEXT',
     category: 'HR',
-    difficulty: 'BEGINNER',
+    difficulty: 'INTERMEDIATE',
     question_count: 5,
     time_limit_seconds: 1200,
     status: 'IN_PROGRESS',
@@ -119,7 +120,7 @@ function makeDetail(
   status: InterviewSession['status'] = 'IN_PROGRESS',
   overrides: Partial<InterviewSession> = {},
 ): InterviewSessionDetail {
-  return { session: makeSession({ status, ...overrides }), questions: [] }
+  return { session: makeSession({ status, ...overrides }), answered_question_count: 0 }
 }
 
 function CurrentPath() {
@@ -153,6 +154,10 @@ beforeEach(() => {
   })
   vi.mocked(interviewService.listInterviewSessions).mockResolvedValue([])
   vi.mocked(interviewService.getInterviewSession).mockResolvedValue(makeDetail())
+  vi.mocked(interviewService.getInterviewProviderAvailability).mockResolvedValue({
+    available: true,
+    retry_after_seconds: null,
+  })
   vi.mocked(interviewService.startInterviewSession).mockResolvedValue(makeSession())
   vi.mocked(interviewService.getNextInterviewQuestion).mockResolvedValue({
     session_status: 'IN_PROGRESS',
@@ -178,17 +183,14 @@ afterEach(() => {
 })
 
 describe('Interview Studio setup', () => {
-  it('requires consent, applies Mixed-only question counts, and starts the chosen mode', async () => {
+  it('requires consent and starts a Technical Video interview', async () => {
     renderInterviewPage('/interview-studio/setup')
     const startButton = screen.getByRole('button', { name: 'Start interview' })
     expect(startButton).toBeDisabled()
 
-    fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'MIXED' } })
     expect(screen.getByRole('option', { name: '10 questions' })).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText(/Number of questions/), { target: { value: '10' } })
-    fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'TECHNICAL' } })
-    expect(screen.getByLabelText(/Number of questions/)).toHaveValue('5')
-    expect(screen.queryByRole('option', { name: '10 questions' })).not.toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Video/ })).toBeChecked()
 
     expect(screen.getByText(/Get hints and coaching feedback after each answer/)).toBeInTheDocument()
     expect(screen.getByText(/No hints or feedback during the interview/)).toBeInTheDocument()
@@ -202,9 +204,8 @@ describe('Interview Studio setup', () => {
     expect(interviewService.createInterviewSession).toHaveBeenCalledWith({
       session_type: 'ASSESSMENT',
       category: 'TECHNICAL',
-      difficulty: 'BEGINNER',
-      question_count: 5,
-      interview_mode: 'TEXT',
+      question_count: 10,
+      interview_mode: 'VIDEO',
       consent_acknowledged: true,
     })
     expect(interviewService.startInterviewSession).toHaveBeenCalledWith(17)
@@ -223,22 +224,21 @@ describe('Interview Studio setup', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('limit of five interview sessions today')
   })
 
-  it('creates a Voice session only after voice consent is acknowledged', async () => {
+  it('creates a Video session only after video consent is acknowledged', async () => {
     renderInterviewPage('/interview-studio/setup')
-    fireEvent.click(screen.getByRole('radio', { name: /Voice/ }))
     const startButton = screen.getByRole('button', { name: 'Start interview' })
     expect(startButton).toBeDisabled()
-    fireEvent.click(screen.getByLabelText(/Voice answers are sent to an external speech-to-text provider/))
+    fireEvent.click(screen.getByLabelText(/sent to an external AI provider/))
+    fireEvent.click(screen.getByLabelText(/I consent to proctoring/))
     expect(startButton).toBeEnabled()
     fireEvent.click(startButton)
 
     await screen.findByText('Tell me about a project you contributed to.')
     expect(interviewService.createInterviewSession).toHaveBeenCalledWith({
       session_type: 'PRACTICE',
-      category: 'HR',
-      difficulty: 'BEGINNER',
+      category: 'TECHNICAL',
       question_count: 5,
-      interview_mode: 'VOICE',
+      interview_mode: 'VIDEO',
       consent_acknowledged: true,
     })
   })
@@ -312,7 +312,7 @@ describe('Interview session flow', () => {
   it('restores the latest unanswered question after a page refresh', async () => {
     vi.mocked(interviewService.getInterviewSession).mockResolvedValue({
       session: makeSession(),
-      questions: [makeQuestion({ answer_submitted: true })],
+      answered_question_count: 1,
     })
     vi.mocked(interviewService.getNextInterviewQuestion).mockResolvedValue({
       session_status: 'IN_PROGRESS',
@@ -416,10 +416,34 @@ describe('Interview report and history', () => {
       failure_code: 'provider_not_configured',
       evaluations: [],
     }))
+    vi.mocked(interviewService.getInterviewProviderAvailability).mockResolvedValue({
+      available: false,
+      retry_after_seconds: null,
+    })
     renderInterviewPage('/interview-studio/report/17')
 
-    expect(await screen.findByText('Evaluation is temporarily unavailable, please retry later. Your answers are preserved.')).toBeInTheDocument()
+    expect(await screen.findByText('Evaluation is temporarily unavailable. Your answers are saved.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry evaluation' })).toBeDisabled()
     expect(screen.queryByText(/provider_not_configured/)).not.toBeInTheDocument()
+  })
+
+  it('shows a disabled retry countdown while the provider is rate limited', async () => {
+    vi.mocked(interviewService.getInterviewSession).mockResolvedValue(
+      makeDetail('EVALUATION_FAILED'),
+    )
+    vi.mocked(interviewService.getInterviewReport).mockResolvedValue(makeReport({
+      status: 'FAILED',
+      failure_code: 'provider_rate_limited',
+      evaluations: [],
+    }))
+    vi.mocked(interviewService.getInterviewProviderAvailability).mockResolvedValue({
+      available: false,
+      retry_after_seconds: 45,
+    })
+    renderInterviewPage('/interview-studio/report/17')
+
+    expect(await screen.findByText(/AI evaluator is busy right now/)).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Try again in 45s' })).toBeDisabled()
   })
 
   it('renders only the server score and study suggestions for completed reports', async () => {
@@ -481,18 +505,28 @@ describe('Interview report and history', () => {
     renderInterviewPage('/interview-studio/report/17')
     expect(await screen.findByText(/1 answer\(s\) evaluated successfully/)).toBeInTheDocument()
     expect(screen.queryByText(/\/100/)).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry evaluation' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Retry evaluation' }))
     await waitFor(() => expect(interviewService.retryInterviewEvaluation).toHaveBeenCalledWith(17))
     expect(await screen.findByText('76')).toBeInTheDocument()
   })
 
   it('opens retake setup and deletes history only after confirmation', async () => {
+    vi.mocked(interviewService.getInterviewSession).mockResolvedValue(makeDetail('COMPLETED', {
+      category: 'TECHNICAL',
+      difficulty: 'INTERMEDIATE',
+      interview_mode: 'TEXT',
+      question_count: 10,
+    }))
     vi.mocked(interviewService.listInterviewSessions).mockResolvedValue([makeSession({ status: 'IN_PROGRESS' })])
     renderInterviewPage('/interview-studio/history')
     await screen.findByText(/HR · Practice · text/)
     fireEvent.click(screen.getByRole('link', { name: 'Retake' }))
     expect(await screen.findByRole('heading', { name: 'Set up your retake' })).toBeInTheDocument()
     expect(interviewService.getInterviewSession).toHaveBeenCalledWith(17)
+    expect(screen.getByLabelText('Category')).toHaveValue('TECHNICAL')
+    expect(screen.getByRole('radio', { name: /Video/ })).toBeChecked()
+    expect(screen.getByLabelText(/Number of questions/)).toHaveValue('10')
 
     cleanup()
     vi.mocked(interviewService.listInterviewSessions).mockResolvedValue([makeSession({ status: 'IN_PROGRESS' })])
@@ -500,7 +534,45 @@ describe('Interview report and history', () => {
     await screen.findByText(/HR · Practice · text/)
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(interviewService.deleteInterviewSession).toHaveBeenCalledWith(17))
-    expect(window.confirm).toHaveBeenCalled()
+    expect(confirmAction).toHaveBeenCalledWith({
+      title: 'Delete this attempt?',
+      message: 'Its questions, answers and report will be permanently removed.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    expect(showToast).toHaveBeenCalledWith('Interview attempt deleted.', 'success')
     expect(await screen.findByText('You have no interview attempts yet.')).toBeInTheDocument()
+  })
+
+  it('opens a real report route and explains expired attempts without navigating', async () => {
+    vi.mocked(interviewService.listInterviewSessions).mockResolvedValue([makeSession({ status: 'COMPLETED' })])
+    vi.mocked(interviewService.getInterviewSession).mockResolvedValue(makeDetail('COMPLETED'))
+    renderInterviewPage('/interview-studio/history')
+    await screen.findAllByRole('button', { name: 'View report for interview 17' })
+    fireEvent.click(screen.getAllByRole('button', { name: 'View report for interview 17' })[0])
+    expect(await screen.findByRole('heading', { name: 'Interview report' })).toBeInTheDocument()
+    expect(interviewService.getInterviewSession).toHaveBeenCalledWith(17)
+
+    cleanup()
+    vi.mocked(interviewService.listInterviewSessions).mockResolvedValue([makeSession({ status: 'EXPIRED' })])
+    vi.mocked(interviewService.getInterviewReport).mockClear()
+    renderInterviewPage('/interview-studio/history')
+    await screen.findAllByRole('button', { name: 'View report for interview 17' })
+    fireEvent.click(screen.getAllByRole('button', { name: 'View report for interview 17' })[0])
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'This attempt expired before it was completed. Retake the interview to get a report.',
+    )
+    expect(screen.getByRole('heading', { name: 'Interview history' })).toBeInTheDocument()
+    expect(interviewService.getInterviewReport).not.toHaveBeenCalled()
+
+    cleanup()
+    vi.mocked(interviewService.listInterviewSessions).mockResolvedValue([makeSession({ status: 'IN_PROGRESS' })])
+    renderInterviewPage('/interview-studio/history')
+    await screen.findAllByRole('button', { name: 'View report for interview 17' })
+    fireEvent.click(screen.getAllByRole('button', { name: 'View report for interview 17' })[0])
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'This attempt has no report yet. Complete or retake the interview to get a report.',
+    )
+    expect(screen.getByRole('heading', { name: 'Interview history' })).toBeInTheDocument()
   })
 })

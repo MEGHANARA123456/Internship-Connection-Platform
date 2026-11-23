@@ -24,7 +24,7 @@ services:
       dockerfile: doc/Dockerfile
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/internship_platform}
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-development}
+      SECRET_KEY: ${SECRET_KEY:?Set a stable SECRET_KEY in .env}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5174}
       RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-300}
       RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
@@ -37,7 +37,9 @@ services:
       NOTIFY_EMAIL_ON_ROLE_CLOSE: ${NOTIFY_EMAIL_ON_ROLE_CLOSE:-false}
       RESUME_STORAGE_PATH: ${RESUME_STORAGE_PATH:-/var/lib/internship-platform/resumes}
       INTERVIEW_LLM_BASE_URL: ${INTERVIEW_LLM_BASE_URL:-https://api.groq.com/openai}
+      INTERVIEW_LLM_PROVIDER: ${INTERVIEW_LLM_PROVIDER:-groq}
       INTERVIEW_LLM_MODEL: ${INTERVIEW_LLM_MODEL:-openai/gpt-oss-20b}
+      # Set INTERVIEW_LLM_API_KEY in .env to enable AI interview evaluations.
       INTERVIEW_LLM_API_KEY: ${INTERVIEW_LLM_API_KEY:-}
       INTERVIEW_LLM_TIMEOUT_SECONDS: ${INTERVIEW_LLM_TIMEOUT_SECONDS:-12}
       INTERVIEW_PROCTORING_MAX_VIOLATIONS: ${INTERVIEW_PROCTORING_MAX_VIOLATIONS:-3}
