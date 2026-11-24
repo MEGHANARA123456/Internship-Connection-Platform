@@ -45,19 +45,4 @@ describe('navigation configuration', () => {
     expect(navigationConfig.ADMIN.hamburger.some((item) => item.id === 'interview-studio')).toBe(false)
     expect(navigationConfig.GUEST.hamburger.some((item) => item.id === 'interview-studio')).toBe(false)
   })
-
-  it('exposes the Learning Library to students and its management view to admins only', () => {
-    expect(navigationConfig.STUDENT.hamburger).toContainEqual(expect.objectContaining({
-      id: 'learning-library',
-      label: 'Learning Library',
-      route: '/learning-library',
-    }))
-    expect(navigationConfig.ADMIN.hamburger).toContainEqual(expect.objectContaining({
-      id: 'admin-learning-library',
-      label: 'Learning Library',
-      route: '/admin/learning-library',
-    }))
-    expect(navigationConfig.COMPANY.hamburger.some((item) => item.id.includes('learning-library'))).toBe(false)
-    expect(navigationConfig.GUEST.hamburger.some((item) => item.id.includes('learning-library'))).toBe(false)
-  })
 })

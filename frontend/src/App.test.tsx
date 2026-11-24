@@ -168,6 +168,33 @@ describe('platform shell', () => {
     expect(screen.queryByRole('heading', { name: 'Sign In' })).not.toBeInTheDocument()
   })
 
+  it.each([
+    ['/learning-library', 'STUDENT', '/opportunities'],
+    ['/skill-insights', 'STUDENT', '/opportunities'],
+    ['/admin/learning-library', 'ADMIN', '/admin'],
+  ] as const)('redirects retired route %s to the %s user home', async (path, role, home) => {
+    useAuthStore.getState().setSession({
+      accessToken: 'active-access-token',
+      refreshToken: 'active-refresh-token',
+      role,
+      userId: 94,
+      email: 'user@example.com',
+    })
+    vi.spyOn(api, 'get').mockImplementation(async (requestPath) => (
+      requestPath === '/auth/me'
+        ? { data: { id: 94, email: 'user@example.com' } } as never
+        : { data: [] } as never
+    ))
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <App />
+        <CurrentLocation />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByTestId('current-location')).toHaveTextContent(home))
+  })
+
   it('does not render a protected page after logout and browser Back', async () => {
     useAuthStore.getState().setSession({
       accessToken: 'admin-access-token',

@@ -155,8 +155,6 @@ const InterviewSetupPage = lazy(async () => ({ default: (await import('./pages/i
 const InterviewSessionPage = lazy(async () => ({ default: (await import('./pages/interviews/InterviewSessionPage')).InterviewSessionPage }))
 const InterviewReportPage = lazy(async () => ({ default: (await import('./pages/interviews/InterviewReportPage')).InterviewReportPage }))
 const InterviewHistoryPage = lazy(async () => ({ default: (await import('./pages/interviews/InterviewHistoryPage')).InterviewHistoryPage }))
-const StudentLearningLibraryPage = lazy(async () => ({ default: (await import('./pages/learning/StudentLearningLibraryPage')).StudentLearningLibraryPage }))
-const SkillInsightsPage = lazy(async () => ({ default: (await import('./pages/skill-insights/SkillInsightsPage')).SkillInsightsPage }))
 const skillAssessmentPages = () => import('./pages/SkillAssessmentPages')
 const SkillAssessmentResultPage = lazy(async () => ({ default: (await skillAssessmentPages()).SkillAssessmentResultPage }))
 const SkillAssessmentHistoryPage = lazy(async () => ({ default: (await skillAssessmentPages()).SkillAssessmentHistoryPage }))
@@ -187,7 +185,6 @@ const AdminCompanyPostingsPage = lazy(async () => ({ default: (await adminPages(
 const AdminAuditLogsPage = lazy(async () => ({ default: (await adminPages()).AdminAuditLogsPage }))
 const AdminSkillAssessmentsPage = lazy(async () => ({ default: (await adminPages()).AdminSkillAssessmentsPage }))
 const AdminInterviewStudioPage = lazy(async () => ({ default: (await import('./pages/admin/InterviewStudioAdminPage')).InterviewStudioAdminPage }))
-const AdminLearningLibraryPage = lazy(async () => ({ default: (await import('./pages/admin/AdminLearningLibraryPage')).AdminLearningLibraryPage }))
 const AdminStudentsPage = lazy(async () => ({ default: (await import('./pages/admin/AdminStudentsPage')).AdminStudentsPage }))
 const AdminStudentDetailPage = lazy(async () => ({ default: (await import('./pages/admin/AdminStudentDetailPage')).AdminStudentDetailPage }))
 const AdminCompanyDirectoryPage = lazy(async () => ({ default: (await import('./pages/admin/AdminCompaniesPage')).AdminCompaniesPage }))
@@ -233,6 +230,9 @@ export default function App() {
             <Route path={routes.opportunityDetail} element={<OpportunitiesPage />} />
             <Route path={routes.legacyInternship} element={<LegacyInternshipRedirect />} />
             <Route path={routes.dashboard} element={<DashboardRedirect />} />
+            <Route path="/learning-library" element={<DashboardRedirect />} />
+            <Route path="/skill-insights" element={<DashboardRedirect />} />
+            <Route path="/admin/learning-library" element={<DashboardRedirect />} />
 
             {/* Authentication */}
             <Route element={<GuestRoute />}>
@@ -265,8 +265,6 @@ export default function App() {
               <Route path={routes.interviewSessionRoute} element={<InterviewSessionPage />} />
               <Route path={routes.interviewReportRoute} element={<InterviewReportPage />} />
               <Route path={routes.interviewHistory} element={<InterviewHistoryPage />} />
-              <Route path={routes.learningLibrary} element={<StudentLearningLibraryPage />} />
-              <Route path={routes.skillInsights} element={<SkillInsightsPage />} />
             </Route>
 
             {/* Company Dedicated Routes */}
@@ -321,7 +319,6 @@ export default function App() {
               <Route path={routes.adminAuditLogsRoute} element={<AdminAuditLogsPage />} />
               <Route path={routes.adminSkills} element={<AdminSkillAssessmentsPage />} />
               <Route path={routes.adminInterviewStudio} element={<AdminInterviewStudioPage />} />
-              <Route path={routes.adminLearningLibrary} element={<AdminLearningLibraryPage />} />
             </Route>
 
             {/* Privacy & Regulatory Compliance (GDPR / CCPA) */}

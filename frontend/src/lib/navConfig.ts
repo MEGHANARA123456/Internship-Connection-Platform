@@ -19,8 +19,6 @@ import {
   Smartphone,
   Sparkles,
   Mic,
-  BookOpen,
-  Lightbulb,
 } from 'lucide-react'
 import { routes } from './routes'
 
@@ -55,8 +53,6 @@ export const navigationConfig: Record<NavigationRole, { topBar: NavigationItem[]
       { id: 'notifications', label: 'Notifications & Mailbox', route: routes.notifications, icon: Bell, countSource: 'notifications' },
       { id: 'analytics', label: 'Analytics', route: routes.studentAnalytics, icon: BarChart3 },
       { id: 'interview-studio', label: 'AI Interview Studio', route: routes.interviewStudio, icon: Sparkles },
-      { id: 'learning-library', label: 'Learning Library', route: routes.learningLibrary, icon: BookOpen },
-      { id: 'skill-insights', label: 'Skill Insights', route: routes.skillInsights, icon: Lightbulb },
       { id: 'profile', label: 'My Profile', route: routes.studentProfile, icon: User },
       { id: 'privacy-center', label: 'Privacy & Security', route: routes.privacySecurity, icon: Lock },
       { id: 'cookie-preferences', label: 'Cookie preferences', icon: Lock, action: 'cookie-preferences' },
@@ -92,7 +88,6 @@ export const navigationConfig: Record<NavigationRole, { topBar: NavigationItem[]
       { id: 'admin-audit-logs', label: 'Audit Logs', route: routes.adminAuditLogs(), icon: FileText },
       { id: 'admin-skills', label: 'Skill assessments', route: routes.adminSkills, icon: Award },
       { id: 'admin-interview-studio', label: 'AI Interview Studio', route: routes.adminInterviewStudio, icon: Mic },
-      { id: 'admin-learning-library', label: 'Learning Library', route: routes.adminLearningLibrary, icon: BookOpen },
       { id: 'admin-notifications', label: 'Notifications & Mailbox', route: routes.notifications, icon: Bell, countSource: 'notifications' },
       { id: 'admin-privacy', label: 'Privacy & Security', route: routes.privacySecurity, icon: Lock },
       { id: 'admin-cookie-preferences', label: 'Cookie preferences', icon: Lock, action: 'cookie-preferences' },

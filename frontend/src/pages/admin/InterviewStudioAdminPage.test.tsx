@@ -146,8 +146,10 @@ describe('InterviewStudioAdminPage', () => {
     render(<InterviewStudioAdminPage />)
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
 
-    expect(await screen.findByText('Set API_KEY in the backend environment and restart the API.')).toBeInTheDocument()
-    expect(screen.getByText('Provider not configured: add INTERVIEW_LLM_API_KEY')).toBeInTheDocument()
+    expect(await screen.findByText('Provider not configured: add INTERVIEW_LLM_API_KEY')).toBeInTheDocument()
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Provider not configured: add INTERVIEW_LLM_API_KEY.',
+    )
     expect(screen.queryByText('test-key')).not.toBeInTheDocument()
   })
 
