@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Eye } from 'lucide-react'
+import { Eye, RotateCcw, Trash2 } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
 import { Badge } from '../../components/ui/Badge'
 import { DataList } from '../../components/ui/DataList'
+import { IconButton } from '../../components/ui/IconButton'
 import { InterviewErrorNotice, useInterviewError } from '../../components/interviews/InterviewErrorNotice'
 import { InterviewPageLayout } from '../../components/interviews/InterviewPageLayout'
 import { confirmAction, showToast } from '../../lib/feedback'
@@ -142,15 +143,14 @@ export function InterviewHistoryPage() {
             render: ({ session }) => <Badge status={session.status}>{statusLabel(session.status)}</Badge>,
           },
         ]}
-        actions={(item) => {
-          const { session, report, reportError } = item
-          const reportAvailable = report !== null
+        actions={({ session }) => {
+          const item = items.find((entry) => entry.session.id === session.id)
+          const reportAvailable = item?.report !== null && item?.report !== undefined
           return (
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
+            <>
+              <IconButton
+                icon={Eye}
                 aria-label={`View report for interview ${session.id}`}
-                className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
                 onClick={() => {
                   if (reportAvailable) {
                     navigate(routes.interviewReport(session.id))
@@ -158,18 +158,27 @@ export function InterviewHistoryPage() {
                   }
                   setViewNotice(session.status === 'EXPIRED'
                     ? 'This attempt expired before it was completed. Retake the interview to get a report.'
-                    : 'This attempt has no report yet. Complete or retake the interview to get a report.')
+                    : item?.reportError
+                      ? 'The report could not be loaded. Refresh history and try again.'
+                      : 'This attempt has no report yet. Complete or retake the interview to get a report.')
                 }}
-              >
-                <Eye aria-hidden="true" size={16} /> View report
-              </button>
-              {!reportAvailable && session.status !== 'EXPIRED' && (
-                <Link to={routes.interviewSession(session.id)} className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900">Continue</Link>
-              )}
-              <Link to={routes.interviewSetup({ retake_of_session_id: session.id })} className="inline-flex min-h-10 items-center justify-center rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Retake</Link>
-              <Button variant="danger" size="sm" isLoading={deletingId === session.id} disabled={deletingId !== null} onClick={() => void removeSession(item)}>Delete</Button>
-              {reportError && !report && session.status !== 'EXPIRED' && <span role="alert" className="text-xs text-rose-700">{reportError}</span>}
-            </div>
+              />
+              <IconButton
+                icon={RotateCcw}
+                aria-label={`Retake interview ${session.id}`}
+                onClick={() => navigate(routes.interviewSetup({ retake_of_session_id: session.id }))}
+              />
+              <IconButton
+                icon={Trash2}
+                variant="danger"
+                aria-label={`Delete interview ${session.id}`}
+                isLoading={deletingId === session.id}
+                disabled={deletingId !== null}
+                onClick={() => {
+                  if (item) void removeSession(item)
+                }}
+              />
+            </>
           )
         }}
       />

@@ -520,8 +520,8 @@ describe('Interview report and history', () => {
     }))
     vi.mocked(interviewService.listInterviewSessions).mockResolvedValue([makeSession({ status: 'IN_PROGRESS' })])
     renderInterviewPage('/interview-studio/history')
-    await screen.findByText(/HR · Practice · text/)
-    fireEvent.click(screen.getByRole('link', { name: 'Retake' }))
+    await screen.findAllByText(/HR · Practice · text/)
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retake interview 17' })[0])
     expect(await screen.findByRole('heading', { name: 'Set up your retake' })).toBeInTheDocument()
     expect(interviewService.getInterviewSession).toHaveBeenCalledWith(17)
     expect(screen.getByLabelText('Category')).toHaveValue('TECHNICAL')
@@ -531,8 +531,8 @@ describe('Interview report and history', () => {
     cleanup()
     vi.mocked(interviewService.listInterviewSessions).mockResolvedValue([makeSession({ status: 'IN_PROGRESS' })])
     renderInterviewPage('/interview-studio/history')
-    await screen.findByText(/HR · Practice · text/)
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await screen.findAllByText(/HR · Practice · text/)
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete interview 17' })[0])
     await waitFor(() => expect(interviewService.deleteInterviewSession).toHaveBeenCalledWith(17))
     expect(confirmAction).toHaveBeenCalledWith({
       title: 'Delete this attempt?',

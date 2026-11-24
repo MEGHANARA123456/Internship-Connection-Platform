@@ -2,24 +2,23 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Eye } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
+import { Badge } from '../../components/ui/Badge'
 import { Card, CardContent } from '../../components/ui/Card'
+import { DataList } from '../../components/ui/DataList'
+import { IconButton } from '../../components/ui/IconButton'
 import { InterviewErrorNotice, useInterviewError } from './InterviewErrorNotice'
 import { routes } from '../../lib/routes'
 import {
-  compareMockTestAttempts,
   createMockTestAttempt,
   getMockTest,
   getMockTestRecommendation,
   listMockTests,
-  listMockTestAttempts,
   startInterviewSession,
 } from '../../services/interviewService'
 import type {
   InterviewMode,
   InterviewSessionType,
   MockTest,
-  MockTestAttempt,
-  MockTestComparison,
   MockTestDetail,
   MockTestFormat,
   MockTestRecommendation,
@@ -36,32 +35,19 @@ function titleCase(value: string): string {
   return value.replaceAll('_', ' ').toLowerCase().replace(/(^|\s)\S/g, (letter) => letter.toUpperCase())
 }
 
-function formatDate(value: string): string {
-  return new Date(value).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
-}
-
 export function MockTestsLibrary() {
   const navigate = useNavigate()
   const requestError = useInterviewError()
   const [tests, setTests] = useState<MockTest[]>([])
   const [recommendation, setRecommendation] = useState<MockTestRecommendation | null>(null)
   const [selected, setSelected] = useState<MockTestDetail | null>(null)
-  const [attempts, setAttempts] = useState<MockTestAttempt[]>([])
-  const [selectedAttemptIds, setSelectedAttemptIds] = useState<number[]>([])
-  const [comparison, setComparison] = useState<MockTestComparison | null>(null)
-  const [category, setCategory] = useState('')
-  const [difficulty, setDifficulty] = useState('')
+  const [category, setCategory] = useState<'HR' | 'TECHNICAL'>('HR')
   const [format, setFormat] = useState<MockTestFormat | ''>('')
   const [sessionType, setSessionType] = useState<InterviewSessionType>('PRACTICE')
   const [interviewMode, setInterviewMode] = useState<InterviewMode>('TEXT')
   const [consent, setConsent] = useState(false)
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
-  const [comparing, setComparing] = useState(false)
   const [error, setError] = useState('')
   const [createdSessionId, setCreatedSessionId] = useState<number | null>(null)
 
@@ -70,8 +56,7 @@ export function MockTestsLibrary() {
     setError('')
     try {
       const filters = {
-        ...(category ? { category } : {}),
-        ...(difficulty ? { difficulty } : {}),
+        category,
         ...(format ? { format } : {}),
       }
       const [catalog, nextRecommendation] = await Promise.all([
@@ -85,7 +70,7 @@ export function MockTestsLibrary() {
     } finally {
       setLoading(false)
     }
-  }, [category, difficulty, format, requestError])
+  }, [category, format, requestError])
 
   useEffect(() => {
     void loadCatalog()
@@ -93,15 +78,9 @@ export function MockTestsLibrary() {
 
   const openTest = async (testId: number) => {
     setError('')
-    setSelectedAttemptIds([])
-    setComparison(null)
     try {
-      const [detail, testAttempts] = await Promise.all([
-        getMockTest(testId),
-        listMockTestAttempts(testId),
-      ])
+      const detail = await getMockTest(testId)
       setSelected(detail)
-      setAttempts(testAttempts)
       setSessionType(detail.default_mode)
       setConsent(false)
       setCreatedSessionId(null)
@@ -110,7 +89,7 @@ export function MockTestsLibrary() {
     }
   }
 
-  const startTest = async (retakeOfSessionId?: number) => {
+  const startTest = async () => {
     if (!selected || !consent || starting) return
     setStarting(true)
     setError('')
@@ -120,7 +99,6 @@ export function MockTestsLibrary() {
         session_type: sessionType,
         interview_mode: interviewMode,
         consent_acknowledged: true,
-        ...(retakeOfSessionId ? { retake_of_session_id: retakeOfSessionId } : {}),
       })
       setCreatedSessionId(session.id)
       await startInterviewSession(session.id)
@@ -131,30 +109,6 @@ export function MockTestsLibrary() {
       setStarting(false)
       void loadCatalog()
     }
-  }
-
-  const openComparison = async () => {
-    if (!selected || selectedAttemptIds.length < 2) return
-    setComparing(true)
-    setError('')
-    try {
-      setComparison(await compareMockTestAttempts(selected.id, selectedAttemptIds))
-    } catch (compareError) {
-      setError(requestError(compareError, routes.interviewStudio))
-    } finally {
-      setComparing(false)
-    }
-  }
-
-  const toggleAttempt = (attempt: MockTestAttempt) => {
-    setSelectedAttemptIds((current) => {
-      if (current.includes(attempt.session_id)) {
-        return current.filter((id) => id !== attempt.session_id)
-      }
-      const selectedVersion = attempts.find((item) => current.includes(item.session_id))?.test_version
-      if (selectedVersion !== undefined && selectedVersion !== attempt.test_version) return current
-      return [...current, attempt.session_id]
-    })
   }
 
   const recommendedTest = recommendation?.recommended_test
@@ -188,17 +142,7 @@ export function MockTestsLibrary() {
               {value === 'TECHNICAL' ? 'Technical' : 'HR'}
             </button>
           ))}
-          <button type="button" onClick={() => setCategory('')} className={`rounded-md px-3 py-1.5 text-sm font-semibold ${category === '' ? 'bg-indigo-600 text-white' : 'text-slate-600 dark:text-slate-300'}`}>
-            All
-          </button>
         </div>
-        <label className="space-y-1 text-sm font-medium text-slate-700 dark:text-slate-300">
-          Difficulty
-          <select aria-label="Filter by difficulty" value={difficulty} onChange={(event) => setDifficulty(event.target.value)} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-900">
-            <option value="">All difficulties</option>
-            {['BEGINNER', 'INTERMEDIATE', 'ADVANCED'].map((value) => <option key={value} value={value}>{titleCase(value)}</option>)}
-          </select>
-        </label>
         <label className="space-y-1 text-sm font-medium text-slate-700 dark:text-slate-300">
           Format
           <select aria-label="Filter by format" value={format} onChange={(event) => setFormat(event.target.value as MockTestFormat | '')} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-900">
@@ -208,33 +152,48 @@ export function MockTestsLibrary() {
         </label>
       </div>
 
-      {loading && tests.length === 0 && <p role="status" className="text-sm text-slate-500">Loading mock tests…</p>}
-      {!loading && tests.length === 0 && <Card><CardContent className="py-8 text-center text-sm text-slate-600 dark:text-slate-300">No active mock tests match these filters.</CardContent></Card>}
-      <div className="grid gap-4 md:grid-cols-2">
-        {tests.map((test) => (
-          <Card key={test.id}>
-            <CardContent className="space-y-3 py-5">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">{titleCase(test.category)} · {titleCase(test.difficulty)}</p>
-                  <h3 className="mt-1 font-semibold text-slate-900 dark:text-white">{test.title}</h3>
-                </div>
-                {test.completed_attempt_count > 0 && <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">Completed before</span>}
+      <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">{category === 'TECHNICAL' ? 'Technical' : 'HR'} mock tests ({tests.length})</h2>
+      <DataList
+        ariaLabel="Mock tests"
+        rows={tests}
+        getRowKey={(test) => test.id}
+        loading={loading}
+        emptyState="No active mock tests match these filters."
+        columns={[
+          {
+            key: 'test',
+            header: 'Test',
+            render: (test) => (
+              <div className="max-w-2xl">
+                <p className="font-semibold text-slate-900 dark:text-white">{test.title}</p>
+                <p className="mt-1 text-xs text-slate-500">{test.description}</p>
+                {test.company_style && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Public/admin-curated practice; not an official company assessment.</p>}
               </div>
-              <p className="text-sm text-slate-600 dark:text-slate-400">{test.description}</p>
-              <p className="text-xs text-slate-600 dark:text-slate-400">
-                {formatLabels[test.format]} · {test.question_count} questions · ~{test.estimated_duration_minutes} min · Default: {titleCase(test.default_mode)}
-              </p>
-              {test.company_style && <p className="rounded-md bg-slate-100 p-2 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">Practice based on public or admin-curated patterns; this is not an official company assessment.</p>}
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                {test.attempt_count} previous {test.attempt_count === 1 ? 'attempt' : 'attempts'} · {test.completed_attempt_count} completed
-                {test.latest_score !== null && ` · Latest score ${test.latest_score}/100`}
-              </p>
-              <Button variant="outline" onClick={() => void openTest(test.id)}><Eye aria-hidden="true" size={16} className="mr-2 inline-block" />Test details and attempts</Button>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            ),
+          },
+          {
+            key: 'details',
+            header: 'Format',
+            render: (test) => <span>{formatLabels[test.format]}</span>,
+          },
+          {
+            key: 'questions',
+            header: 'Length · mode',
+            render: (test) => <span>{test.question_count} questions · ~{test.estimated_duration_minutes} min · {titleCase(test.default_mode)}</span>,
+          },
+          {
+            key: 'attempts',
+            header: 'Attempts',
+            render: (test) => (
+              <div className="flex flex-wrap items-center gap-2">
+                <span>{test.attempt_count} total · {test.completed_attempt_count} completed{test.latest_score !== null ? ` · Latest ${test.latest_score}/100` : ''}</span>
+                {test.completed_attempt_count > 0 && <Badge variant="emerald">Completed</Badge>}
+              </div>
+            ),
+          },
+        ]}
+        actions={(test) => <IconButton icon={Eye} variant="primary" aria-label={`View ${test.title} details`} onClick={() => void openTest(test.id)} />}
+      />
 
       {selected && (
         <Card aria-labelledby="mock-test-detail-title">
@@ -275,51 +234,6 @@ export function MockTestsLibrary() {
               </label>
               <Button type="submit" disabled={!consent || starting} isLoading={starting}>Start mock test</Button>
             </form>
-            <section aria-labelledby="mock-test-attempts-title" className="space-y-3">
-              <h3 id="mock-test-attempts-title" className="font-semibold text-slate-900 dark:text-white">Your attempts</h3>
-              {attempts.length === 0 && <p className="text-sm text-slate-600 dark:text-slate-400">No attempts for this test yet.</p>}
-              {attempts.map((attempt) => (
-                <div key={attempt.session_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                  <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={selectedAttemptIds.includes(attempt.session_id)}
-                      disabled={attempt.status !== 'COMPLETED' || attempt.overall_score === null || (
-                        selectedAttemptIds.length > 0
-                        && !selectedAttemptIds.includes(attempt.session_id)
-                        && attempts.find((item) => selectedAttemptIds.includes(item.session_id))?.test_version !== attempt.test_version
-                      )}
-                      onChange={() => toggleAttempt(attempt)}
-                    />
-                    {formatDate(attempt.created_at)} · {attempt.status.replaceAll('_', ' ')} · v{attempt.test_version}
-                    {attempt.overall_score !== null ? ` · ${attempt.overall_score}/100` : ''}
-                  </label>
-                  <Button variant="outline" size="sm" disabled={!consent || starting} onClick={() => void startTest(attempt.session_id)}>Retake</Button>
-                </div>
-              ))}
-              {selectedAttemptIds.length > 0 && <p className="text-xs text-slate-500">Comparisons are limited to attempts from the same test version.</p>}
-              <Button variant="outline" disabled={selectedAttemptIds.length < 2 || comparing} isLoading={comparing} onClick={() => void openComparison()}>
-                Compare selected attempts
-              </Button>
-            </section>
-
-            {comparison && (
-              <section aria-label="Attempt comparison" className="overflow-x-auto">
-                <h3 className="mb-2 font-semibold text-slate-900 dark:text-white">Comparison · test version {comparison.test_version}</h3>
-                <table className="min-w-full border-collapse text-left text-sm">
-                  <thead><tr><th className="p-2">Attempt</th><th className="p-2">Score</th><th className="p-2">Skill scores</th></tr></thead>
-                  <tbody>
-                    {comparison.attempts.map((attempt) => (
-                      <tr key={attempt.session_id} className="border-t border-slate-200 dark:border-slate-700">
-                        <th scope="row" className="p-2">#{attempt.session_id} · {formatDate(attempt.created_at)}</th>
-                        <td className="p-2">{attempt.overall_score ?? '—'}/100</td>
-                        <td className="p-2">{Object.entries(attempt.skill_breakdown ?? {}).map(([skill, score]) => `${titleCase(skill)} ${score}`).join(' · ') || 'No skill scores available'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </section>
-            )}
           </CardContent>
         </Card>
       )}

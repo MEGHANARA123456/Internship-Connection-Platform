@@ -86,16 +86,16 @@ describe('InterviewStudioAdminPage', () => {
   it('shows curated bank entries without any student-attempt content', async () => {
     render(<InterviewStudioAdminPage />)
 
-    expect(await screen.findByText(question.prompt)).toBeInTheDocument()
+    expect((await screen.findAllByText(question.prompt)).length).toBeGreaterThan(0)
     expect(screen.getByText(/does not expose student answers, transcripts, reports, or recordings/i)).toBeInTheDocument()
-    expect(screen.getByText(/DRAFT-for-review/)).toBeInTheDocument()
+    expect((await screen.findAllByText(/DRAFT-for-review/)).length).toBeGreaterThan(0)
   })
 
   it('approves a question through the review action and reports success', async () => {
     render(<InterviewStudioAdminPage />)
-    await screen.findByText(question.prompt)
+    await screen.findAllByText(question.prompt)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    fireEvent.click(screen.getAllByRole('button', { name: `Approve question ${question.id}` })[0])
 
     await waitFor(() => expect(approveAdminInterviewQuestion).toHaveBeenCalledWith(question.id))
     expect(await screen.findByRole('status')).toHaveTextContent('Question approved.')
@@ -146,7 +146,8 @@ describe('InterviewStudioAdminPage', () => {
     render(<InterviewStudioAdminPage />)
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Provider not configured: add INTERVIEW_LLM_API_KEY.')
+    expect(await screen.findByText('Set API_KEY in the backend environment and restart the API.')).toBeInTheDocument()
+    expect(screen.getByText('Provider not configured: add INTERVIEW_LLM_API_KEY')).toBeInTheDocument()
     expect(screen.queryByText('test-key')).not.toBeInTheDocument()
   })
 

@@ -1,12 +1,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { Check, Pencil, Plus, Power } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
 import { Badge } from '../../components/ui/Badge'
 import { DataList } from '../../components/ui/DataList'
+import { IconButton } from '../../components/ui/IconButton'
 import { queryClient } from '../../lib/queryClient'
 import {
   approveAdminInterviewQuestion,
-  createAdminInterviewCategory,
   createAdminInterviewQuestion,
   createAdminInterviewTest,
   getAdminInterviewAnalytics,
@@ -19,8 +20,6 @@ import {
   listAdminInterviewQuestions,
   listAdminInterviewTests,
   retryAdminInterviewFailures,
-  updateAdminInterviewCategory,
-  updateAdminInterviewDifficulty,
   updateAdminInterviewQuestion,
   updateAdminInterviewSettings,
   updateAdminInterviewTest,
@@ -253,7 +252,6 @@ export function InterviewStudioAdminPage() {
   })
   const [editingTest, setEditingTest] = useState<number | null>(null)
   const [taxonomy, setTaxonomy] = useState<Awaited<ReturnType<typeof getAdminInterviewTaxonomy>> | null>(null)
-  const [categoryDraft, setCategoryDraft] = useState({ slug: '', label: '' })
   const [settings, setSettings] = useState<AdminInterviewSettings | null>(null)
   const [providerStatus, setProviderStatus] = useState<AdminInterviewProviderStatus | null>(null)
   const [providerStatusError, setProviderStatusError] = useState('')
@@ -541,28 +539,59 @@ export function InterviewStudioAdminPage() {
           </label>
         </div>
         <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">{questionCategory === 'TECHNICAL' ? 'Technical' : 'HR'} questions ({visibleQuestions.length})</h2>
-        <div className="space-y-3">
-          {visibleQuestions.map((question) => (
-            <article key={question.id} className="rounded-xl border border-slate-200 p-4 dark:border-slate-800">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <strong>{question.category} · {question.difficulty}</strong>
-                <span className="text-xs">{question.review_status} · {question.active ? 'Active' : 'Inactive'}</span>
-              </div>
-              <p className="mt-2 text-sm">{question.prompt}</p>
-              <p className="mt-1 text-xs text-slate-500">{question.seed_key}</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button size="sm" variant="secondary" disabled={busy} onClick={() => editQuestion(question)}>Edit</Button>
-                {question.review_status !== 'APPROVED' && <Button size="sm" disabled={busy} onClick={() => void runMutation(() => approveAdminInterviewQuestion(question.id), 'Question approved.')}>Approve</Button>}
-                <Button size="sm" variant="secondary" disabled={busy} onClick={() => {
+        <DataList
+          ariaLabel="Interview question bank"
+          rows={visibleQuestions}
+          getRowKey={(question) => question.id}
+          emptyState="No matching questions."
+          columns={[
+            {
+              key: 'question',
+              header: 'Question',
+              render: (question) => (
+                <div className="max-w-3xl">
+                  <p className="font-medium text-slate-900 dark:text-white">{question.prompt}</p>
+                  <p className="mt-1 text-xs text-slate-500">{question.seed_key}</p>
+                </div>
+              ),
+            },
+            {
+              key: 'status',
+              header: 'State',
+              render: (question) => (
+                <div className="flex flex-wrap gap-1.5">
+                  <Badge>{question.review_status.replaceAll('_', ' ')}</Badge>
+                  <Badge variant={question.active ? 'emerald' : 'slate'}>{question.active ? 'Active' : 'Inactive'}</Badge>
+                </div>
+              ),
+            },
+          ]}
+          actions={(question) => (
+            <>
+              <IconButton icon={Pencil} aria-label={`Edit question ${question.id}`} onClick={() => editQuestion(question)} />
+              {question.review_status !== 'APPROVED' && (
+                <IconButton
+                  icon={Check}
+                  variant="primary"
+                  aria-label={`Approve question ${question.id}`}
+                  disabled={busy}
+                  onClick={() => void runMutation(() => approveAdminInterviewQuestion(question.id), 'Question approved.')}
+                />
+              )}
+              <IconButton
+                icon={Power}
+                aria-label={`${question.active ? 'Deactivate' : 'Reactivate'} question ${question.id}`}
+                title={`${question.active ? 'Deactivate' : 'Reactivate'} question`}
+                disabled={busy}
+                onClick={() => {
                   if (window.confirm(`${question.active ? 'Deactivate' : 'Reactivate'} this question? Active tests using it will also be deactivated.`)) {
                     void runMutation(() => updateAdminInterviewQuestion(question.id, { active: !question.active }), 'Question status updated.')
                   }
-                }}>{question.active ? 'Deactivate' : 'Reactivate'}</Button>
-              </div>
-            </article>
-          ))}
-          {!visibleQuestions.length && <p className="rounded-xl border border-dashed p-6 text-sm text-slate-500">No matching questions.</p>}
-        </div>
+                }}
+              />
+            </>
+          )}
+        />
       </section>
       <form className="h-fit space-y-3 rounded-xl border border-slate-200 p-4 dark:border-slate-800" onSubmit={(event) => void submitQuestion(event)}>
         <h2 className="font-semibold">{editingQuestion === null ? 'Add question' : 'Edit question'}</h2>
@@ -571,7 +600,7 @@ export function InterviewStudioAdminPage() {
         <label className="block text-sm">Prompt<textarea required minLength={8} maxLength={3000} className={inputClass()} value={questionDraft.prompt} onChange={(event) => setQuestionDraft({ ...questionDraft, prompt: event.target.value })} /></label>
         <label className="block text-sm">Hint<textarea required minLength={3} maxLength={1500} className={inputClass()} value={questionDraft.hint} onChange={(event) => setQuestionDraft({ ...questionDraft, hint: event.target.value })} /></label>
         <label className="block text-sm">Evaluation rubric<textarea required minLength={5} maxLength={2500} className={inputClass()} value={questionDraft.rubric} onChange={(event) => setQuestionDraft({ ...questionDraft, rubric: event.target.value })} /></label>
-        <div className="flex gap-2"><Button disabled={busy}>{editingQuestion === null ? 'Add draft' : 'Save changes'}</Button>{editingQuestion !== null && <Button type="button" variant="secondary" onClick={() => { setEditingQuestion(null); setQuestionDraft(blankQuestion) }}>Cancel</Button>}</div>
+        <div className="flex gap-2"><Button disabled={busy} leftIcon={editingQuestion === null ? <Plus className="h-4 w-4" /> : undefined}>{editingQuestion === null ? 'Add draft' : 'Save changes'}</Button>{editingQuestion !== null && <Button type="button" variant="secondary" onClick={() => { setEditingQuestion(null); setQuestionDraft(blankQuestion) }}>Cancel</Button>}</div>
       </form>
     </div>
   )
@@ -615,7 +644,7 @@ export function InterviewStudioAdminPage() {
               render: (test) => <div className="flex flex-wrap items-center gap-2"><span>v{test.version}</span><Badge variant={test.active ? 'emerald' : 'slate'}>{test.active ? 'Active' : 'Inactive'}</Badge></div>,
             },
           ]}
-          actions={(test) => <Button size="sm" variant="secondary" disabled={busy} onClick={() => editTest(test)}>Edit / assign questions</Button>}
+          actions={(test) => <IconButton icon={Pencil} aria-label={`Edit mock test ${test.title}`} onClick={() => editTest(test)} />}
         />
       </section>
       <form className="h-fit space-y-3 rounded-xl border border-slate-200 p-4 dark:border-slate-800" onSubmit={(event) => void submitTest(event)}>
@@ -646,35 +675,6 @@ export function InterviewStudioAdminPage() {
           <p className="text-sm text-slate-500">{questionCounts[category] ?? 0} questions · {testCounts[category] ?? 0} mock tests</p>
         </article>
       ))}
-      <form className="space-y-2 rounded-xl border border-slate-200 p-4 dark:border-slate-800" onSubmit={(event) => {
-        event.preventDefault()
-        void runMutation(async () => {
-          await createAdminInterviewCategory(categoryDraft)
-          setCategoryDraft({ slug: '', label: '' })
-        }, 'Category created.')
-      }}>
-        <strong>Add category</strong>
-        <label className="block text-sm">Stable slug<input required pattern="[a-z0-9-]+" minLength={2} maxLength={50} className={inputClass()} value={categoryDraft.slug} onChange={(event) => setCategoryDraft({ ...categoryDraft, slug: event.target.value })} /></label>
-        <label className="block text-sm">Label<input required minLength={2} maxLength={100} className={inputClass()} value={categoryDraft.label} onChange={(event) => setCategoryDraft({ ...categoryDraft, label: event.target.value })} /></label>
-        <Button size="sm" disabled={busy}>Create category</Button>
-      </form>
-      {taxonomy?.categories.map((item) => <form key={item.id} className="space-y-2 rounded-xl border border-slate-200 p-4 dark:border-slate-800" onSubmit={(event) => {
-        event.preventDefault()
-        void runMutation(() => updateAdminInterviewCategory(item.id, item), 'Category updated.')
-      }}>
-        <strong>{item.slug}</strong><label className="block text-sm">Label<input className={inputClass()} value={item.label} onChange={(event) => setTaxonomy((current) => current && ({ ...current, categories: current.categories.map((row) => row.id === item.id ? { ...row, label: event.target.value } : row) }))} /></label>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={item.active} onChange={(event) => setTaxonomy((current) => current && ({ ...current, categories: current.categories.map((row) => row.id === item.id ? { ...row, active: event.target.checked } : row) }))} />Active</label>
-        <Button size="sm">Save category</Button>
-      </form>)}
-      {taxonomy?.difficulties.map((item) => <form key={item.code} className="space-y-2 rounded-xl border border-slate-200 p-4 dark:border-slate-800" onSubmit={(event) => {
-        event.preventDefault()
-        void runMutation(() => updateAdminInterviewDifficulty(item.code, item), 'Difficulty label updated.')
-      }}>
-        <strong>{item.code}</strong><label className="block text-sm">Label<input className={inputClass()} value={item.label} onChange={(event) => setTaxonomy((current) => current && ({ ...current, difficulties: current.difficulties.map((row) => row.code === item.code ? { ...row, label: event.target.value } : row) }))} /></label>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={item.active} onChange={(event) => setTaxonomy((current) => current && ({ ...current, difficulties: current.difficulties.map((row) => row.code === item.code ? { ...row, active: event.target.checked } : row) }))} />Active</label>
-        <Button size="sm">Save difficulty</Button>
-      </form>)}
-      <p className="text-sm text-slate-500">Category and difficulty codes are stable identifiers; labels can be edited. Deactivated values are excluded from new student test catalogs.</p>
     </div>
   )
 

@@ -3,24 +3,20 @@ import '@testing-library/jest-dom/vitest'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  compareMockTestAttempts,
   createMockTestAttempt,
   getMockTest,
   getMockTestRecommendation,
   listMockTests,
-  listMockTestAttempts,
   startInterviewSession,
 } from '../../services/interviewService'
-import type { InterviewSession, MockTest, MockTestAttempt, MockTestDetail } from '../../types/interview'
+import type { InterviewSession, MockTest, MockTestDetail } from '../../types/interview'
 import { MockTestsLibrary } from './MockTestsLibrary'
 
 vi.mock('../../services/interviewService', () => ({
-  compareMockTestAttempts: vi.fn(),
   createMockTestAttempt: vi.fn(),
   getMockTest: vi.fn(),
   getMockTestRecommendation: vi.fn(),
   listMockTests: vi.fn(),
-  listMockTestAttempts: vi.fn(),
   startInterviewSession: vi.fn(),
 }))
 
@@ -59,31 +55,6 @@ const mockTestDetail: MockTestDetail = {
   version: 1,
 }
 
-const mockAttempts: MockTestAttempt[] = [
-  {
-    session_id: 18,
-    test_version: 1,
-    session_type: 'PRACTICE',
-    interview_mode: 'TEXT',
-    status: 'COMPLETED',
-    created_at: '2026-11-18T10:00:00Z',
-    completed_at: '2026-11-18T10:10:00Z',
-    overall_score: 72,
-    skill_breakdown: { motivation: 72 },
-  },
-  {
-    session_id: 19,
-    test_version: 1,
-    session_type: 'PRACTICE',
-    interview_mode: 'TEXT',
-    status: 'COMPLETED',
-    created_at: '2026-11-19T10:00:00Z',
-    completed_at: '2026-11-19T10:10:00Z',
-    overall_score: 78,
-    skill_breakdown: { motivation: 78 },
-  },
-]
-
 function LocationProbe() {
   const location = useLocation()
   return <output aria-label="Current path">{location.pathname}</output>
@@ -103,12 +74,6 @@ beforeEach(() => {
   vi.mocked(listMockTests).mockResolvedValue([mockTest])
   vi.mocked(getMockTestRecommendation).mockResolvedValue({ weakest_skill: null, recommended_test: null })
   vi.mocked(getMockTest).mockResolvedValue(mockTestDetail)
-  vi.mocked(listMockTestAttempts).mockResolvedValue(mockAttempts)
-  vi.mocked(compareMockTestAttempts).mockResolvedValue({
-    mock_test_id: 8,
-    test_version: 1,
-    attempts: mockAttempts,
-  })
   vi.mocked(createMockTestAttempt).mockResolvedValue({
     id: 25,
     session_type: 'PRACTICE',
@@ -151,7 +116,7 @@ beforeEach(() => {
 describe('MockTestsLibrary', () => {
   it('filters catalog tests using the selected criteria', async () => {
     renderLibrary()
-    await screen.findByText('HR Foundations: Quick Practice')
+    await screen.findAllByText('HR Foundations: Quick Practice')
 
     fireEvent.click(screen.getByRole('button', { name: 'Technical' }))
     fireEvent.change(screen.getByLabelText('Filter by format'), { target: { value: 'TOPIC_WISE' } })
@@ -166,7 +131,7 @@ describe('MockTestsLibrary', () => {
 
   it('requires AI consent and starts the chosen mode in a new session', async () => {
     renderLibrary()
-    fireEvent.click(await screen.findByRole('button', { name: /Test details and attempts/ }))
+    fireEvent.click((await screen.findAllByRole('button', { name: 'View HR Foundations: Quick Practice details' }))[0])
     expect(await screen.findByText('Questions are revealed during the interview.')).toBeInTheDocument()
     expect(screen.queryByText('Tell me about yourself.')).not.toBeInTheDocument()
     const startButton = screen.getByRole('button', { name: 'Start mock test' })
@@ -188,32 +153,17 @@ describe('MockTestsLibrary', () => {
     })
   })
 
-  it('keeps question text hidden while preserving attempt comparison and retake actions', async () => {
+  it('shows metadata and the start form without exposing question or attempt lists', async () => {
     renderLibrary()
-    fireEvent.click(await screen.findByRole('button', { name: /Test details and attempts/ }))
-    await screen.findByText('Your attempts')
-    const attemptCheckboxes = screen.getAllByRole('checkbox')
-    expect(attemptCheckboxes).toHaveLength(3)
-    fireEvent.click(attemptCheckboxes[1])
-    fireEvent.click(attemptCheckboxes[2])
-    fireEvent.click(screen.getByRole('button', { name: 'Compare selected attempts' }))
-    expect(await screen.findByText(/Comparison · test version 1/)).toBeInTheDocument()
-    await waitFor(() => expect(compareMockTestAttempts).toHaveBeenCalledWith(8, [18, 19]))
-
-    fireEvent.click(screen.getByRole('checkbox', { name: /answers are sent to an external AI provider/i }))
-    fireEvent.click(screen.getAllByRole('button', { name: 'Retake' })[0])
-    await waitFor(() => expect(createMockTestAttempt).toHaveBeenCalledWith(8, {
-      session_type: 'PRACTICE',
-      interview_mode: 'TEXT',
-      consent_acknowledged: true,
-      retake_of_session_id: 18,
-    }))
-    expect(await screen.findByRole('heading', { name: 'HR Foundations: Quick Practice', level: 2 })).toBeInTheDocument()
+    fireEvent.click((await screen.findAllByRole('button', { name: 'View HR Foundations: Quick Practice details' }))[0])
+    expect(await screen.findByRole('heading', { name: 'HR Foundations: Quick Practice' })).toBeInTheDocument()
     expect(screen.getByText('Version 1 · 5 questions · ~10 minutes')).toBeInTheDocument()
-    const questionNote = screen.getByText('Questions are revealed during the interview.')
-    expect(questionNote.parentElement).toHaveTextContent('Practice interview introductions.')
+    expect(screen.getByText('Practice interview introductions.', { selector: 'p.text-sm' })).toBeInTheDocument()
+    expect(screen.getByText('Questions are revealed during the interview.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Start a new attempt' })).toBeInTheDocument()
     expect(screen.queryByText('Tell me about yourself.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Your attempts')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Question list' })).not.toBeInTheDocument()
     await waitFor(() => expect(getMockTest).toHaveBeenCalledWith(8))
   })
 })
