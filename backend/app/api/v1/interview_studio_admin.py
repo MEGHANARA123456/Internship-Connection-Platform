@@ -6,7 +6,7 @@ recording content.
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from app.api.v1.dependencies import DbSession, require_roles
 from app.models import User, UserRole
@@ -224,7 +224,7 @@ async def get_interview_failures(db: DbSession) -> dict[str, Any]:
     return await get_failure_monitor(db)
 
 
-@router.post("/failures/retry")
+@router.post("/failures/retry", status_code=status.HTTP_202_ACCEPTED)
 async def post_retry_failed_evaluations(
     db: DbSession,
     actor: admin_user,

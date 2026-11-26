@@ -1,27 +1,27 @@
-# Base Python image for the backend service
-FROM python:3.12-slim
+FROM python:3.11-slim
 
-# Set the app work directory inside the container
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
 WORKDIR /app
 
-# Disable bytecode generation and keep Python logs unbuffered
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 app \
+    && mkdir -p /app/storage \
+    && chown -R app:app /app
 
-# ffprobe is used to validate uploaded audio duration without storing the audio.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg
+COPY backend/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Install Python dependencies required by the backend
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --chown=app:app backend/app /app/app
+COPY --chown=app:app backend/kb /app/kb
+COPY --chown=app:app backend/alembic /app/alembic
+COPY --chown=app:app backend/alembic.ini /app/alembic.ini
 
-# Copy all application source code and migration files
-COPY backend/app ./app
-COPY backend/kb ./kb
-COPY backend/alembic ./alembic
-COPY backend/alembic.ini .
+USER app
+EXPOSE 8010
 
-# Expose the FastAPI port
-EXPOSE 8000
-
-# The FastAPI lifespan applies Alembic migrations before serving requests.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port \"${PORT:-8010}\" --workers 1"]

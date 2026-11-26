@@ -1,7 +1,7 @@
 """create metadata rows for question-only skill topics
 
 Revision ID: 0051_skill_topic_repair
-Revises: 0050_interview_ai_question_snapshots
+Revises: 0050_interview_ai_snapshots
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0051_skill_topic_repair"
-down_revision = "0050_interview_ai_question_snapshots"
+down_revision = "0050_interview_ai_snapshots"
 branch_labels = None
 depends_on = None
 

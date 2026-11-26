@@ -2,6 +2,7 @@ import { api } from '../api/client'
 import type {
   InterviewAnswerResult,
   InterviewAnswerRecord,
+  InterviewEvaluationRetryResult,
   InterviewAudioTranscript,
   InterviewNextQuestion,
   InterviewReport,
@@ -12,6 +13,7 @@ import type {
   InterviewSessionDetail,
   InterviewVideoRecording,
   InterviewVideoRecordingState,
+  InterviewVideoPolicy,
   MockTest,
   MockTestDetail,
   MockTestAttempt,
@@ -115,6 +117,11 @@ export async function getInterviewVideoRecordingState(
   return data
 }
 
+export async function getInterviewVideoRecordingPolicy(): Promise<InterviewVideoPolicy> {
+  const { data } = await api.get<InterviewVideoPolicy>('/interviews/video-recording-policy')
+  return data
+}
+
 export async function acknowledgeInterviewVideoRecordingConsent(
   sessionId: number,
   consentVersion: string,
@@ -122,6 +129,15 @@ export async function acknowledgeInterviewVideoRecordingConsent(
   await api.post(`${sessionsPath}/${sessionId}/recordings/consent`, {
     acknowledged: true,
     consent_version: consentVersion,
+  })
+}
+
+export async function setInterviewVideoStorageConsent(
+  sessionId: number,
+  acknowledged: boolean,
+): Promise<void> {
+  await api.put(`${sessionsPath}/${sessionId}/recordings/storage-consent`, {
+    acknowledged,
   })
 }
 
@@ -178,6 +194,16 @@ export async function deleteInterviewVideoRecording(
   await api.delete(`${sessionsPath}/${sessionId}/recordings/${recordingId}`)
 }
 
+export async function retryInterviewVideoRecording(
+  sessionId: number,
+  recordingId: number,
+): Promise<InterviewVideoRecording> {
+  const { data } = await api.post<InterviewVideoRecording>(
+    `${sessionsPath}/${sessionId}/recordings/${recordingId}/retry`,
+  )
+  return data
+}
+
 export async function completeInterviewSession(sessionId: number): Promise<InterviewReport> {
   const { data } = await api.post<InterviewReport>(`${sessionsPath}/${sessionId}/complete`)
   return data
@@ -190,8 +216,8 @@ export async function getInterviewReport(sessionId: number): Promise<InterviewRe
 
 export async function retryInterviewEvaluation(
   sessionId: number,
-): Promise<InterviewReport | InterviewAnswerResult[]> {
-  const { data } = await api.post<InterviewReport | InterviewAnswerResult[]>(
+): Promise<InterviewEvaluationRetryResult> {
+  const { data } = await api.post<InterviewEvaluationRetryResult>(
     `${sessionsPath}/${sessionId}/evaluation/retry`,
   )
   return data
@@ -220,6 +246,7 @@ export async function createMockTestAttempt(
     session_type: 'PRACTICE' | 'ASSESSMENT'
     interview_mode: 'TEXT' | 'VOICE' | 'VIDEO'
     consent_acknowledged: true
+    video_storage_consent?: boolean
     retake_of_session_id?: number
   },
 ): Promise<InterviewSession> {

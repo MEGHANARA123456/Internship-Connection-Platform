@@ -40,6 +40,19 @@ type CompanyCounts = {
   upcoming_interviews: number
 }
 
+type NavigationCounts = StudentCounts & CompanyCounts
+
+function retryAfterMilliseconds(error: unknown): number {
+  if (typeof error !== 'object' || error === null || !('response' in error)) return 0
+  const response = (error as { response?: { headers?: Record<string, unknown> } }).response
+  const value = response?.headers?.['retry-after'] ?? response?.headers?.['Retry-After']
+  if (typeof value !== 'string') return 0
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)
+  const dateDelay = Date.parse(value) - Date.now()
+  return Number.isFinite(dateDelay) ? Math.max(0, dateDelay) : 0
+}
+
 const quickLinks: Record<Exclude<NavigationRole, 'GUEST'>, Array<{ label: string; url: string }>> = {
   STUDENT: [
     { label: 'Applications', url: routes.applications() },
@@ -164,6 +177,11 @@ export function Navbar() {
   })
   const navMenuRef = useRef<HTMLDivElement>(null)
   const internshipsMenuRef = useRef<HTMLDivElement>(null)
+  const countsAccessToken = useRef<string | null>(null)
+  const countsLastRequestedAt = useRef(0)
+  const countsRetryAt = useRef(0)
+  const countsFailures = useRef(0)
+  const countsRequest = useRef<Promise<NavigationCounts> | null>(null)
 
   const role: NavigationRole = session?.role ?? 'GUEST'
   const config = navigationConfig[role]
@@ -189,6 +207,13 @@ export function Navbar() {
   }, [])
 
   useEffect(() => {
+    if (countsAccessToken.current !== session?.accessToken) {
+      countsAccessToken.current = session?.accessToken ?? null
+      countsLastRequestedAt.current = 0
+      countsRetryAt.current = 0
+      countsFailures.current = 0
+      countsRequest.current = null
+    }
     if (!session?.accessToken) {
       setUnreadCount(0)
       setStudentNavCounts({
@@ -200,26 +225,65 @@ export function Navbar() {
       setCompanyNavCounts({ new_applicants: 0, upcoming_interviews: 0 })
       return
     }
+
     let mounted = true
+    const fetchCounts = (): Promise<NavigationCounts | null> => {
+      if (countsRequest.current) return countsRequest.current
+      const now = Date.now()
+      const nextAllowedAt = Math.max(
+        countsLastRequestedAt.current + 60_000,
+        countsRetryAt.current,
+      )
+      if (now < nextAllowedAt) return Promise.resolve(null)
+
+      countsLastRequestedAt.current = now
+      let request: Promise<NavigationCounts>
+      request = api.get('/navigation/counts')
+        .then(({ data }) => {
+          countsFailures.current = 0
+          return {
+            unread_notifications: Number(data?.unread_notifications || 0),
+            invites_new: Number(data?.invites_new || 0),
+            application_updates: Number(data?.application_updates || 0),
+            saved: Number(data?.saved || 0),
+            new_applicants: Number(data?.new_applicants || 0),
+            upcoming_interviews: Number(data?.upcoming_interviews || 0),
+          }
+        })
+        .catch((error: unknown) => {
+          countsFailures.current += 1
+          const backoffMs = Math.min(15 * 60_000, 60_000 * (2 ** (countsFailures.current - 1)))
+          countsRetryAt.current = Math.max(
+            countsLastRequestedAt.current + 60_000,
+            Date.now() + backoffMs,
+            Date.now() + retryAfterMilliseconds(error),
+          )
+          throw error
+        })
+        .finally(() => {
+          if (countsRequest.current === request) countsRequest.current = null
+        })
+      countsRequest.current = request
+      return request
+    }
     const refresh = async () => {
-      if (document.visibilityState !== 'visible') return
+      if (!mounted || document.visibilityState !== 'visible') return
       try {
-        const res = await api.get('/navigation/counts')
-        if (mounted) {
-          setUnreadCount(Number(res.data?.unread_notifications || 0))
-          setStudentNavCounts({
-            unread_notifications: Number(res.data?.unread_notifications || 0),
-            invites_new: Number(res.data?.invites_new || 0),
-            application_updates: Number(res.data?.application_updates || 0),
-            saved: Number(res.data?.saved || 0),
-          })
-          setCompanyNavCounts({
-            new_applicants: Number(res.data?.new_applicants || 0),
-            upcoming_interviews: Number(res.data?.upcoming_interviews || 0),
-          })
-        }
+        const counts = await fetchCounts()
+        if (!mounted || !counts) return
+        setUnreadCount(counts.unread_notifications)
+        setStudentNavCounts({
+          unread_notifications: counts.unread_notifications,
+          invites_new: counts.invites_new,
+          application_updates: counts.application_updates,
+          saved: counts.saved,
+        })
+        setCompanyNavCounts({
+          new_applicants: counts.new_applicants,
+          upcoming_interviews: counts.upcoming_interviews,
+        })
       } catch (error) {
-        console.error('Failed to refresh navigation counts:', error)
+        if (mounted) console.error('Failed to refresh navigation counts:', error)
       }
     }
     const handleNotification = (event: Event) => {
@@ -234,18 +298,20 @@ export function Navbar() {
     }
     const handleCountsRefresh = () => void refresh()
     void refresh()
+    const intervalId = window.setInterval(() => void refresh(), 60_000)
     window.addEventListener('focus', handleVisibilityChange)
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('app:notification', handleNotification)
     window.addEventListener('app:navigation-counts-refresh', handleCountsRefresh)
     return () => {
       mounted = false
+      window.clearInterval(intervalId)
       window.removeEventListener('focus', handleVisibilityChange)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('app:notification', handleNotification)
       window.removeEventListener('app:navigation-counts-refresh', handleCountsRefresh)
     }
-  }, [session?.accessToken, role, location.pathname])
+  }, [session?.accessToken])
 
   useEffect(() => {
     const outside = (event: MouseEvent) => {

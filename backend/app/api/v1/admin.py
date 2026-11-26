@@ -3,10 +3,12 @@
 # -----------------------------------------------------------------------------
 
 from datetime import date, datetime, timedelta, timezone
+import asyncio
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy import String, case, cast, exists, func, or_, select
 from sqlalchemy.sql import ColumnElement
 
@@ -70,7 +72,7 @@ from app.services.account_deletion import erase_user
 from app.services.email_validation import validate_email_format
 from app.services.mail import send_dev_email
 from app.services.notify import notify
-from app.services.company_documents import company_document_path
+from app.services.asset_storage import asset_key, get_asset_storage, sanitize_filename
 from app.services.internship_closing import close_internship as close_internship_service, send_closure_emails
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_roles(UserRole.ADMIN))]) # type: ignore
@@ -765,7 +767,7 @@ async def company_verification_documents(
 @router.get("/companies/{user_id}/documents/{document_id}/download")
 async def download_company_verification_document(
     user_id: int, document_id: int, db: DbSession, user: admin_user, request: Request
-) -> FileResponse:
+) -> StreamingResponse:
     """Return the stored verification document file, or a not-found response when it is unavailable."""
     document = await db.scalar(
         select(CompanyDocument).where(
@@ -775,8 +777,9 @@ async def download_company_verification_document(
     )
     if document is None:
         raise HTTPException(status_code=404, detail="Company document not found")
-    path = company_document_path(document.stored_filename)
-    if not path.is_file():
+    key = document.storage_key or asset_key("company_documents", document.stored_filename)
+    storage = get_asset_storage(document.storage_backend, settings=get_settings())
+    if not await asyncio.to_thread(storage.exists, key):
         raise HTTPException(status_code=404, detail="Company document file not found")
     await write_audit(
         db,
@@ -788,7 +791,13 @@ async def download_company_verification_document(
         ip_address=_get_ip(request),
     )
     await db.commit()
-    return FileResponse(path, media_type=document.content_type, filename=document.original_filename)
+    stream = await asyncio.to_thread(storage.open_stream, key)
+    filename = quote(sanitize_filename(document.original_filename, fallback="document"))
+    return StreamingResponse(
+        stream,
+        media_type=document.content_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 
 @router.get("/verifications")

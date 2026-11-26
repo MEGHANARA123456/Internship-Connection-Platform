@@ -86,10 +86,9 @@ async def _create_published_internship(client: AsyncClient, sessions, company_he
 
 @pytest.mark.anyio
 async def test_closing_internship_notifies_active_applicants(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.api.v1 import internships
-    from app.services import notify
+    from app.services import internship_closing, notify
 
-    monkeypatch.setattr(internships, "send_dev_email", _noop_email)
+    monkeypatch.setattr(internship_closing, "send_dev_email", _noop_email)
     monkeypatch.setattr(notify, "send_dev_email", _noop_email)
     client, sessions, engine = await _create_client()
     try:

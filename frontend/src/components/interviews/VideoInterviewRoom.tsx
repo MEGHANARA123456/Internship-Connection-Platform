@@ -23,7 +23,6 @@ import { InterviewVideoRecordingPanel } from './InterviewVideoRecordingPanel'
 
 interface VideoInterviewRoomProps {
   sessionId: number
-  questionText: string
   children: (stream: MediaStream | null) => ReactNode
   onBusyChange: (busy: boolean) => void
 }
@@ -55,14 +54,12 @@ function mediaErrorMessage(error: unknown, device: 'camera' | 'microphone'): str
 
 function secureMediaAvailable(): boolean {
   return window.isSecureContext
-    || window.location.hostname === 'localhost'
-    || window.location.hostname === '127.0.0.1'
 }
 
 export const VideoInterviewRoom = forwardRef<
   VideoInterviewRoomHandle,
   VideoInterviewRoomProps
->(function VideoInterviewRoom({ sessionId, questionText, children, onBusyChange }, ref) {
+>(function VideoInterviewRoom({ sessionId, children, onBusyChange }, ref) {
   const videoElementRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
@@ -79,7 +76,6 @@ export const VideoInterviewRoom = forwardRef<
   const [backendConnected, setBackendConnected] = useState<boolean | null>(null)
   const [cameraEnabled, setCameraEnabled] = useState(true)
   const [muted, setMuted] = useState(false)
-  const [captionsVisible, setCaptionsVisible] = useState(true)
   const [recordingConsentState, setRecordingConsentState] =
     useState<InterviewVideoRecordingState | null>(null)
   const [consentChecked, setConsentChecked] = useState(false)
@@ -87,10 +83,25 @@ export const VideoInterviewRoom = forwardRef<
   const [uploading, setUploading] = useState(false)
   const [pendingChunkCount, setPendingChunkCount] = useState(0)
   const [panelRefreshKey, setPanelRefreshKey] = useState(0)
+  const storageWorkPending = recordingConsentState?.recordings.some((recording) => (
+    recording.status === 'PENDING_UPLOAD'
+    || recording.status === 'PENDING_DELETE'
+    || (recording.status === 'UPLOADING' && recording.finalized)
+  )) ?? false
+
+  useEffect(() => {
+    if (!uploading && pendingChunkCount === 0 && !storageWorkPending) return
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeLeaving)
+    return () => window.removeEventListener('beforeunload', warnBeforeLeaving)
+  }, [pendingChunkCount, storageWorkPending, uploading])
 
   const applyRecordingState = useCallback((state: InterviewVideoRecordingState) => {
     setRecordingConsentState(state)
-    if (state.recording?.status === 'UPLOADING') {
+    if (state.recording?.status === 'UPLOADING' && !state.recording.finalized) {
       recordingIdRef.current = state.recording.id
       nextChunkIndexRef.current = state.recording.next_chunk_index
       recordingMimeRef.current = state.recording.mime_type || 'video/webm'
@@ -139,7 +150,7 @@ export const VideoInterviewRoom = forwardRef<
     setCameraError('')
     setMicrophoneError('')
     if (!secureMediaAvailable()) {
-      setCameraError('Camera and microphone access requires HTTPS or localhost.')
+      setCameraError('Camera and microphone access requires a secure context (HTTPS).')
       return
     }
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -268,7 +279,10 @@ export const VideoInterviewRoom = forwardRef<
       setRoomError('Video recording is not supported in this browser. You can continue without recording.')
       return
     }
-    if (recordingConsentState.recording?.status === 'UPLOADING') {
+    if (
+      recordingConsentState.recording?.status === 'UPLOADING'
+      || recordingConsentState.recording?.status === 'PENDING_UPLOAD'
+    ) {
       setRoomError('A saved segment is waiting to be finalized. Finalize it before starting a new segment.')
       return
     }
@@ -398,22 +412,24 @@ export const VideoInterviewRoom = forwardRef<
               <h2 className="font-semibold text-slate-900 dark:text-white">Interviewer</h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">Static avatar · no AI-generated video</p>
             </div>
-            <Button type="button" variant="outline" size="sm" className="ml-auto" onClick={() => setCaptionsVisible((value) => !value)}>
-              Captions {captionsVisible ? 'on' : 'off'}
-            </Button>
           </div>
-          {captionsVisible && <p aria-live="polite" className="select-none rounded-lg bg-slate-50 p-4 text-base leading-7 text-slate-800 dark:bg-slate-800 dark:text-slate-100">{questionText}</p>}
         </section>
       </div>
 
+      {children(sharedStream)}
+
       <section aria-label="Optional video recording consent" className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
         <h2 className="font-semibold text-amber-950 dark:text-amber-100">Optional session recording · off by default</h2>
-        {recordingConsentState?.consent?.acknowledged ? (
+        {recordingConsentState && !recordingConsentState.video_storage_consent ? (
+          <p role="status" className="text-sm text-amber-950 dark:text-amber-100">
+            Video storage consent was not given before the interview. Recording is unavailable for this session.
+          </p>
+        ) : recordingConsentState?.consent?.acknowledged ? (
           <p role="status" className="text-sm text-amber-950 dark:text-amber-100">Recording consent is saved. Recording starts only when you choose Start recording.</p>
         ) : (
           <>
             <p className="text-sm leading-6 text-amber-950 dark:text-amber-100">
-              If enabled, the webcam and microphone are recorded for your private playback and self-review. Recordings are stored in private storage, visible only to you, and deleted automatically within 30 days. You can delete them at any time. They are not used for facial, emotion, honesty, appearance, or hiring analysis.
+              If enabled, the webcam and microphone are recorded for your private playback and self-review. Recordings use the platform's configured private storage, are visible only to you, and are deleted automatically within {recordingConsentState?.retention_days ?? 30} days. You can delete them at any time. They are not used for facial, emotion, honesty, appearance, or hiring analysis.
             </p>
             <label className="flex items-start gap-3 text-sm text-amber-950 dark:text-amber-100">
               <input type="checkbox" checked={consentChecked} onChange={(event) => setConsentChecked(event.target.checked)} />
@@ -424,10 +440,10 @@ export const VideoInterviewRoom = forwardRef<
             </Button>
           </>
         )}
-        {recordingConsentState?.consent?.acknowledged && (
+        {recordingConsentState?.video_storage_consent && recordingConsentState?.consent?.acknowledged && (
           <div className="flex flex-wrap gap-2">
             {!capturing ? (
-              <Button type="button" variant="outline" disabled={uploading || recordingConsentState.recording?.status === 'UPLOADING'} onClick={() => void startRecording()}>
+              <Button type="button" variant="outline" disabled={uploading || recordingConsentState.recording?.status === 'UPLOADING' || recordingConsentState.recording?.status === 'PENDING_UPLOAD'} onClick={() => void startRecording()}>
                 Start recording
               </Button>
             ) : (
@@ -441,14 +457,13 @@ export const VideoInterviewRoom = forwardRef<
           </div>
         )}
         {roomError && <p role="alert" className="text-sm text-rose-800 dark:text-rose-200">{roomError}</p>}
-        {recordingConsentState?.recording?.status === 'UPLOADING' && !capturing && (
+        {recordingConsentState?.recording?.status === 'UPLOADING' && !recordingConsentState.recording.finalized && !capturing && (
           <p role="status" className="text-sm text-amber-950 dark:text-amber-100">
             A saved segment is waiting to be finalized. This can happen after a refresh or interruption; uploaded chunks are preserved.
           </p>
         )}
       </section>
 
-      {children(sharedStream)}
       <InterviewVideoRecordingPanel
         sessionId={sessionId}
         refreshKey={panelRefreshKey}

@@ -104,11 +104,6 @@ _LIVE_AND_REFUSAL = {
 def _golden_questions(role: str) -> list[GoldenQuestion]:
     """Create exactly forty checks per role, including phrasing variants and live-data cases."""
     docs = {"student": _STUDENT_DOCS, "company": _COMPANY_DOCS, "admin": _ADMIN_DOCS}[role]
-    pages = {
-        "student": "applications",
-        "company": "company-applicants",
-        "admin": "admin-skills",
-    }
     questions = [
         GoldenQuestion(question, "source", source_id, page)
         for question, source_id, page in docs

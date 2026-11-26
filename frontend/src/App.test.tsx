@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import axios, { AxiosError, type AxiosAdapter, type AxiosResponse } from 'axios'
@@ -166,6 +167,40 @@ describe('platform shell', () => {
 
     await waitFor(() => expect(screen.getByText('/opportunities')).toBeInTheDocument())
     expect(screen.queryByRole('heading', { name: 'Sign In' })).not.toBeInTheDocument()
+  })
+
+  it('loads the admin verification page with at most one auth and navigation counts request', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'admin-layout-request-check-token',
+      refreshToken: 'admin-layout-request-check-refresh',
+      role: 'ADMIN',
+      userId: 95,
+      email: 'admin@example.com',
+    })
+    const get = vi.spyOn(api, 'get').mockImplementation(async (path) => {
+      if (path === '/auth/me') {
+        return { data: { id: 95, email: 'admin@example.com', name: 'Admin' } } as never
+      }
+      if (path === '/navigation/counts') {
+        return { data: { unread_notifications: 0 } } as never
+      }
+      if (path === '/admin/verifications') return { data: [] } as never
+      return { data: [] } as never
+    })
+
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/admin/verifications']}>
+          <App />
+        </MemoryRouter>
+      </StrictMode>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Company Verifications' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(get.mock.calls.filter(([path]) => path === '/auth/me')).toHaveLength(1)
+      expect(get.mock.calls.filter(([path]) => path === '/navigation/counts')).toHaveLength(1)
+    })
   })
 
   it.each([

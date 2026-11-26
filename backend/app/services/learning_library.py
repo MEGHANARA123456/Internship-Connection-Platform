@@ -19,7 +19,6 @@ from app.models import (
     StudentLearningPreference,
     StudentResourceProgress,
 )
-from app.models.interview_studio import MockTestCategory
 from app.models.user import User
 from app.schemas.learning_library import (
     LearningCategoryCreate,

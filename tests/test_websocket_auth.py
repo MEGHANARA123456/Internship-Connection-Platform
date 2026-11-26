@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 import pytest
@@ -17,6 +18,8 @@ class FakeWebSocket:
         self.accepted = False
         self.close_code: int | None = None
         self.sent: list[dict] = []
+        self.auth_token = token
+        self.auth_sent = False
 
     async def accept(self):
         self.accepted = True
@@ -28,6 +31,12 @@ class FakeWebSocket:
         self.sent.append(data)
 
     async def receive_text(self):
+        if not self.auth_sent:
+            self.auth_sent = True
+            message = {"type": "authenticate"}
+            if self.auth_token:
+                message["token"] = self.auth_token
+            return json.dumps(message)
         raise WebSocketDisconnect(code=1000)
 
 
@@ -55,7 +64,7 @@ async def test_chat_websocket_without_token_is_rejected(monkeypatch: pytest.Monk
     try:
         await ws.websocket_chat_endpoint(socket, user_a.id)
         assert socket.close_code == 4401
-        assert not socket.accepted
+        assert socket.accepted
     finally:
         await engine.dispose()
 
@@ -68,7 +77,7 @@ async def test_chat_websocket_rejects_token_for_different_user(monkeypatch: pyte
     try:
         await ws.websocket_chat_endpoint(socket, user_b.id)
         assert socket.close_code == 4403
-        assert not socket.accepted
+        assert socket.accepted
     finally:
         await engine.dispose()
 

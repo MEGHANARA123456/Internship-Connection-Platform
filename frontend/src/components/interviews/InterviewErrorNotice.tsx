@@ -1,8 +1,8 @@
 import axios from 'axios'
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button } from '../ui/Button'
 import { routes } from '../../lib/routes'
+import { useToast } from '../ui/ToastProvider'
 
 const knownErrors: Record<string, string> = {
   daily_session_limit_reached: 'You have reached the limit of five interview sessions today. Try again tomorrow.',
@@ -67,16 +67,25 @@ export function useInterviewError() {
 export function InterviewErrorNotice({
   message,
   onRetry,
-  retrying = false,
 }: {
   message: string
   onRetry?: () => void
   retrying?: boolean
 }) {
-  return (
-    <div role="alert" className="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200 sm:flex-row sm:items-center sm:justify-between">
-      <p>{message}</p>
-      {onRetry && <Button variant="outline" size="sm" isLoading={retrying} onClick={onRetry}>Retry</Button>}
-    </div>
-  )
+  const { toast } = useToast()
+  const retryRef = useRef(onRetry)
+  retryRef.current = onRetry
+
+  useEffect(() => {
+    if (!message) return
+    toast(message, {
+      kind: 'error',
+      actions: onRetry ? [{
+        label: 'Retry',
+        onClick: () => retryRef.current?.(),
+      }] : [],
+    })
+  }, [message, onRetry !== undefined, toast])
+
+  return null
 }

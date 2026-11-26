@@ -9,6 +9,7 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.v1.dependencies import get_db
+from app.core.config import Settings
 from app.core.security import create_token
 from app.main import app
 from app.models import (
@@ -27,6 +28,7 @@ from app.models.base import Base
 from app.services.skill_gap_seed import seed_skill_gap_catalog
 from app.services.learning_library_seed import seed_learning_library
 from app.services import skill_gap
+from app.services.interview_llm import InterviewLLMProvider
 
 
 @pytest.fixture
@@ -301,13 +303,17 @@ async def test_rephrase_disabled_and_provider_failure_keep_deterministic_tips(
             interview_allowed_provider_hosts=["api.groq.com"],
         ),
     )
-    transport = httpx.MockTransport(lambda _request: httpx.Response(503))
-    original_client = httpx.AsyncClient
-
-    def mock_client(*args, **kwargs):
-        return original_client(*args, transport=transport, **kwargs)
-
-    monkeypatch.setattr(skill_gap.httpx, "AsyncClient", mock_client)
+    provider = InterviewLLMProvider(
+        Settings(
+            llm_providers="groq",
+            llm_max_retries=1,
+            groq_api_key="test-key",
+            groq_base_url="https://api.groq.com/openai",
+            groq_model="test-model",
+        ),
+        transport=httpx.MockTransport(lambda _request: httpx.Response(503)),
+    )
+    monkeypatch.setattr(skill_gap, "get_interview_provider", lambda: provider)
     assert await skill_gap._rephrase_tips(tips) == tips
 
 

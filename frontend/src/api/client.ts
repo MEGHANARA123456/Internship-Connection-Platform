@@ -2,18 +2,28 @@ import axios, { type InternalAxiosRequestConfig } from 'axios'
 import { useAuthStore, type Session } from '../store/auth'
 
 const getBaseUrl = () => {
-  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    return `${window.location.protocol}//${window.location.hostname}:8010/api/v1`
+  const configuredUrl = import.meta.env.VITE_API_URL?.trim()
+  if (import.meta.env.PROD && !configuredUrl) {
+    throw new Error('VITE_API_URL is required for production builds.')
   }
-  const raw = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8010/api/v1'
-  return raw.replace(':8000', ':8010')
+  return (configuredUrl || 'http://localhost:8010/api/v1').replace(/\/+$/, '')
 }
 
 export const getFullMediaUrl = (path?: string | null): string | null => {
   if (!path) return null
   if (path.startsWith('http://') || path.startsWith('https://')) return path
-  const base = getBaseUrl().replace('/api/v1', '')
-  return `${base}${path.startsWith('/') ? '' : '/'}${path}`
+  const apiBase = new URL(getBaseUrl(), window.location.origin)
+  const basePath = apiBase.pathname.replace(/\/api\/v1\/?$/, '')
+  const mediaPath = `${basePath}/${path.replace(/^\/+/, '')}`
+  return new URL(mediaPath, apiBase.origin).toString()
+}
+
+export const getWebSocketBaseUrl = (): string => {
+  const configuredUrl = import.meta.env.VITE_WS_URL?.trim()
+  const url = new URL(configuredUrl || getBaseUrl(), window.location.origin)
+  if (url.protocol === 'https:') url.protocol = 'wss:'
+  else if (url.protocol === 'http:') url.protocol = 'ws:'
+  return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, '')}`
 }
 
 export const api = axios.create({
@@ -26,7 +36,10 @@ export const api = axios.create({
 type RetriableRequest = InternalAxiosRequestConfig & {
   _retry?: boolean
   _rateLimitRetried?: boolean
+  _connectionRetryCount?: number
 }
+
+const MAX_CONNECTION_RETRIES = 2
 
 function retryDelaySeconds(retryAfter: unknown): number {
   if (typeof retryAfter !== 'string') return 1
@@ -34,6 +47,40 @@ function retryDelaySeconds(retryAfter: unknown): number {
   if (Number.isFinite(seconds)) return Math.max(1, Math.ceil(seconds))
   const dateDelay = Math.ceil((Date.parse(retryAfter) - Date.now()) / 1000)
   return Number.isFinite(dateDelay) ? Math.max(1, dateDelay) : 1
+}
+
+function isAuthenticationFailure(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) return false
+  if (error.response?.status === 401) return true
+  if (error.response?.status !== 403) return false
+  const detail = error.response.data?.detail
+  const message = typeof detail === 'string' ? detail.toLowerCase() : ''
+  return (
+    (message.includes('token') && /invalid|expired|unauthorized/.test(message))
+    || /not authenticated|validate credentials/.test(message)
+  )
+}
+
+function isTransientFailure(error: unknown): boolean {
+  return axios.isAxiosError(error)
+    && error.code !== 'ERR_CANCELED'
+    && (!error.response || error.response.status >= 500)
+}
+
+function notifyConnectionProblem(retrying: boolean): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('app:toast', {
+    detail: {
+      kind: 'warning',
+      message: retrying
+        ? 'Connection problem, retrying...'
+        : 'Connection problem. Your session is still active; try again.',
+    },
+  }))
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
 api.interceptors.request.use((config) => {
@@ -81,10 +128,23 @@ async function refreshSessionRequest(): Promise<NonNullable<Session>> {
       return currentSession
     }
 
-    const response = await axios.post(
-      `${api.defaults.baseURL}/auth/refresh`,
-      { refresh_token: currentSession.refreshToken },
-    )
+    let response
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        response = await axios.post(
+          `${api.defaults.baseURL}/auth/refresh`,
+          { refresh_token: currentSession.refreshToken },
+        )
+        break
+      } catch (error) {
+        if (!isTransientFailure(error) || attempt >= MAX_CONNECTION_RETRIES) {
+          if (isTransientFailure(error)) notifyConnectionProblem(false)
+          throw error
+        }
+        notifyConnectionProblem(true)
+        await wait(500 * (2 ** attempt) + Math.random() * 250)
+      }
+    }
     const tokens = response.data
     const updatedSession = {
       ...currentSession,
@@ -107,7 +167,7 @@ async function refreshSessionRequest(): Promise<NonNullable<Session>> {
       ? await lockManager.request('internship-auth-refresh', refresh)
       : await refresh()
   } catch (error) {
-    if (axios.isAxiosError(error) && error.response?.status === 401) {
+    if (isAuthenticationFailure(error)) {
       expireSession(refreshUserId)
     }
     throw error
@@ -180,7 +240,7 @@ api.interceptors.response.use(
     }
 
     if (
-      error.response?.status === 401
+      isAuthenticationFailure(error)
       && originalRequest
       && !originalRequest._retry
       && !isTokenIssuanceEndpoint(originalRequest.url)
@@ -197,6 +257,19 @@ api.interceptors.response.use(
         return api(originalRequest)
       } catch (refreshError) {
         return Promise.reject(refreshError)
+      }
+    }
+
+    if (isTransientFailure(error)) {
+      const method = String(originalRequest?.method || 'get').toLowerCase()
+      const retryCount = originalRequest?._connectionRetryCount ?? 0
+      const canRetry = (method === 'get' || method === 'head')
+        && retryCount < MAX_CONNECTION_RETRIES
+      notifyConnectionProblem(canRetry)
+      if (canRetry && originalRequest) {
+        originalRequest._connectionRetryCount = retryCount + 1
+        await wait(500 * (2 ** retryCount) + Math.random() * 250)
+        return api(originalRequest)
       }
     }
 

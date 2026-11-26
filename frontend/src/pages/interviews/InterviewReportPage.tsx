@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Card, CardContent } from '../../components/ui/Card'
@@ -6,15 +6,12 @@ import { InterviewErrorNotice, useInterviewError } from '../../components/interv
 import { InterviewFeedback } from '../../components/interviews/InterviewFeedback'
 import { InterviewPageLayout } from '../../components/interviews/InterviewPageLayout'
 import { InterviewVideoRecordingPanel } from '../../components/interviews/InterviewVideoRecordingPanel'
+import { useToast } from '../../components/ui/ToastProvider'
 import { routes } from '../../lib/routes'
-import {
-  retryAfterSecondsFromError,
-  studentProviderFailureMessage,
-} from '../../lib/interviewProviderErrors'
+import { retryAfterSecondsFromError } from '../../lib/interviewProviderErrors'
 import {
   getInterviewReport,
   getInterviewSession,
-  getInterviewProviderAvailability,
   retryInterviewEvaluation,
 } from '../../services/interviewService'
 import type { InterviewReport, InterviewSession } from '../../types/interview'
@@ -24,12 +21,14 @@ export function InterviewReportPage() {
   const { sessionId: rawSessionId } = useParams()
   const sessionId = Number(rawSessionId)
   const requestError = useInterviewError()
+  const { toast } = useToast()
+  const noScoreNoticeRef = useRef(false)
   const [session, setSession] = useState<InterviewSession | null>(null)
   const [report, setReport] = useState<InterviewReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [retrying, setRetrying] = useState(false)
+  const [retryResultShownInToast, setRetryResultShownInToast] = useState(false)
   const [error, setError] = useState('')
-  const [providerAvailable, setProviderAvailable] = useState<boolean | null>(null)
   const [retryWait, setRetryWait] = useState(0)
 
   useEffect(() => {
@@ -75,55 +74,55 @@ export function InterviewReportPage() {
   useEffect(() => {
     void loadReport()
   }, [loadReport])
-  const evaluationNeedsProvider = session?.status === 'EVALUATION_FAILED' || report?.status === 'FAILED'
-  useEffect(() => {
-    if (!evaluationNeedsProvider) {
-      setProviderAvailable(null)
-      return
-    }
-
-    let active = true
-    const checkAvailability = async () => {
-      try {
-        const status = await getInterviewProviderAvailability()
-        if (active) {
-          setProviderAvailable(status.available)
-          setRetryWait(status.retry_after_seconds ?? 0)
-        }
-      } catch {
-        if (active) {
-          setProviderAvailable(false)
-          setRetryWait(0)
-        }
-      }
-    }
-    void checkAvailability()
-    const interval = window.setInterval(() => void checkAvailability(), 30_000)
-    return () => {
-      active = false
-      window.clearInterval(interval)
-    }
-  }, [evaluationNeedsProvider])
   useAutoRefresh(
     () => loadReport(true),
-    15_000,
-    session?.status === 'EVALUATION_PENDING' && !retrying,
+    3_000,
+    (
+      session?.status === 'EVALUATION_PENDING'
+      || report?.evaluations.some((item) =>
+        item.evaluation_status === 'PENDING' || item.evaluation_status === 'EVALUATING')
+    ) && !retrying,
   )
 
-  const retryEvaluation = async () => {
+  const retryEvaluation = useCallback(async () => {
     setRetrying(true)
+    setRetryResultShownInToast(false)
     setError('')
     try {
-      await retryInterviewEvaluation(sessionId)
+      const result = await retryInterviewEvaluation(sessionId)
+      const total = result.queued + result.evaluated + result.failed
+      toast(
+        `${result.evaluated} of ${total} evaluated, ${result.queued} still queued, ${result.failed} failed.`,
+        { kind: result.failed ? 'error' : 'info' },
+      )
+      setRetryResultShownInToast(true)
       setRetryWait(0)
       await loadReport(true)
     } catch (retryError) {
       setRetryWait(retryAfterSecondsFromError(retryError))
-      setError(requestError(retryError, routes.interviewReport(sessionId)))
+      setRetryResultShownInToast(true)
+      toast('Retry could not be queued. Please try again.', { kind: 'error' })
     } finally {
       setRetrying(false)
     }
-  }
+  }, [loadReport, sessionId, toast])
+
+  useEffect(() => {
+    const hasNoScore = Boolean(
+      session?.status === 'COMPLETED'
+      && report?.status === 'COMPLETED'
+      && typeof report.overall_score !== 'number',
+    )
+    if (!hasNoScore) {
+      noScoreNoticeRef.current = false
+      return
+    }
+    if (noScoreNoticeRef.current) return
+    noScoreNoticeRef.current = true
+    toast('The report is marked complete but does not contain a score. No score will be displayed until the server provides one.', {
+      kind: 'warning',
+    })
+  }, [report, session, toast])
 
   const studySuggestions = useMemo(() => {
     const suggestions = report?.evaluations.flatMap((item) => item.evaluation?.improvements ?? []) ?? []
@@ -168,6 +167,7 @@ export function InterviewReportPage() {
   const completed = session.status === 'COMPLETED' && report.status === 'COMPLETED'
   const completedEvaluations = report.evaluations.filter((item) => item.evaluation_status === 'COMPLETED')
   const failedEvaluations = report.evaluations.filter((item) => item.evaluation_status === 'FAILED')
+  const showEvaluationDetails = completed || failed
 
   return (
     <InterviewPageLayout
@@ -191,24 +191,18 @@ export function InterviewReportPage() {
       )}
 
       {pending && (
-        <div role="status" className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100 sm:flex-row sm:items-center sm:justify-between">
-          <p>Evaluation is pending. Refresh this page to check for your results.</p>
-          <Button variant="outline" size="sm" isLoading={loading} onClick={() => void loadReport()}>Refresh report</Button>
+        <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          <p className="flex items-center gap-2">
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-amber-700 border-t-transparent dark:border-amber-300 dark:border-t-transparent" aria-hidden="true" />
+            Evaluating your answers...
+          </p>
         </div>
       )}
 
       {failed && (
-        <div role="alert" className="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="font-semibold">Evaluation failed</p>
-            <p className="mt-1">
-              {studentProviderFailureMessage(
-                report.failure_code ?? failedEvaluations.find((item) => item.failure_code)?.failure_code,
-              )}
-            </p>
-          </div>
-          <Button variant="outline" isLoading={retrying} disabled={retrying || retryWait > 0 || providerAvailable !== true} onClick={() => void retryEvaluation()}>
-            {retryWait > 0 ? `Try again in ${retryWait}s` : 'Retry evaluation'}
+        <div className="flex justify-end">
+          <Button variant="outline" isLoading={retrying} disabled={retrying || loading || retryWait > 0} onClick={() => void retryEvaluation()}>
+            {retrying ? 'Retrying...' : retryWait > 0 ? `Try again in ${retryWait}s` : 'Retry evaluation'}
           </Button>
         </div>
       )}
@@ -220,7 +214,7 @@ export function InterviewReportPage() {
         </section>
       )}
 
-      {report.proctoring_summary && (
+      {showEvaluationDetails && report.proctoring_summary && (
         <section aria-label="Proctoring violations summary" className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
           <h2 className="font-semibold text-slate-900 dark:text-white">Proctoring summary</h2>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
@@ -248,19 +242,16 @@ export function InterviewReportPage() {
         </Card>
       )}
 
-      {completed && typeof report.overall_score !== 'number' && (
-        <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-          The report is marked complete but does not contain a score. No score will be displayed until the server provides one.
-        </p>
+      {failed && !retryResultShownInToast && (
+        <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+          <p className="font-semibold">Evaluation is temporarily unavailable.</p>
+          <p className="mt-1">
+            {completedEvaluations.length} of {report.answer_count} answers evaluated; {failedEvaluations.length} need a retry. No overall score is shown for a partial report.
+          </p>
+        </div>
       )}
 
-      {failed && report.evaluations.length > 0 && (
-        <p role="status" className="text-sm text-slate-600 dark:text-slate-300">
-          {completedEvaluations.length} answer(s) evaluated successfully; {failedEvaluations.length} answer(s) still need evaluation. No overall score is shown for a partial report.
-        </p>
-      )}
-
-      {report.rubric_scores && (
+      {completed && report.rubric_scores && (
         <section aria-labelledby="rubric-summary-title">
           <h2 id="rubric-summary-title" className="mb-3 text-lg font-semibold text-slate-900 dark:text-white">Rubric averages</h2>
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -288,7 +279,24 @@ export function InterviewReportPage() {
         </section>
       )}
 
-      {(session.interview_mode === 'VOICE' || session.interview_mode === 'VIDEO') && report.voice_metrics && (
+      {completed && (
+        <section className="grid gap-4 sm:grid-cols-3">
+          {[
+            { title: 'Top strengths', items: report.top_strengths ?? [] },
+            { title: 'Top improvements', items: report.top_improvements ?? [] },
+            { title: 'Next steps', items: report.next_steps ?? [] },
+          ].map(({ title, items }) => (
+            <div key={title} className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <h2 className="font-semibold text-slate-900 dark:text-white">{title}</h2>
+              <ul className="mt-2 list-inside list-disc space-y-1 text-sm text-slate-700 dark:text-slate-300">
+                {items.map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {showEvaluationDetails && (session.interview_mode === 'VOICE' || session.interview_mode === 'VIDEO') && report.voice_metrics && (
         <section aria-labelledby="voice-metrics-title" className="rounded-xl border border-sky-200 bg-sky-50/70 p-4 dark:border-sky-900 dark:bg-sky-950/30">
           <h2 id="voice-metrics-title" className="font-semibold text-sky-950 dark:text-sky-100">Speaking insights</h2>
           <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -316,11 +324,11 @@ export function InterviewReportPage() {
           <p className="mt-3 text-xs text-slate-600 dark:text-slate-300">These deterministic counts use the confirmed transcript; they are practice signals, not personality or hiring judgments.</p>
         </section>
       )}
-      {session.interview_mode === 'VIDEO' && (
+      {showEvaluationDetails && session.interview_mode === 'VIDEO' && (
         <InterviewVideoRecordingPanel sessionId={session.id} />
       )}
 
-      {studySuggestions.length > 0 && (
+      {showEvaluationDetails && studySuggestions.length > 0 && (
         <section className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-4 dark:border-indigo-900 dark:bg-indigo-950/30">
           <h2 className="font-semibold text-indigo-950 dark:text-indigo-100">Study suggestions</h2>
           <ul className="mt-2 list-inside list-disc space-y-1 text-sm text-slate-700 dark:text-slate-300">
@@ -329,6 +337,7 @@ export function InterviewReportPage() {
         </section>
       )}
 
+      {showEvaluationDetails && (
       <section aria-labelledby="answer-reviews-title" className="space-y-4">
         <h2 id="answer-reviews-title" className="text-lg font-semibold text-slate-900 dark:text-white">Question-by-question review</h2>
         {report.evaluations.map((item) => (
@@ -353,9 +362,12 @@ export function InterviewReportPage() {
               {item.evaluation
                 ? <InterviewFeedback evaluation={item.evaluation} />
                 : <p role="status" className="rounded-lg bg-slate-100 p-3 text-sm text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                    {item.evaluation_status === 'PENDING'
-                      ? 'This answer is waiting for evaluation.'
-                      : 'This answer could not be evaluated yet. Use Retry evaluation above.'}
+                    {item.evaluation_status === 'PENDING' || item.evaluation_status === 'EVALUATING'
+                      ? <span className="inline-flex items-center gap-2">
+                          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-transparent dark:border-slate-300 dark:border-t-transparent" aria-hidden="true" />
+                          Queued for evaluation...
+                        </span>
+                      : 'Evaluation failed after provider retries. Use Retry evaluation above.'}
                   </p>}
             </CardContent>
           </Card>
@@ -364,6 +376,7 @@ export function InterviewReportPage() {
           <Card><CardContent className="py-5 text-sm text-slate-600 dark:text-slate-300">No answer reviews are available yet.</CardContent></Card>
         )}
       </section>
+      )}
     </InterviewPageLayout>
   )
 }

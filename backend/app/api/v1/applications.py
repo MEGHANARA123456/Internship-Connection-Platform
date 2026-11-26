@@ -19,7 +19,6 @@ from app.services.application_events import record_event, record_status_event, t
 from app.services.mail import visible_gmail_url
 from app.services.notify import dispatch_notification, notify
 from app.services.application_rules import check_eligibility
-from app.services.company_metrics import get_company_metrics
 from app.services.interview_display import (
     derive_application_display_status,
     get_application_display_status,

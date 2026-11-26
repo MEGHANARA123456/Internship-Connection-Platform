@@ -1,6 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render as baseRender, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ReactElement } from 'react'
+import { ToastProvider } from '../../components/ui/ToastProvider'
 import {
   approveAdminInterviewQuestion,
   getAdminInterviewAnalytics,
@@ -13,6 +15,10 @@ import {
 } from '../../services/interviewStudioAdminService'
 import { queryClient } from '../../lib/queryClient'
 import { InterviewStudioAdminPage } from './InterviewStudioAdminPage'
+
+function render(ui: ReactElement) {
+  return baseRender(<ToastProvider>{ui}</ToastProvider>)
+}
 
 vi.mock('../../services/interviewStudioAdminService', () => ({
   approveAdminInterviewQuestion: vi.fn(),
@@ -88,7 +94,11 @@ describe('InterviewStudioAdminPage', () => {
 
     expect((await screen.findAllByText(question.prompt)).length).toBeGreaterThan(0)
     expect(screen.getByText(/does not expose student answers, transcripts, reports, or recordings/i)).toBeInTheDocument()
-    expect((await screen.findAllByText(/DRAFT-for-review/)).length).toBeGreaterThan(0)
+    expect(await screen.findByText('Pending approval')).toBeInTheDocument()
+    expect(screen.getByText('Inactive')).toBeInTheDocument()
+    const powerButton = screen.getByRole('button', { name: `Reactivate question ${question.id}` })
+    expect(powerButton).toBeDisabled()
+    expect(powerButton.parentElement).toHaveAttribute('title', 'Approve this question first')
   })
 
   it('approves a question through the review action and reports success', async () => {
@@ -98,7 +108,9 @@ describe('InterviewStudioAdminPage', () => {
     fireEvent.click(screen.getAllByRole('button', { name: `Approve question ${question.id}` })[0])
 
     await waitFor(() => expect(approveAdminInterviewQuestion).toHaveBeenCalledWith(question.id))
-    expect(await screen.findByRole('status')).toHaveTextContent('Question approved.')
+    await waitFor(() => expect(screen.getByText('Approved')).toBeInTheDocument())
+    expect(screen.getByText('Active')).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Question approved.')
   })
 
   it('loads category management when selected', async () => {
@@ -176,7 +188,7 @@ describe('InterviewStudioAdminPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Usage & failures' }))
 
     expect(await screen.findByText('No data yet.')).toBeInTheDocument()
-    expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong on our side. Please retry.')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong on our side. Please retry.')
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
     expect(getAdminInterviewFailures).toHaveBeenCalled()
   })
@@ -217,8 +229,7 @@ describe('InterviewStudioAdminPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Usage & failures' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Too many requests, retrying in a few seconds.')
-    const retryButton = screen.getByRole('button', { name: 'Retry in 9s' })
-    expect(retryButton).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
     expect(getAdminInterviewAnalytics).toHaveBeenCalledTimes(1)
   })
 

@@ -248,6 +248,14 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 limit = settings.rate_limit_requests
                 window = settings.rate_limit_window_seconds
                 keys = []
+            elif (
+                request.method == "GET"
+                and user_id is not None
+                and path.rstrip("/") in {"/api/v1/auth/me", "/api/v1/navigation/counts"}
+            ):
+                limit = max(settings.rate_limit_requests, 1200)
+                window = 60
+                keys = [f"frequent-read:user:{user_id}:{path.rstrip('/')}"]
             elif is_interview_audio:
                 limit = settings.interview_stt_requests_per_minute
                 window = 60

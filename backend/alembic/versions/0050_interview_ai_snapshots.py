@@ -1,6 +1,6 @@
 """support AI-generated interview question snapshots
 
-Revision ID: 0050_interview_ai_question_snapshots
+Revision ID: 0050_interview_ai_snapshots
 Revises: 0049_interview_proctoring
 """
 
@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0050_interview_ai_question_snapshots"
+revision = "0050_interview_ai_snapshots"
 down_revision = "0049_interview_proctoring"
 branch_labels = None
 depends_on = None

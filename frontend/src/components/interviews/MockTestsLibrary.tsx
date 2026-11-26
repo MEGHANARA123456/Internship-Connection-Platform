@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Eye } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
@@ -8,12 +8,15 @@ import { DataList } from '../../components/ui/DataList'
 import { IconButton } from '../../components/ui/IconButton'
 import { InterviewErrorNotice, useInterviewError } from './InterviewErrorNotice'
 import { routes } from '../../lib/routes'
+import { useToast } from '../ui/ToastProvider'
 import {
   createMockTestAttempt,
+  getInterviewVideoRecordingPolicy,
   getMockTest,
   getMockTestRecommendation,
   listMockTests,
-  startInterviewSession,
+  listMockTestAttempts,
+  setInterviewVideoStorageConsent,
 } from '../../services/interviewService'
 import type {
   InterviewMode,
@@ -37,7 +40,9 @@ function titleCase(value: string): string {
 
 export function MockTestsLibrary() {
   const navigate = useNavigate()
+  const { toast } = useToast()
   const requestError = useInterviewError()
+  const startLock = useRef(false)
   const [tests, setTests] = useState<MockTest[]>([])
   const [recommendation, setRecommendation] = useState<MockTestRecommendation | null>(null)
   const [selected, setSelected] = useState<MockTestDetail | null>(null)
@@ -46,10 +51,13 @@ export function MockTestsLibrary() {
   const [sessionType, setSessionType] = useState<InterviewSessionType>('PRACTICE')
   const [interviewMode, setInterviewMode] = useState<InterviewMode>('TEXT')
   const [consent, setConsent] = useState(false)
+  const [videoStorageConsent, setVideoStorageConsent] = useState(false)
+  const [retentionDays, setRetentionDays] = useState<number | null>(null)
+  const [storageBackend, setStorageBackend] = useState<'local' | 'gdrive'>('local')
+  const [videoPolicyError, setVideoPolicyError] = useState('')
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
-  const [createdSessionId, setCreatedSessionId] = useState<number | null>(null)
 
   const loadCatalog = useCallback(async () => {
     setLoading(true)
@@ -76,6 +84,18 @@ export function MockTestsLibrary() {
     void loadCatalog()
   }, [loadCatalog])
 
+  useEffect(() => {
+    void getInterviewVideoRecordingPolicy()
+      .then((policy) => {
+        setRetentionDays(policy.retention_days)
+        setStorageBackend(policy.storage_backend)
+        setVideoPolicyError('')
+      })
+      .catch(() => {
+        setVideoPolicyError('Storage retention settings could not be loaded. You can continue without recording.')
+      })
+  }, [])
+
   const openTest = async (testId: number) => {
     setError('')
     try {
@@ -83,31 +103,61 @@ export function MockTestsLibrary() {
       setSelected(detail)
       setSessionType(detail.default_mode)
       setConsent(false)
-      setCreatedSessionId(null)
+      setVideoStorageConsent(false)
     } catch (loadError) {
       setError(requestError(loadError, routes.interviewStudio))
     }
   }
 
   const startTest = async () => {
-    if (!selected || !consent || starting) return
+    if (!selected || !consent || startLock.current) return
+    if (interviewMode === 'VIDEO' && videoStorageConsent && retentionDays === null) return
+    startLock.current = true
     setStarting(true)
     setError('')
-    setCreatedSessionId(null)
+    let attemptId: number | null = null
     try {
-      const session = await createMockTestAttempt(selected.id, {
-        session_type: sessionType,
-        interview_mode: interviewMode,
-        consent_acknowledged: true,
-      })
-      setCreatedSessionId(session.id)
-      await startInterviewSession(session.id)
-      navigate(routes.interviewSession(session.id))
+      const attempts = await listMockTestAttempts(selected.id)
+      const unstarted = attempts.find((attempt) => (
+        attempt.status === 'CREATED'
+        && attempt.test_version === selected.version
+        && attempt.session_type === sessionType
+        && attempt.interview_mode === interviewMode
+      ))
+      if (unstarted) {
+        attemptId = unstarted.session_id
+      } else {
+        const session = await createMockTestAttempt(selected.id, {
+          session_type: sessionType,
+          interview_mode: interviewMode,
+          consent_acknowledged: true,
+          video_storage_consent: interviewMode === 'VIDEO' && videoStorageConsent,
+        })
+        attemptId = session.id
+      }
+      await setInterviewVideoStorageConsent(
+        attemptId,
+        interviewMode === 'VIDEO' && videoStorageConsent,
+      )
+      navigate(routes.interviewSession(attemptId))
     } catch (startError) {
-      setError(requestError(startError, routes.interviewStudio))
+      const message = requestError(startError, routes.interviewStudio)
+      if (message) {
+        const savedAttemptId = attemptId
+        toast(message, {
+          kind: 'error',
+          actions: [
+            { label: 'Try again', onClick: () => void startTest() },
+            ...(savedAttemptId === null ? [] : [{
+              label: 'Continue attempt',
+              onClick: () => navigate(routes.interviewSession(savedAttemptId)),
+            }]),
+          ],
+        })
+      }
     } finally {
+      startLock.current = false
       setStarting(false)
-      void loadCatalog()
     }
   }
 
@@ -116,12 +166,6 @@ export function MockTestsLibrary() {
   return (
     <div className="space-y-5">
       {error && <InterviewErrorNotice message={error} onRetry={() => void loadCatalog()} retrying={loading} />}
-      {createdSessionId !== null && (
-        <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          Your test attempt was created but could not be started. <button className="font-semibold underline" onClick={() => navigate(routes.interviewSession(createdSessionId))}>Continue to attempt</button>.
-        </div>
-      )}
-
       {recommendedTest && (
         <Card>
           <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -230,9 +274,28 @@ export function MockTestsLibrary() {
               </div>
               <label className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
                 <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} required className="mt-1" />
-                <span>I understand my interview answers are sent to an external AI provider for evaluation. Voice transcription and optional video recording follow their separate consent prompts.</span>
+                <span>I understand my interview answers may be sent to any AI provider configured by the platform for evaluation. Voice transcription and optional video recording follow their separate consent prompts.</span>
               </label>
-              <Button type="submit" disabled={!consent || starting} isLoading={starting}>Start mock test</Button>
+              {interviewMode === 'VIDEO' && (
+                <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+                  <label className="flex items-start gap-2 text-sm text-amber-950 dark:text-amber-100">
+                    <input
+                      type="checkbox"
+                      checked={videoStorageConsent}
+                      onChange={(event) => setVideoStorageConsent(event.target.checked)}
+                      disabled={starting || retentionDays === null}
+                      className="mt-1"
+                    />
+                    <span>
+                      I agree to store my video recording in secure {storageBackend === 'gdrive' ? 'cloud' : 'local'} storage for up to {retentionDays ?? 'the configured'} days. Recording remains off unless separately started in the interview room.
+                    </span>
+                  </label>
+                  {videoPolicyError && <p role="status" className="text-sm text-amber-900 dark:text-amber-200">{videoPolicyError}</p>}
+                </div>
+              )}
+              <Button type="submit" disabled={!consent || starting} isLoading={starting}>
+                {starting ? 'Starting...' : 'Start mock test'}
+              </Button>
             </form>
           </CardContent>
         </Card>

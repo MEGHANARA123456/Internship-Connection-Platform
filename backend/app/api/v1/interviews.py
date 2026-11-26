@@ -1,6 +1,7 @@
+import asyncio
 from typing import Annotated, Any, Awaitable
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from starlette.responses import StreamingResponse
 
 from app.api.v1.dependencies import DbSession, require_roles
@@ -11,6 +12,7 @@ from app.schemas.interview import (
     InterviewAnswerRecord,
     InterviewAnswerSubmit,
     InterviewAnswerView,
+    InterviewEvaluationRetryView,
     InterviewNextQuestionView,
     InterviewReportView,
     InterviewProctoringEventCreate,
@@ -20,6 +22,7 @@ from app.schemas.interview import (
     InterviewRecordingView,
     InterviewVideoChunkResult,
     InterviewVideoRecordingState,
+    InterviewVideoStorageConsentRequest,
     InterviewSessionCreate,
     InterviewSessionView,
     MockTestAttemptCreate,
@@ -66,8 +69,12 @@ from app.services.interview_video import (
     finalize_recording,
     get_recording_state,
     open_recording,
+    parse_byte_range,
     recording_chunk_stream,
+    retry_recording_upload,
+    set_video_storage_consent,
     upload_recording_chunk,
+    video_recording_policy,
 )
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
@@ -104,6 +111,14 @@ async def get_student_interview_provider_status(
         "available": bool(status_view["configured"] and status_view["last_error"] is None),
         "retry_after_seconds": status_view.get("retry_after_seconds"),
     }
+
+
+@router.get("/video-recording-policy")
+async def get_student_video_recording_policy(
+    _user: student_only,
+    db: DbSession,
+) -> dict[str, int | str]:
+    return await video_recording_policy(db)
 
 
 @router.get(
@@ -366,6 +381,22 @@ async def acknowledge_interview_recording_consent(
     )
 
 
+@router.put(
+    "/sessions/{session_id}/recordings/storage-consent",
+)
+async def update_interview_video_storage_consent(
+    session_id: int,
+    request: InterviewVideoStorageConsentRequest,
+    user: student_only,
+    db: DbSession,
+) -> dict[str, object]:
+    return await _execute(
+        set_video_storage_consent(
+            db, user.id, session_id, request.acknowledged
+        )
+    )
+
+
 @router.post(
     "/sessions/{session_id}/recordings",
     response_model=InterviewRecordingView,
@@ -428,20 +459,51 @@ async def finalize_interview_recording(
 async def stream_interview_recording(
     session_id: int,
     recording_id: int,
+    request: Request,
     user: student_only,
     db: DbSession,
 ) -> StreamingResponse:
     recording, storage = await _execute(
         open_recording(db, user.id, session_id, recording_id)
     )
+    size = await asyncio.to_thread(
+        storage.size,
+        recording.storage_key,
+        file_id=recording.storage_file_id,
+    )
+    try:
+        start, end, partial = parse_byte_range(request.headers.get("range"), size)
+    except InterviewVideoError as error:
+        if error.status_code != 416:
+            raise
+        return Response(
+            status_code=416,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Range": f"bytes */{size}",
+                "Cache-Control": "private, no-store",
+            },
+        )
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": 'inline; filename="interview-recording"',
+        "X-Content-Type-Options": "nosniff",
+        "Content-Length": str(end - start + 1 if partial else size),
+    }
+    if partial:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
     return StreamingResponse(
-        recording_chunk_stream(storage, recording.storage_key),
+        recording_chunk_stream(
+            storage,
+            recording.storage_key,
+            file_id=recording.storage_file_id,
+            start=start if partial else None,
+            end=end if partial else None,
+        ),
         media_type=recording.mime_type,
-        headers={
-            "Cache-Control": "private, no-store",
-            "Content-Disposition": 'inline; filename="interview-recording"',
-            "X-Content-Type-Options": "nosniff",
-        },
+        status_code=206 if partial else 200,
+        headers=headers,
     )
 
 
@@ -455,8 +517,28 @@ async def delete_interview_recording(
     user: student_only,
     db: DbSession,
 ) -> Response:
-    await _execute(delete_recording(db, user.id, session_id, recording_id))
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    removed = await _execute(delete_recording(db, user.id, session_id, recording_id))
+    return Response(
+        status_code=(
+            status.HTTP_204_NO_CONTENT if removed else status.HTTP_202_ACCEPTED
+        )
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/recordings/{recording_id}/retry",
+    response_model=InterviewRecordingView,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_interview_recording_upload(
+    session_id: int,
+    recording_id: int,
+    user: student_only,
+    db: DbSession,
+) -> InterviewRecordingView:
+    return await _execute(
+        retry_recording_upload(db, user.id, session_id, recording_id)
+    )
 
 
 @router.post(
@@ -483,12 +565,16 @@ async def get_interview_report(
     return await _execute(get_report(db, user.id, session_id))
 
 
-@router.post("/sessions/{session_id}/evaluation/retry")
+@router.post(
+    "/sessions/{session_id}/evaluation/retry",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=InterviewEvaluationRetryView,
+)
 async def retry_interview_evaluation(
     session_id: int,
     user: student_only,
     db: DbSession,
-) -> Any:
+) -> InterviewEvaluationRetryView:
     return await _execute(retry_evaluation(db, user.id, session_id))
 
 

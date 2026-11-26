@@ -4,11 +4,13 @@
 
 import re
 from collections.abc import Mapping, Sequence
+import asyncio
+import tempfile
 from pathlib import Path
 from typing import Any
 
-from app.core.config import get_settings
 from app.models import Resume
+from app.services.asset_storage import asset_key, get_asset_storage
 from app.services.pdf import extract_text_from_pdf
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -221,10 +223,20 @@ async def get_student_resume_text(db: AsyncSession, student_id: int) -> str:
     if resume is None:
         return ""
 
-    resume_path = Path(get_settings().resume_storage_path) / resume.stored_filename
-    if resume_path.is_file() and resume_path.suffix.lower() == ".pdf":
-        return extract_text_from_pdf(resume_path)
-    return ""
+    if not resume.original_filename.lower().endswith(".pdf"):
+        return ""
+    key = resume.storage_key or asset_key("resumes", resume.stored_filename)
+    storage = get_asset_storage(resume.storage_backend)
+    if not await asyncio.to_thread(storage.exists, key):
+        return ""
+
+    def extract() -> str:
+        with tempfile.TemporaryDirectory(prefix="internsphere-resume-") as directory:
+            path = Path(directory) / "resume.pdf"
+            path.write_bytes(storage.read_bytes(key))
+            return extract_text_from_pdf(path)
+
+    return await asyncio.to_thread(extract)
 
 
 def compute_match(

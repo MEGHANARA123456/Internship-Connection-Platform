@@ -206,7 +206,7 @@ async def seed_interview_question_bank(db: AsyncSession) -> int:
                     prompt=prompt,
                     hint=hint,
                     rubric=_CATEGORY_RUBRICS[category],
-                    active=True,
+                    active=False,
                     source_metadata={
                         "status": "DRAFT-for-review",
                         "source": "InternSphere initial seed",

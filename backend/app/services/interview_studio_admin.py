@@ -5,7 +5,7 @@ import io
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
@@ -38,8 +38,6 @@ from app.schemas.interview_admin import (
     QuestionUpdate,
 )
 from app.services.interview_studio import InterviewStudioError
-from app.schemas.interview import InterviewAnswerView
-from app.services.interview_llm import get_interview_provider_status
 
 _QUESTION_CSV_COLUMNS = {"seed_key", "category", "prompt", "hint", "rubric"}
 _QUESTION_CATEGORIES = {"HR", "TECHNICAL"}
@@ -97,6 +95,7 @@ async def _audit(
 
 def _question_view(question: InterviewQuestionBank) -> dict[str, Any]:
     metadata = question.source_metadata or {}
+    review_status = metadata.get("status", "DRAFT-for-review")
     return {
         "id": question.id,
         "seed_key": question.seed_key,
@@ -105,8 +104,8 @@ def _question_view(question: InterviewQuestionBank) -> dict[str, Any]:
         "prompt": question.prompt,
         "hint": question.hint,
         "rubric": question.rubric,
-        "active": question.active,
-        "review_status": metadata.get("status", "DRAFT-for-review"),
+        "active": question.active and review_status == "APPROVED",
+        "review_status": review_status,
         "created_at": question.created_at,
     }
 
@@ -127,6 +126,10 @@ async def list_questions(
         statement = statement.where(InterviewQuestionBank.category == category)
     if active is not None:
         statement = statement.where(InterviewQuestionBank.active.is_(active))
+        if active:
+            statement = statement.where(
+                InterviewQuestionBank.source_metadata["status"].as_string() == "APPROVED"
+            )
     if search.strip():
         term = f"%{search.strip()}%"
         statement = statement.where(
@@ -170,7 +173,7 @@ async def create_question(
         prompt=payload.prompt.strip(),
         hint=payload.hint.strip(),
         rubric=payload.rubric.strip(),
-        active=True,
+        active=False,
         source_metadata={"status": "DRAFT-for-review", "source": "admin"},
     )
     db.add(question)
@@ -257,6 +260,9 @@ async def update_question(
         field in changes and getattr(question, field) != changes[field]
         for field in ("category", "difficulty", "prompt", "hint", "rubric")
     )
+    current_status = (question.source_metadata or {}).get("status", "DRAFT-for-review")
+    if changes.get("active") is True and (current_status != "APPROVED" or content_changed):
+        raise InterviewAdminError(409, "question_must_be_approved")
     before_summary = {
         "category": question.category,
         "difficulty": question.difficulty,
@@ -269,6 +275,7 @@ async def update_question(
     if content_changed:
         metadata["status"] = "DRAFT-for-review"
         question.source_metadata = metadata
+        question.active = False
     for field, value in changes.items():
         if field in {"prompt", "hint", "rubric"}:
             value = value.strip()
@@ -330,6 +337,7 @@ async def approve_question(
     previous_status = metadata.get("status", "DRAFT-for-review")
     metadata["status"] = "APPROVED"
     question.source_metadata = metadata
+    question.active = True
     await _audit(
         db, actor, "question_approved", "question", question.id,
         {"before": {"review_status": previous_status},
@@ -391,7 +399,7 @@ async def import_questions_csv(
             InterviewQuestionBank(
                 **values,
                 difficulty="INTERMEDIATE",
-                active=True,
+                active=False,
                 source_metadata={"status": "DRAFT-for-review", "source": "admin_csv"},
             )
         )
@@ -426,6 +434,7 @@ async def _validate_test_questions(
             select(InterviewQuestionBank).where(
                 InterviewQuestionBank.id.in_(question_ids),
                 InterviewQuestionBank.active.is_(True),
+                InterviewQuestionBank.source_metadata["status"].as_string() == "APPROVED",
             )
         )
     ).scalars().all()
@@ -865,20 +874,25 @@ async def get_analytics(db: AsyncSession, days: int = 30) -> dict[str, Any]:
         "llm_failures": 0,
         "stt_requests": 0,
         "stt_failures": 0,
+        "video_storage_failures": 0,
         "latency_total_ms": 0,
         "latency_samples": 0,
         "token_total": 0,
         "audio_seconds": 0.0,
     }
     for event_type, status, count, latency, prompt_tokens, completion_tokens, audio_seconds in usage_rows:
-        prefix = "llm" if event_type == "LLM" else "stt"
-        usage[f"{prefix}_requests"] += int(count or 0)
-        if status == "FAILED":
-            usage[f"{prefix}_failures"] += int(count or 0)
-        usage["latency_total_ms"] += int(latency or 0)
-        usage["latency_samples"] += int(count or 0)
-        usage["token_total"] += int(prompt_tokens or 0) + int(completion_tokens or 0)
-        usage["audio_seconds"] += float(audio_seconds or 0)
+        if event_type in {"LLM", "STT"}:
+            prefix = event_type.lower()
+            usage[f"{prefix}_requests"] += int(count or 0)
+            if status == "FAILED":
+                usage[f"{prefix}_failures"] += int(count or 0)
+        elif event_type == "VIDEO_STORAGE" and status == "FAILED":
+            usage["video_storage_failures"] += int(count or 0)
+        if event_type in {"LLM", "STT"}:
+            usage["latency_total_ms"] += int(latency or 0)
+            usage["latency_samples"] += int(count or 0)
+            usage["token_total"] += int(prompt_tokens or 0) + int(completion_tokens or 0)
+            usage["audio_seconds"] += float(audio_seconds or 0)
     report_total = int(report_counts[0] or 0)
     report_failures = int(report_counts[1] or 0)
     proctoring_types: dict[str, int] = {}
@@ -916,6 +930,7 @@ async def get_analytics(db: AsyncSession, days: int = 30) -> dict[str, Any]:
         "stt_failure_rate": round(
             usage["stt_failures"] / usage["stt_requests"], 4
         ) if usage["stt_requests"] else 0,
+        "video_storage_failures": usage["video_storage_failures"],
         "average_latency_ms": round(
             usage["latency_total_ms"] / usage["latency_samples"]
         ) if usage["latency_samples"] else 0,
@@ -952,14 +967,44 @@ async def get_failure_monitor(db: AsyncSession) -> dict[str, Any]:
         await db.execute(
             select(
                 InterviewStudioUsageEvent.event_type,
+                func.coalesce(
+                    InterviewStudioUsageEvent.provider_name,
+                    InterviewStudioUsageEvent.event_type,
+                ),
                 InterviewStudioUsageEvent.error_code,
                 func.count(InterviewStudioUsageEvent.id),
             )
             .where(InterviewStudioUsageEvent.status == "FAILED")
             .group_by(
                 InterviewStudioUsageEvent.event_type,
+                func.coalesce(
+                    InterviewStudioUsageEvent.provider_name,
+                    InterviewStudioUsageEvent.event_type,
+                ),
                 InterviewStudioUsageEvent.error_code,
             )
+        )
+    ).all()
+    recent_failures = (
+        await db.execute(
+            select(
+                InterviewStudioUsageEvent.event_type,
+                InterviewStudioUsageEvent.provider_name,
+                InterviewStudioUsageEvent.session_id,
+                InterviewStudioUsageEvent.answer_id,
+                InterviewStudioUsageEvent.http_status,
+                InterviewStudioUsageEvent.error_code,
+                InterviewStudioUsageEvent.created_at,
+            )
+            .where(
+                InterviewStudioUsageEvent.status == "FAILED",
+                InterviewStudioUsageEvent.event_type.in_(("LLM", "VIDEO_STORAGE")),
+            )
+            .order_by(
+                InterviewStudioUsageEvent.created_at.desc(),
+                InterviewStudioUsageEvent.id.desc(),
+            )
+            .limit(50)
         )
     ).all()
     return {
@@ -972,8 +1017,26 @@ async def get_failure_monitor(db: AsyncSession) -> dict[str, Any]:
             for code, count in reports
         ],
         "provider_failures": [
-            {"provider": event_type, "code": code or "provider_failed", "count": int(count)}
-            for event_type, code, count in usage
+            {
+                "area": "Storage" if event_type == "VIDEO_STORAGE" else "Provider",
+                "provider": provider,
+                "code": code or "provider_failed",
+                "count": int(count),
+            }
+            for event_type, provider, code, count in usage
+        ],
+        "recent_failures": [
+            {
+                "area": "Storage" if event_type == "VIDEO_STORAGE" else "Provider",
+                "provider": provider or "unknown",
+                "attempt_id": session_id,
+                "answer_id": answer_id,
+                "status_code": http_status,
+                "error_type": error_code or "provider_failed",
+                "created_at": created_at,
+            }
+            for event_type, provider, session_id, answer_id, http_status, error_code, created_at
+            in recent_failures
         ],
     }
 
@@ -1019,38 +1082,6 @@ async def retry_failed_evaluations(
 ) -> dict[str, int]:
     from app.services.interview_studio import retry_evaluation
 
-    provider_status = await get_interview_provider_status()
-    if not provider_status["configured"]:
-        raise InterviewAdminError(
-            503,
-            "evaluation_provider_not_configured",
-            retry_after_seconds=provider_status.get("retry_after_seconds"),
-        )
-    if provider_status["last_error"] is not None:
-        retry_errors = {
-            "provider_timeout": "evaluation_provider_timeout",
-            "provider_rate_limited": "evaluation_provider_rate_limited",
-            "provider_insufficient_quota": "evaluation_provider_insufficient_quota",
-            "provider_invalid_key": "evaluation_provider_invalid_key",
-            "provider_model_not_found": "evaluation_provider_model_not_found",
-            "provider_rejected_request": "evaluation_provider_rejected",
-            "provider_unavailable": "evaluation_provider_unavailable",
-        }
-        raise InterviewAdminError(
-            503,
-            retry_errors.get(
-                str(provider_status["last_error"]),
-                "evaluation_provider_unavailable",
-            ),
-            retry_after_seconds=provider_status.get("retry_after_seconds"),
-        )
-
-    retryable_failure_codes = (
-        "provider_not_configured",
-        "provider_timeout",
-        "provider_unavailable",
-        "provider_rate_limited",
-    )
     session_ids = (
         await db.execute(
             select(InterviewSession.id, InterviewSession.student_id)
@@ -1066,14 +1097,8 @@ async def retry_failed_evaluations(
                     ("EVALUATION_FAILED", "EVALUATION_PENDING", "IN_PROGRESS")
                 ),
                 or_(
-                    and_(
-                        InterviewEvaluation.status == "FAILED",
-                        InterviewEvaluation.failure_code.in_(retryable_failure_codes),
-                    ),
-                    and_(
-                        InterviewReport.status == "FAILED",
-                        InterviewReport.failure_code.in_(retryable_failure_codes),
-                    ),
+                    InterviewEvaluation.status == "FAILED",
+                    InterviewReport.status == "FAILED",
                 ),
             )
             .distinct()
@@ -1081,7 +1106,8 @@ async def retry_failed_evaluations(
             .limit(min(max(limit, 1), 20))
         )
     ).all()
-    completed = 0
+    queued = 0
+    evaluated = 0
     failed = 0
     for session_id, student_id in session_ids:
         try:
@@ -1089,31 +1115,26 @@ async def retry_failed_evaluations(
                 db,
                 student_id,
                 session_id,
-                retryable_failure_codes=retryable_failure_codes,
             )
-            recovered = getattr(result, "status", None) == "COMPLETED"
-            if isinstance(result, list):
-                recovered = bool(result) and all(
-                    isinstance(item, InterviewAnswerView)
-                    and item.evaluation_status == "COMPLETED"
-                    for item in result
-                )
-            if recovered:
-                completed += 1
-            else:
-                failed += 1
-        except InterviewStudioError as error:
+            queued += result.queued
+            evaluated += result.evaluated
+            failed += result.failed
+        except InterviewStudioError:
             await db.rollback()
-            if error.code.startswith("evaluation_provider_"):
-                raise InterviewAdminError(
-                    error.status_code,
-                    error.code,
-                    retry_after_seconds=error.retry_after_seconds,
-                ) from error
             failed += 1
     await _audit(
         db, actor, "evaluation_retry_batch", "evaluation", None,
-        {"attempted": len(session_ids), "completed": completed, "failed": failed},
+        {
+            "attempted": len(session_ids),
+            "queued": queued,
+            "evaluated": evaluated,
+            "failed": failed,
+        },
     )
     await db.commit()
-    return {"attempted": len(session_ids), "completed": completed, "failed": failed}
+    return {
+        "attempted": len(session_ids),
+        "queued": queued,
+        "evaluated": evaluated,
+        "failed": failed,
+    }

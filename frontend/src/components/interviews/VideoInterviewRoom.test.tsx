@@ -61,6 +61,9 @@ function state(consented: boolean, uploading = false): InterviewVideoRecordingSt
   const recording = uploading ? {
     id: 45,
     status: 'UPLOADING' as const,
+    finalized: false,
+    source_type: 'real' as const,
+    retryable: false,
     mime_type: 'video/webm',
     chunk_count: 0,
     next_chunk_index: 0,
@@ -68,9 +71,13 @@ function state(consented: boolean, uploading = false): InterviewVideoRecordingSt
     duration_seconds: null,
     retention_expires_at: '2026-12-01T00:00:00Z',
     created_at: '2026-11-18T10:00:00Z',
+    error_code: null,
   } : null
   return {
     required_consent_version: '2026-11-v1',
+    video_storage_consent: true,
+    retention_days: 30,
+    storage_backend: 'local',
     consent: consented
       ? { acknowledged: true, consent_version: '2026-11-v1', acknowledged_at: '2026-11-18T10:00:00Z' }
       : null,
@@ -81,7 +88,7 @@ function state(consented: boolean, uploading = false): InterviewVideoRecordingSt
 
 function renderRoom() {
   return render(
-    <VideoInterviewRoom sessionId={17} questionText="Describe your approach." onBusyChange={() => undefined}>
+    <VideoInterviewRoom sessionId={17} onBusyChange={() => undefined}>
       {() => <p>Voice and text answer controls</p>}
     </VideoInterviewRoom>,
   )
@@ -89,6 +96,7 @@ function renderRoom() {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.stubGlobal('isSecureContext', true)
   MockMediaRecorder.instances = []
   vi.stubGlobal('MediaRecorder', MockMediaRecorder)
   vi.stubGlobal('MediaStream', MockMediaStream)
@@ -97,6 +105,9 @@ beforeEach(() => {
   vi.mocked(createInterviewVideoRecording).mockResolvedValue({
     id: 45,
     status: 'UPLOADING',
+    finalized: false,
+    source_type: 'real',
+    retryable: false,
     mime_type: '',
     chunk_count: 0,
     next_chunk_index: 0,
@@ -104,6 +115,7 @@ beforeEach(() => {
     duration_seconds: null,
     retention_expires_at: '2026-12-01T00:00:00Z',
     created_at: '2026-11-18T10:00:00Z',
+    error_code: null,
   })
   vi.mocked(uploadInterviewVideoChunk).mockResolvedValue({
     recording_id: 45,
@@ -148,6 +160,9 @@ describe('VideoInterviewRoom', () => {
       return {
         id: 45,
         status: 'UPLOADING',
+        finalized: false,
+        source_type: 'real',
+        retryable: false,
         mime_type: 'video/webm',
         chunk_count: 0,
         next_chunk_index: 0,
@@ -155,6 +170,7 @@ describe('VideoInterviewRoom', () => {
         duration_seconds: null,
         retention_expires_at: '2026-12-01T00:00:00Z',
         created_at: '2026-11-18T10:00:00Z',
+        error_code: null,
       }
     })
     vi.mocked(uploadInterviewVideoChunk)

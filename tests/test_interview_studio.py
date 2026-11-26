@@ -26,14 +26,18 @@ from app.models import (
     InterviewReport,
     InterviewSession,
     MockTest,
-    MockTestCategory,
     MockTestQuestion,
     User,
     UserRole,
 )
 from app.models.base import Base
-from app.schemas.interview import InterviewLLMEvaluation
+from app.schemas.interview import (
+    InterviewAttemptAnswerEvaluation,
+    InterviewAttemptReport,
+    InterviewLLMEvaluation,
+)
 from app.services.interview_llm import (
+    InterviewAttemptLLMResult,
     InterviewLLMProvider,
     InterviewProviderError,
     get_interview_provider_status,
@@ -41,6 +45,7 @@ from app.services.interview_llm import (
 from app.services.interview_question_seed import seed_interview_question_bank
 from app.services.mock_test_seed import seed_mock_test_library
 from app.services.interview_studio import deterministic_overall_score
+from app.services.interview_studio import process_pending_evaluation_batch
 from app.services.interview_voice import InterviewVoiceError, count_voice_metrics
 from app.services.interview_video import VIDEO_RECORDING_CONSENT_VERSION
 
@@ -105,9 +110,63 @@ class SelectiveFailureProvider:
         return FakeProvider(scores=[8])._result(allow_follow_up)
 
 
+class FakeAttemptProvider:
+    model_name = "test-interview-model"
+    active_provider_name = "groq"
+    active_model_name = model_name
+
+    def __init__(self, *, failure_text: str | None = None, score: int = 8):
+        self.failure_text = failure_text
+        self.score = score
+        self.calls = 0
+        self.received_items: list[list[dict[str, object]]] = []
+
+    async def evaluate_attempt_with_usage(
+        self,
+        items: list[dict[str, object]],
+        *,
+        attempt_id: int,
+        prior_evaluations: list[dict[str, object]] | None = None,
+    ) -> InterviewAttemptLLMResult:
+        self.calls += 1
+        self.received_items.append(items)
+        if self.failure_text and any(
+            self.failure_text in str(item["answer"]) for item in items
+        ):
+            raise InterviewProviderError("provider_unavailable")
+        answers = [
+            InterviewAttemptAnswerEvaluation(
+                question_id=int(item["question_id"]),
+                score=self.score,
+                strengths=["Clear explanation"],
+                improvements=["Add a measurable outcome"],
+                suggested_answer="A concise example with a measurable outcome.",
+            )
+            for item in items
+        ]
+        return InterviewAttemptLLMResult(
+            answers=answers,
+            answer_providers={
+                answer.question_id: ("groq", self.model_name)
+                for answer in answers
+            },
+            report=InterviewAttemptReport(
+                overall_score=self.score * 10,
+                summary="The attempt demonstrates clear reasoning.",
+                top_strengths=["Clear explanation"],
+                top_improvements=["Add a measurable outcome"],
+                next_steps=["Practice concise examples."],
+            ),
+            prompt_tokens=200,
+            completion_tokens=100,
+            retry_count=0,
+        )
+
+
 @pytest.fixture
 async def interview_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("INTERVIEW_STT_REQUESTS_PER_MINUTE", "60")
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("INTERVIEW_VIDEO_STORAGE_PATH", str(tmp_path / "private-video"))
     monkeypatch.setenv("INTERVIEW_VIDEO_MAX_CHUNK_BYTES", "1024")
     monkeypatch.setenv("INTERVIEW_VIDEO_MAX_BYTES", "4096")
@@ -122,6 +181,7 @@ async def interview_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         cursor.close()
 
     sessions = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr("app.core.database.async_session_factory", sessions)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 
@@ -146,7 +206,7 @@ async def interview_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         disable_ai_question_generation,
     )
     monkeypatch.setattr(
-        "app.services.interview_studio_admin.get_interview_provider_status",
+        "app.api.v1.interview_studio_admin.get_interview_provider_status",
         provider_ready,
     )
     async with sessions() as db:
@@ -186,6 +246,17 @@ async def interview_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     async with sessions() as db:
         await seed_interview_question_bank(db)
         await seed_mock_test_library(db)
+        seeded_questions = (await db.scalars(select(InterviewQuestionBank))).all()
+        for question in seeded_questions:
+            question.active = True
+            question.source_metadata = {
+                **(question.source_metadata or {}),
+                "status": "APPROVED",
+            }
+        seeded_tests = (await db.scalars(select(MockTest))).all()
+        for test in seeded_tests:
+            test.active = True
+        await db.commit()
 
     try:
         yield {"engine": engine, "sessions": sessions, "ids": ids}
@@ -298,9 +369,62 @@ def _valid_llm_json(score: int = 8) -> str:
     )
 
 
+def _valid_attempt_json(question_ids: list[int], score: int = 8) -> str:
+    return json.dumps(
+        {
+            "answers": [
+                {
+                    "question_id": question_id,
+                    "score": score,
+                    "strengths": ["Clear explanation"],
+                    "improvements": ["Add a measurable outcome"],
+                    "suggested_answer": "A concise example with a measurable outcome.",
+                }
+                for question_id in question_ids
+            ],
+            "report": {
+                "overall_score": score * 10,
+                "summary": "The attempt demonstrates clear reasoning.",
+                "top_strengths": ["Clear explanation"],
+                "top_improvements": ["Add a measurable outcome"],
+                "next_steps": ["Practice concise examples."],
+            },
+        }
+    )
+
+
+def _attempt_success_response(request: httpx.Request) -> httpx.Response:
+    body = json.loads(request.content)
+    user_payload = json.loads(body["messages"][1]["content"])
+    question_ids = [
+        item["question_id"] for item in user_payload.get("answers", [])
+    ]
+    return httpx.Response(
+        200,
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "content": _valid_attempt_json(question_ids),
+                    }
+                }
+            ]
+        },
+    )
+
+
 @pytest.mark.anyio
 async def test_seed_is_complete_idempotent_and_draft_for_review(interview_env):
     async with interview_env["sessions"]() as db:
+        questions = list((await db.scalars(select(InterviewQuestionBank))).all())
+        for question in questions:
+            question.active = False
+            question.source_metadata = {
+                **question.source_metadata,
+                "status": "DRAFT-for-review",
+            }
+        await db.commit()
+
         assert await seed_interview_question_bank(db) == 0
         questions = list((await db.scalars(select(InterviewQuestionBank))).all())
         assert len(questions) == 20
@@ -313,6 +437,7 @@ async def test_seed_is_complete_idempotent_and_draft_for_review(interview_env):
         }
         assert all(
             question.source_metadata["status"] == "DRAFT-for-review"
+            and not question.active
             and question.hint
             and question.rubric
             for question in questions
@@ -401,6 +526,11 @@ async def test_mock_test_attempts_retake_ownership_and_version_bound_comparison(
             json={"interview_mode": "TEXT", "consent_acknowledged": True},
         )
         first_id = first_response.json()["id"]
+        reused_response = await client.post(
+            endpoint,
+            headers=headers,
+            json={"interview_mode": "TEXT", "consent_acknowledged": True},
+        )
         second_response = await client.post(
             endpoint,
             headers=headers,
@@ -411,6 +541,8 @@ async def test_mock_test_attempts_retake_ownership_and_version_bound_comparison(
             },
         )
         second_id = second_response.json()["id"]
+    assert reused_response.status_code == 201
+    assert reused_response.json()["id"] == first_id
     async with interview_env["sessions"]() as db:
         for session_id, score in ((first_id, 72), (second_id, 81)):
             attempt = await db.get(InterviewSession, session_id)
@@ -558,7 +690,7 @@ async def test_mock_test_report_calculates_per_skill_scores(interview_env, monke
     headers = _headers(student_id)
     monkeypatch.setattr(
         "app.services.interview_studio.get_interview_provider",
-        lambda: FakeProvider(scores=[7]),
+        lambda: FakeAttemptProvider(score=7),
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         catalog = await client.get("/api/v1/interviews/mock-tests", headers=headers)
@@ -592,6 +724,12 @@ async def test_mock_test_report_calculates_per_skill_scores(interview_env, monke
             assert answer.status_code == 200
         completed = await client.post(
             f"/api/v1/interviews/sessions/{session_id}/complete",
+            headers=headers,
+        )
+        assert completed.json()["status"] == "PENDING"
+        await process_pending_evaluation_batch()
+        completed = await client.get(
+            f"/api/v1/interviews/sessions/{session_id}/report",
             headers=headers,
         )
 
@@ -995,14 +1133,10 @@ async def test_empty_and_overlength_answers_are_rejected(interview_env):
 
 
 @pytest.mark.anyio
-async def test_practice_keeps_resubmits_and_limits_followup_per_answer(interview_env, monkeypatch):
+async def test_practice_batches_latest_resubmission_after_completion(interview_env):
     student_id = interview_env["ids"]["students"][0]
     headers = _headers(student_id)
-    provider = FakeProvider(scores=[4, 8], follow_up="What trade-off would you consider?")
-    monkeypatch.setattr(
-        "app.services.interview_studio.get_interview_provider",
-        lambda: provider,
-    )
+    provider = FakeAttemptProvider()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         session = await _create_session(client, headers)
         question = await _start_and_get_question(client, headers, session["id"])
@@ -1011,10 +1145,20 @@ async def test_practice_keeps_resubmits_and_limits_followup_per_answer(interview
             headers=headers,
             json={"question_id": question["id"], "answer_text": "My first structured answer."},
         )
-        second = await client.post(
+        assert first.json()["evaluation_status"] == "PENDING"
+        assert await process_pending_evaluation_batch(provider) is False
+        first_answers = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/answers",
+            headers=headers,
+        )
+        await client.post(
             f"/api/v1/interviews/sessions/{session['id']}/answers",
             headers=headers,
             json={"question_id": question["id"], "answer_text": "My improved structured answer."},
+        )
+        second_answers = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/answers",
+            headers=headers,
         )
         next_question = await client.post(
             f"/api/v1/interviews/sessions/{session['id']}/next-question",
@@ -1024,24 +1168,29 @@ async def test_practice_keeps_resubmits_and_limits_followup_per_answer(interview
             f"/api/v1/interviews/sessions/{session['id']}/complete",
             headers=headers,
         )
+        assert complete.json()["status"] == "PENDING"
+        assert await process_pending_evaluation_batch(provider) is True
+        report = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/report",
+            headers=headers,
+        )
 
-    assert first.json()["evaluation"]["relevance"] == 4
-    assert second.json()["evaluation"]["relevance"] == 8
-    assert next_question.json()["question"]["is_follow_up"] is True
-    assert provider.calls == 2
-    assert complete.json()["overall_score"] == 80.0
+    assert first_answers.json()[0]["evaluation"] is None
+    assert second_answers.json()[0]["evaluation"] is None
+    assert next_question.json()["question"]["is_follow_up"] is False
+    assert provider.calls == 1
+    assert provider.received_items[0][0]["answer"] == "My improved structured answer."
+    assert report.json()["status"] == "COMPLETED"
+    assert report.json()["answer_count"] == 1
+    assert report.json()["overall_score"] == 80.0
     async with interview_env["sessions"]() as db:
         answers = int(await db.scalar(select(func.count(InterviewAnswer.id))) or 0)
-        follow_ups = int(
-            await db.scalar(
-                select(func.count(InterviewQuestion.id)).where(
-                    InterviewQuestion.follow_up_to_answer_id.is_not(None)
-                )
-            )
-            or 0
+        evaluations = list(
+            (await db.scalars(select(InterviewEvaluation).order_by(InterviewEvaluation.id))).all()
         )
     assert answers == 2
-    assert follow_ups == 2
+    assert [evaluation.status for evaluation in evaluations] == ["FAILED", "COMPLETED"]
+    assert evaluations[0].failure_code == "answer_superseded"
 
 
 @pytest.mark.anyio
@@ -1117,6 +1266,12 @@ async def test_invalid_llm_json_fails_report_then_retry_recovers(interview_env, 
             f"/api/v1/interviews/sessions/{session['id']}/complete",
             headers=headers,
         )
+        assert failed_report.json()["status"] == "PENDING"
+        await process_pending_evaluation_batch()
+        failed_report = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/report",
+            headers=headers,
+        )
         async with interview_env["sessions"]() as db:
             session_row = await db.get(InterviewSession, session["id"])
             persisted_answers = int(await db.scalar(select(func.count(InterviewAnswer.id))) or 0)
@@ -1126,21 +1281,22 @@ async def test_invalid_llm_json_fails_report_then_retry_recovers(interview_env, 
         assert session_row.status == "EVALUATION_FAILED"
         assert persisted_answers == 1
 
-        def valid_handler(_request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": _valid_llm_json()}}]},
-            )
-
         monkeypatch.setattr(
             "app.services.interview_studio.get_interview_provider",
             lambda: InterviewLLMProvider(
                 settings,
-                transport=httpx.MockTransport(valid_handler),
+                transport=httpx.MockTransport(_attempt_success_response),
             ),
         )
         recovered = await client.post(
             f"/api/v1/interviews/sessions/{session['id']}/evaluation/retry",
+            headers=headers,
+        )
+        assert recovered.status_code == 202
+        assert recovered.json()["queued"] == 1
+        await process_pending_evaluation_batch()
+        recovered = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/report",
             headers=headers,
         )
     assert recovered.status_code == 200
@@ -1158,6 +1314,7 @@ async def test_provider_down_preserves_answer_and_retry_recovers(interview_env, 
         interview_llm_api_key="test-key",
         interview_llm_timeout_seconds=1,
     )
+    monkeypatch.setattr("app.services.interview_llm.asyncio.sleep", AsyncMock())
 
     def offline_handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("offline", request=request)
@@ -1170,31 +1327,47 @@ async def test_provider_down_preserves_answer_and_retry_recovers(interview_env, 
         ),
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        session = await _create_session(client, headers)
+        session = await _create_session(
+            client,
+            headers,
+            session_type="ASSESSMENT",
+        )
         question = await _start_and_get_question(client, headers, session["id"])
         submitted = await client.post(
             f"/api/v1/interviews/sessions/{session['id']}/answers",
             headers=headers,
             json={"question_id": question["id"], "answer_text": "I would test the smallest part first."},
         )
+        assert submitted.json()["evaluation_status"] == "PENDING"
+        pending_report = await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/complete",
+            headers=headers,
+        )
+        assert pending_report.json()["status"] == "PENDING"
+        await process_pending_evaluation_batch()
         async with interview_env["sessions"]() as db:
             answer_count = int(await db.scalar(select(func.count(InterviewAnswer.id))) or 0)
             evaluation = await db.scalar(select(InterviewEvaluation))
-        assert submitted.json()["evaluation_status"] == "FAILED"
-        assert submitted.json()["failure_code"] == "provider_unavailable"
+        assert submitted.json()["evaluation_status"] == "PENDING"
         assert answer_count == 1
         assert evaluation.status == "FAILED"
 
         monkeypatch.setattr(
             "app.services.interview_studio.get_interview_provider",
-            lambda: FakeProvider(scores=[9]),
+            lambda: FakeAttemptProvider(score=9),
         )
         retried = await client.post(
             f"/api/v1/interviews/sessions/{session['id']}/evaluation/retry",
             headers=headers,
         )
-    assert retried.status_code == 200
-    assert retried.json()[0]["evaluation_status"] == "COMPLETED"
+        assert retried.status_code == 202
+        assert retried.json()["queued"] == 1
+        await process_pending_evaluation_batch()
+        answers = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/answers",
+            headers=headers,
+        )
+    assert answers.json()[0]["evaluation_status"] == "COMPLETED"
 
 
 @pytest.mark.anyio
@@ -1321,17 +1494,10 @@ async def test_student_delete_cascades_all_interview_data(interview_env, monkeyp
 
 
 @pytest.mark.anyio
-async def test_assessment_evaluates_answers_independently_and_retry_only_retries_failed(
-    interview_env,
-    monkeypatch,
-):
+async def test_assessment_batches_answers_and_retries_attempt_atomically(interview_env):
     student_id = interview_env["ids"]["students"][0]
     headers = _headers(student_id)
-    failing_provider = SelectiveFailureProvider()
-    monkeypatch.setattr(
-        "app.services.interview_studio.get_interview_provider",
-        lambda: failing_provider,
-    )
+    failing_provider = FakeAttemptProvider(failure_text="force evaluation failure")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         session = await _create_session(
             client,
@@ -1348,6 +1514,7 @@ async def test_assessment_evaluates_answers_independently_and_retry_only_retries
                 "answer_text": "A complete answer that should succeed.",
             },
         )
+        assert await process_pending_evaluation_batch(failing_provider) is False
         question_two = (
             await client.post(
                 f"/api/v1/interviews/sessions/{session['id']}/next-question",
@@ -1362,8 +1529,15 @@ async def test_assessment_evaluates_answers_independently_and_retry_only_retries
                 "answer_text": "force evaluation failure for this answer.",
             },
         )
-        failed_report = await client.post(
+        assert await process_pending_evaluation_batch(failing_provider) is False
+        pending_report = await client.post(
             f"/api/v1/interviews/sessions/{session['id']}/complete",
+            headers=headers,
+        )
+        assert pending_report.json()["status"] == "PENDING"
+        assert await process_pending_evaluation_batch(failing_provider) is True
+        failed_report = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/report",
             headers=headers,
         )
         async with interview_env["sessions"]() as db:
@@ -1374,24 +1548,120 @@ async def test_assessment_evaluates_answers_independently_and_retry_only_retries
                     )
                 ).all()
             )
-        monkeypatch.setattr(
-            "app.services.interview_studio.get_interview_provider",
-            lambda: FakeProvider(scores=[9]),
-        )
+        successful_provider = FakeAttemptProvider()
         recovered = await client.post(
             f"/api/v1/interviews/sessions/{session['id']}/evaluation/retry",
             headers=headers,
         )
+        assert recovered.status_code == 202
+        assert recovered.json()["queued"] == 2
+        assert await process_pending_evaluation_batch(successful_provider) is True
+        assert await process_pending_evaluation_batch(successful_provider) is False
+        recovered = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/report",
+            headers=headers,
+        )
 
-    assert failing_provider.calls == 2
+    assert failing_provider.calls == 1
     assert failed_report.json()["status"] == "FAILED"
-    assert [evaluation.status for evaluation in evaluations] == ["COMPLETED", "FAILED"]
+    assert [evaluation.status for evaluation in evaluations] == ["FAILED", "FAILED"]
+    assert len(failing_provider.received_items[0]) == 2
+    assert successful_provider.calls == 1
     assert recovered.json()["status"] == "COMPLETED"
     assert recovered.json()["overall_score"] == 80.0
+    assert recovered.json()["top_strengths"] == ["Clear explanation"]
     assert [item["evaluation_status"] for item in recovered.json()["evaluations"]] == [
         "COMPLETED",
         "COMPLETED",
     ]
+
+
+@pytest.mark.anyio
+async def test_attempt_retry_only_evaluates_missing_answers_once(interview_env):
+    student_id = interview_env["ids"]["students"][0]
+    headers = _headers(student_id)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session = await _create_session(
+            client,
+            headers,
+            session_type="ASSESSMENT",
+            category="HR",
+        )
+        first_question = await _start_and_get_question(client, headers, session["id"])
+        await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/answers",
+            headers=headers,
+            json={
+                "question_id": first_question["id"],
+                "answer_text": "The first answer is already evaluated.",
+            },
+        )
+        second_question = (
+            await client.post(
+                f"/api/v1/interviews/sessions/{session['id']}/next-question",
+                headers=headers,
+            )
+        ).json()["question"]
+        await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/answers",
+            headers=headers,
+            json={
+                "question_id": second_question["id"],
+                "answer_text": "The second answer still needs evaluation.",
+            },
+        )
+        completed = await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/complete",
+            headers=headers,
+        )
+        assert completed.json()["status"] == "PENDING"
+
+        async with interview_env["sessions"]() as db:
+            evaluations = list(
+                (
+                    await db.scalars(
+                        select(InterviewEvaluation)
+                        .join(
+                            InterviewAnswer,
+                            InterviewAnswer.id == InterviewEvaluation.answer_id,
+                        )
+                        .join(
+                            InterviewQuestion,
+                            InterviewQuestion.id == InterviewAnswer.question_id,
+                        )
+                        .where(InterviewQuestion.session_id == session["id"])
+                        .order_by(InterviewQuestion.position)
+                    )
+                ).all()
+            )
+            evaluations[0].status = "COMPLETED"
+            evaluations[0].score = 7
+            evaluations[0].strengths = ["Clear explanation"]
+            evaluations[0].improvements = ["Add an outcome"]
+            evaluations[0].suggested_answer = "An evaluated answer."
+            evaluations[0].answer_hash = None
+            await db.commit()
+
+        retry = await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/evaluation/retry",
+            headers=headers,
+        )
+        assert retry.json()["queued"] == 1
+        assert retry.json()["evaluated"] == 1
+        provider = FakeAttemptProvider()
+        assert await process_pending_evaluation_batch(provider) is True
+        assert await process_pending_evaluation_batch(provider) is False
+        report = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/report",
+            headers=headers,
+        )
+
+    assert provider.calls == 1
+    assert len(provider.received_items[0]) == 1
+    assert provider.received_items[0][0]["question_id"] == second_question["id"]
+    assert report.json()["status"] == "COMPLETED"
+    async with interview_env["sessions"]() as db:
+        assert int(await db.scalar(select(func.count(InterviewEvaluation.id))) or 0) == 2
 
 
 def test_deterministic_overall_score_uses_only_rubric_values():
@@ -1474,7 +1744,7 @@ async def test_llm_adapter_retries_invalid_json_once_and_guards_untrusted_answer
 
 
 @pytest.mark.anyio
-async def test_evaluation_retries_rate_limit_after_retry_after_then_succeeds(
+async def test_evaluation_fails_over_after_rate_limit_retry_after(
     monkeypatch,
     caplog,
 ):
@@ -1483,7 +1753,7 @@ async def test_evaluation_retries_rate_limit_after_retry_after_then_succeeds(
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if len(requests) == 1:
+        if request.url.host == "api.groq.com":
             return httpx.Response(
                 429,
                 headers={"Retry-After": "2"},
@@ -1514,12 +1784,16 @@ async def test_evaluation_retries_rate_limit_after_retry_after_then_succeeds(
         )
 
     monkeypatch.setattr("app.services.interview_llm.asyncio.sleep", sleep)
-    monkeypatch.setattr("app.services.interview_llm.random.uniform", lambda _a, _b: 0)
+    monkeypatch.setattr("app.services.interview_llm.random.uniform", lambda a, _b: a)
     provider = InterviewLLMProvider(
         Settings(
-            interview_llm_base_url="https://api.groq.com/openai",
-            interview_llm_model="test-model",
-            interview_llm_api_key="test-key",
+            llm_providers="groq,gemini",
+            groq_base_url="https://api.groq.com/openai",
+            groq_model="groq-test",
+            groq_api_key="groq-key",
+            gemini_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            gemini_model="gemini-test",
+            gemini_api_key="gemini-key",
         ),
         transport=httpx.MockTransport(handler),
     )
@@ -1533,13 +1807,106 @@ async def test_evaluation_retries_rate_limit_after_retry_after_then_succeeds(
             )
         )
 
-    assert len(requests) == 2
-    sleep.assert_awaited_once_with(2.0)
+    assert [request.url.host for request in requests] == [
+        "api.groq.com",
+        "generativelanguage.googleapis.com",
+    ]
+    sleep.assert_awaited_once_with(2.1)
     assert result.relevance == 8
     assert (prompt_tokens, completion_tokens, retry_count, retry_after) == (15, 20, 1, None)
-    assert "status=429 error_code=rate_limit_exceeded retry_after=2 message=Too many requests." in caplog.text
-    assert "test-key" not in caplog.text
+    assert provider.active_provider_name == "gemini"
+    assert provider.active_model_name == "gemini-test"
+    assert "status=429 provider=groq" in caplog.text
+    assert "rate_limit_exceeded" in caplog.text
+    assert "groq-key" not in caplog.text
+    assert "gemini-key" not in caplog.text
     assert "I would check the service health" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_invalid_primary_key_falls_back_to_gemini_without_logging_answer(caplog):
+    requests = []
+    answer_text = "A confidential student answer."
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.host == "api.groq.com":
+            return httpx.Response(
+                401,
+                json={"error": {"code": "invalid_api_key", "message": "Invalid API key."}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": _valid_llm_json(8)}}],
+                "usage": {"prompt_tokens": 40, "completion_tokens": 25},
+            },
+        )
+
+    provider = InterviewLLMProvider(
+        Settings(
+            llm_providers="groq,gemini",
+            groq_base_url="https://api.groq.com/openai",
+            groq_model="groq-test",
+            groq_api_key="invalid-groq-key",
+            gemini_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            gemini_model="gemini-test",
+            gemini_api_key="gemini-test-key",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    result = await provider.evaluate(
+        question="Describe a difficult problem.",
+        answer=answer_text,
+        rubric="Assess clarity.",
+        allow_follow_up=False,
+    )
+    assert result.relevance == 8
+    assert [request.url.host for request in requests] == [
+        "api.groq.com",
+        "generativelanguage.googleapis.com",
+    ]
+    assert requests[0].headers["Authorization"] == "Bearer invalid-groq-key"
+    assert requests[1].headers["Authorization"] == "Bearer gemini-test-key"
+    assert "invalid-groq-key" not in caplog.text
+    assert "gemini-test-key" not in caplog.text
+    assert answer_text not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_batched_evaluation_strips_fence_and_validates_each_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        submitted = json.loads(request.content)["messages"][1]["content"]
+        assert isinstance(json.loads(submitted), list)
+        content = json.dumps([json.loads(_valid_llm_json(6)), json.loads(_valid_llm_json(9))])
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": f"```json\n{content}\n```"}}],
+                "usage": {"prompt_tokens": 75, "completion_tokens": 35},
+            },
+        )
+
+    provider = InterviewLLMProvider(
+        Settings(
+            interview_llm_base_url="https://api.groq.com/openai",
+            interview_llm_model="test-model",
+            interview_llm_api_key="test-key",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    result = await provider.evaluate_many_with_usage(
+        [
+            {"question": "Question one", "answer": "Answer one", "rubric": "Clarity"},
+            {"question": "Question two", "answer": "Answer two", "rubric": "Accuracy"},
+        ],
+        attempt_id=12,
+        answer_ids=(101, 102),
+    )
+    assert [item.relevance for item in result.evaluations] == [6, 9]
+    assert (result.prompt_tokens, result.completion_tokens) == (75, 35)
+    assert result.provider == "groq"
+    assert result.model == "test-model"
 
 
 def _generated_questions_json(count: int) -> str:
@@ -1836,7 +2203,11 @@ async def test_voice_transcript_is_confirmed_before_saving_and_reported_with_met
         return "Um, I recognized Python and uh SQL.", 30.0
 
     monkeypatch.setattr(interview_service, "transcribe_audio_clip", transcribe)
-    monkeypatch.setattr(interview_service, "get_interview_provider", lambda: FakeProvider())
+    monkeypatch.setattr(
+        interview_service,
+        "get_interview_provider",
+        lambda: FakeAttemptProvider(),
+    )
     student_id = interview_env["ids"]["students"][0]
     headers = _headers(student_id)
 
@@ -1875,6 +2246,11 @@ async def test_voice_transcript_is_confirmed_before_saving_and_reported_with_met
         assert submitted.json()["evaluation_status"] == "PENDING"
         report_response = await client.post(
             f"/api/v1/interviews/sessions/{session['id']}/complete",
+            headers=headers,
+        )
+        await process_pending_evaluation_batch()
+        report_response = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/report",
             headers=headers,
         )
         assert report_response.status_code == 200
@@ -2057,7 +2433,12 @@ def test_voice_metrics_are_deterministic_from_the_confirmed_transcript():
 
 
 async def _create_video_recording_session(client, headers):
-    session = await _create_session(client, headers, interview_mode="VIDEO")
+    session = await _create_session(
+        client,
+        headers,
+        interview_mode="VIDEO",
+        video_storage_consent=True,
+    )
     await _start_and_get_question(client, headers, session["id"])
     return session
 
@@ -2130,6 +2511,26 @@ async def test_video_recording_requires_versioned_consent_and_is_owner_scoped(in
         )
         assert saved is not None
         assert saved.version == VIDEO_RECORDING_CONSENT_VERSION
+
+
+@pytest.mark.anyio
+async def test_video_recording_requires_separate_storage_consent(interview_env):
+    headers = _headers(interview_env["ids"]["students"][0])
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session = await _create_session(
+            client,
+            headers,
+            interview_mode="VIDEO",
+            video_storage_consent=False,
+        )
+        await _start_and_get_question(client, headers, session["id"])
+        await _acknowledge_video_recording(client, headers, session["id"])
+        response = await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/recordings",
+            headers=headers,
+        )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "video_storage_consent_required"
 
 
 @pytest.mark.anyio
@@ -2220,6 +2621,10 @@ async def test_video_recording_stream_delete_and_chunk_retry_are_owner_scoped(
             f"/api/v1/interviews/sessions/{session['id']}/recordings/{recording_id}/content",
             headers=headers,
         )
+        partial_playback = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/recordings/{recording_id}/content",
+            headers={**headers, "Range": "bytes=0-6"},
+        )
         other_owner = await client.get(
             f"/api/v1/interviews/sessions/{session['id']}/recordings/{recording_id}/content",
             headers=_headers(interview_env["ids"]["students"][1]),
@@ -2250,6 +2655,9 @@ async def test_video_recording_stream_delete_and_chunk_retry_are_owner_scoped(
     assert playback.status_code == 200
     assert playback.content == b"private-video-bytes"
     assert playback.headers["cache-control"] == "private, no-store"
+    assert partial_playback.status_code == 206
+    assert partial_playback.content == b"private"
+    assert partial_playback.headers["content-range"] == "bytes 0-6/19"
     assert other_owner.status_code == 404
     assert admin.status_code == 403
     assert deleted.status_code == 204
@@ -2286,7 +2694,7 @@ async def test_video_recording_expiry_removes_private_files_lazily(interview_env
         )
 
     assert state.status_code == 200
-    assert state.json()["recording"] is None
+    assert state.json()["recording"]["status"] == "EXPIRED"
     async with interview_env["sessions"]() as db:
         expired = await db.get(InterviewRecording, recording_id)
         assert expired.status == "EXPIRED"
@@ -2372,7 +2780,7 @@ async def test_interview_studio_admin_roles_and_student_content_isolation(interv
     assert company.status_code == 403
     assert analytics.status_code == 200
     assert failures.status_code == 200
-    assert batch.status_code == 200
+    assert batch.status_code == 202
     assert sentinel not in analytics.text
     assert sentinel not in failures.text
     assert sentinel not in batch.text
@@ -2518,6 +2926,31 @@ async def test_interview_admin_question_review_and_category_creation(interview_e
             },
         )
         assert question.status_code == 201, question.text
+        assert question.json()["active"] is False
+        drafts = await client.get(
+            "/api/v1/admin/interview-studio/questions",
+            headers=admin_headers,
+            params={"active": "true"},
+        )
+        student_headers = _headers(interview_env["ids"]["students"][0])
+        session = await _create_session(
+            client,
+            student_headers,
+            category="HR",
+            question_count=5,
+        )
+        await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/proctoring-consent",
+            headers=student_headers,
+        )
+        await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/start",
+            headers=student_headers,
+        )
+        selected_question = await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/next-question",
+            headers=student_headers,
+        )
         approved = await client.post(
             f"/api/v1/admin/interview-studio/questions/{question.json()['id']}/approve",
             headers=admin_headers,
@@ -2530,8 +2963,12 @@ async def test_interview_admin_question_review_and_category_creation(interview_e
 
     assert question.status_code == 201
     assert question.json()["review_status"] == "DRAFT-for-review"
+    assert question.json()["active"] is False
+    assert question.json()["id"] not in {row["id"] for row in drafts.json()["items"]}
+    assert selected_question.json()["question"]["prompt"] != question.json()["prompt"]
     assert approved.status_code == 200
     assert approved.json()["review_status"] == "APPROVED"
+    assert approved.json()["active"] is True
     assert category.status_code == 422
 
 
@@ -2600,6 +3037,7 @@ async def test_interview_admin_retry_batch_recovers_failed_evaluation(interview_
         interview_llm_api_key="test-key",
         interview_llm_timeout_seconds=1,
     )
+    monkeypatch.setattr("app.services.interview_llm.asyncio.sleep", AsyncMock())
     def offline_handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("provider unavailable", request=request)
 
@@ -2624,20 +3062,22 @@ async def test_interview_admin_retry_batch_recovers_failed_evaluation(interview_
             headers=student_headers,
             json={"question_id": question["id"], "answer_text": "I would clarify the changed goal."},
         )
+        await process_pending_evaluation_batch()
         failed = await client.post(
             f"/api/v1/interviews/sessions/{session['id']}/complete",
+            headers=student_headers,
+        )
+        assert failed.json()["status"] == "PENDING"
+        await process_pending_evaluation_batch()
+        failed = await client.get(
+            f"/api/v1/interviews/sessions/{session['id']}/report",
             headers=student_headers,
         )
         assert failed.json()["status"] == "FAILED"
 
         valid_provider = InterviewLLMProvider(
             settings,
-            transport=httpx.MockTransport(
-                lambda _request: httpx.Response(
-                    200,
-                    json={"choices": [{"message": {"content": _valid_llm_json()}}]},
-                )
-            ),
+            transport=httpx.MockTransport(_attempt_success_response),
         )
         monkeypatch.setattr(
             "app.services.interview_studio.get_interview_provider",
@@ -2647,9 +3087,15 @@ async def test_interview_admin_retry_batch_recovers_failed_evaluation(interview_
             "/api/v1/admin/interview-studio/failures/retry",
             headers=admin_headers,
         )
+        await process_pending_evaluation_batch()
 
-    assert batch.status_code == 200
-    assert batch.json() == {"attempted": 1, "completed": 1, "failed": 0}
+    assert batch.status_code == 202
+    assert batch.json() == {
+        "attempted": 1,
+        "queued": 1,
+        "evaluated": 0,
+        "failed": 0,
+    }
     assert "answer_text" not in batch.text
 
 
@@ -2660,24 +3106,30 @@ async def test_interview_admin_retry_batch_skips_nontransient_failures(interview
 
     class MixedFailureProvider:
         model_name = "test-interview-model"
+        active_provider_name = "groq"
+        active_model_name = model_name
 
-        async def evaluate(
+        async def evaluate_attempt_with_usage(
             self,
+            items,
             *,
-            question: str,
-            answer: str,
-            rubric: str,
-            allow_follow_up: bool,
-        ) -> InterviewLLMEvaluation:
-            code = "provider_timeout" if answer == "retryable answer" else "invalid_model_output"
-            raise InterviewProviderError(code)
+            attempt_id: int,
+            prior_evaluations=None,
+        ):
+            raise InterviewProviderError("provider_timeout")
 
+    mixed_provider = MixedFailureProvider()
     monkeypatch.setattr(
         "app.services.interview_studio.get_interview_provider",
-        MixedFailureProvider,
+        lambda: mixed_provider,
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        session = await _create_session(client, student_headers)
+        session = await _create_session(
+            client,
+            student_headers,
+            session_type="ASSESSMENT",
+            category="HR",
+        )
         first_question = await _start_and_get_question(client, student_headers, session["id"])
         first_answer = await client.post(
             f"/api/v1/interviews/sessions/{session['id']}/answers",
@@ -2693,20 +3145,32 @@ async def test_interview_admin_retry_batch_skips_nontransient_failures(interview
             headers=student_headers,
             json={"question_id": next_question.json()["question"]["id"], "answer_text": "do not retry"},
         )
-        assert first_answer.json()["failure_code"] == "provider_timeout"
-        assert second_answer.json()["failure_code"] == "invalid_model_output"
+        completed = await client.post(
+            f"/api/v1/interviews/sessions/{session['id']}/complete",
+            headers=student_headers,
+        )
+        assert completed.json()["status"] == "PENDING"
+        await process_pending_evaluation_batch(mixed_provider)
+        assert first_answer.json()["evaluation_status"] == "PENDING"
+        assert second_answer.json()["evaluation_status"] == "PENDING"
 
         monkeypatch.setattr(
             "app.services.interview_studio.get_interview_provider",
-            FakeProvider,
+            lambda: FakeAttemptProvider(),
         )
         batch = await client.post(
             "/api/v1/admin/interview-studio/failures/retry",
             headers=admin_headers,
         )
 
-    assert batch.status_code == 200
-    assert batch.json() == {"attempted": 1, "completed": 1, "failed": 0}
+    assert batch.status_code == 202
+    assert batch.json() == {
+        "attempted": 1,
+        "queued": 2,
+        "evaluated": 0,
+        "failed": 0,
+    }
+    await process_pending_evaluation_batch()
     async with interview_env["sessions"]() as db:
         evaluations = list(
             (
@@ -2718,12 +3182,7 @@ async def test_interview_admin_retry_batch_skips_nontransient_failures(interview
                 )
             ).all()
         )
-    assert sorted(evaluation.status for evaluation in evaluations) == ["COMPLETED", "FAILED"]
-    assert next(
-        evaluation.failure_code
-        for evaluation in evaluations
-        if evaluation.status == "FAILED"
-    ) == "invalid_model_output"
+    assert sorted(evaluation.status for evaluation in evaluations) == ["COMPLETED", "COMPLETED"]
 
 
 @pytest.mark.anyio

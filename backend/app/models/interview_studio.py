@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from typing import Any
 
+from app.models.base import Base
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -9,7 +11,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -18,8 +19,6 @@ from sqlalchemy import (
     true,
 )
 from sqlalchemy.orm import Mapped, mapped_column
-
-from app.models.base import Base
 
 
 class InterviewSession(Base):
@@ -90,6 +89,12 @@ class InterviewSession(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     proctoring_consent_acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    video_storage_consent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    video_storage_consent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     proctoring_max_violations: Mapped[int] = mapped_column(
@@ -293,17 +298,19 @@ class InterviewStudioUsageEvent(Base):
     __tablename__ = "interview_studio_usage_events"
     __table_args__ = (
         CheckConstraint(
-            "event_type IN ('LLM', 'STT')", name="ck_interview_studio_usage_event_type"
+            "event_type IN ('LLM', 'STT', 'VIDEO_STORAGE')",
+            name="ck_interview_studio_usage_event_type",
         ),
         CheckConstraint(
             "status IN ('SUCCEEDED', 'FAILED')",
             name="ck_interview_studio_usage_status",
         ),
         Index("ix_interview_studio_usage_event_created", "created_at"),
+        Index("ix_interview_studio_usage_event_attempt", "session_id", "answer_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    event_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(10), nullable=False)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -311,6 +318,10 @@ class InterviewStudioUsageEvent(Base):
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     audio_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    provider_name: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    answer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
@@ -398,9 +409,10 @@ class InterviewEvaluation(Base):
     __table_args__ = (
         UniqueConstraint("answer_id", name="uq_interview_evaluations_answer"),
         CheckConstraint(
-            "status IN ('PENDING', 'COMPLETED', 'FAILED')",
+            "status IN ('PENDING', 'EVALUATING', 'COMPLETED', 'FAILED')",
             name="ck_interview_evaluations_status",
         ),
+        Index("ix_interview_evaluations_status_created", "status", "created_at"),
         CheckConstraint(
             "relevance IS NULL OR relevance BETWEEN 0 AND 10",
             name="ck_interview_evaluations_relevance",
@@ -421,6 +433,10 @@ class InterviewEvaluation(Base):
             "structure IS NULL OR structure BETWEEN 0 AND 10",
             name="ck_interview_evaluations_structure",
         ),
+        CheckConstraint(
+            "score IS NULL OR score BETWEEN 0 AND 10",
+            name="ck_interview_evaluations_score",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -438,8 +454,13 @@ class InterviewEvaluation(Base):
     feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
     strengths: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     improvements: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    suggested_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     failure_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    provider_name: Mapped[str | None] = mapped_column(String(40), nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    answer_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evaluating_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -473,6 +494,9 @@ class InterviewReport(Base):
     overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     rubric_scores: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
     skill_breakdown: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
+    top_strengths: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    top_improvements: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    next_steps: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     answer_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     failure_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -569,7 +593,8 @@ class InterviewRecording(Base):
     __tablename__ = "interview_recordings"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('UPLOADING', 'AVAILABLE', 'DELETED', 'EXPIRED', 'FAILED')",
+            "status IN ('UPLOADING', 'PENDING_UPLOAD', 'AVAILABLE', "
+            "'PENDING_DELETE', 'DELETED', 'EXPIRED', 'FAILED')",
             name="ck_interview_recordings_status",
         ),
         CheckConstraint("chunk_count >= 0", name="ck_interview_recordings_chunk_count"),
@@ -581,6 +606,7 @@ class InterviewRecording(Base):
             "created_at",
         ),
         Index("ix_interview_recordings_expiry", "status", "retention_expires_at"),
+        Index("ix_interview_recordings_upload", "status", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -596,6 +622,17 @@ class InterviewRecording(Base):
     )
     storage_key: Mapped[str] = mapped_column(
         String(36), nullable=False, unique=True
+    )
+    source_type: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="real", server_default="real"
+    )
+    storage_backend: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="local", server_default="local"
+    )
+    storage_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    upload_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="UPLOADING", server_default="UPLOADING"
@@ -615,3 +652,32 @@ class InterviewRecording(Base):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InterviewRecordingDeletion(Base):
+    __tablename__ = "interview_recording_deletions"
+    __table_args__ = (
+        Index("ix_interview_recording_deletions_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    storage_key: Mapped[str] = mapped_column(String(36), nullable=False)
+    storage_backend: Mapped[str] = mapped_column(String(20), nullable=False)
+    storage_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    upload_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    final_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="DELETED", server_default="DELETED"
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )

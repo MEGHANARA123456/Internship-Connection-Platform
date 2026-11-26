@@ -2,6 +2,7 @@
 # WebSocket routes for real-time communication, notifications, and live updates.
 # -----------------------------------------------------------------------------
 
+import asyncio
 import json
 import logging
 from collections import defaultdict
@@ -27,9 +28,12 @@ class ConnectionManager:
         # Map interview_id -> set of active WebSockets for WebRTC signaling
         self.video_rooms: dict[int, set[WebSocket]] = defaultdict(set)
 
-    async def connect_user(self, user_id: int, websocket: WebSocket):
-        """Accept and register a user chat socket, then broadcast the updated presence state."""
-        await websocket.accept()
+    async def connect_user(
+        self, user_id: int, websocket: WebSocket, *, accepted: bool = False
+    ):
+        """Accept and register a user socket, then broadcast updated presence."""
+        if not accepted:
+            await websocket.accept()
         self.active_user_connections[user_id].add(websocket)
         logger.info("User %s connected to chat WebSocket. Total connections: %s", user_id, len(self.active_user_connections[user_id]))
         # Broadcast presence
@@ -90,9 +94,11 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-async def _authenticated_user(websocket: WebSocket) -> User | None:
-    """Resolve an active database user from a WebSocket access token, returning None for invalid credentials."""
-    token = websocket.query_params.get("token")
+async def _authenticated_user(
+    websocket: WebSocket, token: str | None = None
+) -> User | None:
+    """Resolve an active database user from a WebSocket access token."""
+    token = token or websocket.query_params.get("token")
     if not token:
         return None
     try:
@@ -125,8 +131,24 @@ async def notify_user(user_id: int, notification_data: dict[str, Any]) -> None:
 
 @router.websocket("/chat/{user_id}")
 async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
-    """Authenticate the requested user and manage their chat socket lifecycle and incoming messages."""
-    user = await _authenticated_user(websocket)
+    """Authenticate the requested user and manage their chat socket."""
+    await websocket.accept()
+    try:
+        raw_auth_message = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+        auth_message = json.loads(raw_auth_message)
+    except WebSocketDisconnect:
+        return
+    except (TimeoutError, json.JSONDecodeError):
+        await websocket.close(code=4401)
+        return
+    if not isinstance(auth_message, dict) or auth_message.get("type") != "authenticate":
+        await websocket.close(code=4401)
+        return
+    token = auth_message.get("token")
+    if not isinstance(token, str):
+        await websocket.close(code=4401)
+        return
+    user = await _authenticated_user(websocket, token)
     if user is None:
         await websocket.close(code=4401)
         return
@@ -134,7 +156,8 @@ async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
         await websocket.close(code=4403)
         return
 
-    await manager.connect_user(user.id, websocket)
+    await websocket.send_json({"type": "authenticated"})
+    await manager.connect_user(user.id, websocket, accepted=True)
     try:
         while True:
             raw_text = await websocket.receive_text()

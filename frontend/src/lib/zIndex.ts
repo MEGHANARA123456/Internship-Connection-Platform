@@ -5,4 +5,5 @@ export const Z_INDEX = {
   mobileNavigation: 'z-[80]',
   notifications: 'z-[100]',
   modal: 'z-[110]',
+  toast: 'z-[120]',
 } as const

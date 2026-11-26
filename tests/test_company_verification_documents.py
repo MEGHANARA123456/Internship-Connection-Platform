@@ -8,7 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.api.v1 import admin, auth, company_documents
+from app.api.v1 import admin, auth, company_documents, profiles
 from app.api.v1.dependencies import get_current_user, get_db
 from app.core.config import Settings
 from app.core.security import hash_password
@@ -19,11 +19,13 @@ from app.models import (
     CompanyProfile,
     Internship,
     Notification,
+    StudentProfile,
     User,
     UserRole,
 )
 from app.models.base import Base
 from app.services.account_deletion import erase_user
+from app.services.asset_storage import LocalAssetStorage
 
 
 @pytest.fixture
@@ -79,7 +81,11 @@ async def test_company_document_access_review_and_cleanup(api_context, monkeypat
     active_user = {"value": company}
     app.dependency_overrides[get_current_user] = lambda: active_user["value"]
     monkeypatch.setattr(
-        "app.services.company_documents.get_settings",
+        "app.api.v1.company_documents.get_settings",
+        lambda: Settings(_env_file=None, company_document_storage_path=str(tmp_path)),
+    )
+    monkeypatch.setattr(
+        "app.api.v1.admin.get_settings",
         lambda: Settings(_env_file=None, company_document_storage_path=str(tmp_path)),
     )
     notices = []
@@ -166,10 +172,59 @@ async def test_company_document_access_review_and_cleanup(api_context, monkeypat
         assert verified_company is not None
         verified_company.verification_status = "PENDING"
         await session.commit()
+
     deletable_document = await client.delete(
         f"/api/v1/profiles/company/documents/{document_id}"
     )
     assert deletable_document.status_code == 204
+    assert not stored.exists()
+
+
+@pytest.mark.anyio
+async def test_resume_asset_upload_download_and_delete_are_owner_scoped(
+    api_context, monkeypatch, tmp_path
+):
+    client, sessions = api_context
+    student = make_user(70, UserRole.STUDENT, "resume-owner@example.com")
+    other_student = make_user(71, UserRole.STUDENT, "resume-other@example.com")
+    async with sessions() as session:
+        session.add_all([student, other_student])
+        await session.commit()
+
+    active_user = {"value": student}
+    app.dependency_overrides[get_current_user] = lambda: active_user["value"]
+    monkeypatch.setattr(
+        profiles,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None,
+            resume_storage_path=str(tmp_path / "resumes"),
+            company_document_storage_path=str(tmp_path / "company-documents"),
+        ),
+    )
+    content = b"%PDF-1.7\nprivate resume"
+    uploaded = await client.post(
+        "/api/v1/profiles/student/resume",
+        files={"file": ("curriculum vitae.pdf", content, "application/pdf")},
+    )
+
+    assert uploaded.status_code == 200
+    resume_id = uploaded.json()["id"]
+    stored = next((tmp_path / "resumes").iterdir())
+    assert stored.read_bytes() == content
+
+    download = await client.get(f"/api/v1/profiles/resume/{resume_id}/download")
+    assert download.status_code == 200
+    assert download.content == content
+    assert "curriculum%20vitae.pdf" in download.headers["content-disposition"]
+
+    active_user["value"] = other_student
+    denied = await client.get(f"/api/v1/profiles/resume/{resume_id}/download")
+    assert denied.status_code == 403
+
+    active_user["value"] = student
+    deleted = await client.delete(f"/api/v1/profiles/student/resume/{resume_id}")
+    assert deleted.status_code == 204
     assert not stored.exists()
 
 
@@ -204,7 +259,7 @@ async def test_document_validation_limits_rejection_reset_and_submission_gate(
     active_user = {"value": company}
     app.dependency_overrides[get_current_user] = lambda: active_user["value"]
     monkeypatch.setattr(
-        "app.services.company_documents.get_settings",
+        "app.api.v1.company_documents.get_settings",
         lambda: Settings(_env_file=None, company_document_storage_path=str(tmp_path)),
     )
     async def discard_notice(*args, **kwargs):
@@ -429,9 +484,14 @@ async def test_company_email_requirement_and_first_login_for_password_and_mfa(
 @pytest.mark.anyio
 async def test_account_erasure_removes_company_documents(api_context, monkeypatch, tmp_path):
         _, sessions = api_context
+        settings = Settings(
+            _env_file=None,
+            resume_storage_path=str(tmp_path / "resumes"),
+            company_document_storage_path=str(tmp_path),
+        )
         monkeypatch.setattr(
-            "app.services.company_documents.get_settings",
-            lambda: Settings(_env_file=None, company_document_storage_path=str(tmp_path)),
+            "app.services.asset_storage.get_settings",
+            lambda: settings,
         )
         company = make_user(50, UserRole.COMPANY, "erase@company.com")
         document = CompanyDocument(
@@ -464,6 +524,47 @@ async def test_account_erasure_removes_company_documents(api_context, monkeypatc
             ) is None
             assert await session.scalar(select(User.id).where(User.id == company.id)) is None
         assert not document_path.exists()
+
+
+@pytest.mark.anyio
+async def test_account_erasure_removes_student_avatar(api_context, monkeypatch, tmp_path):
+    _, sessions = api_context
+    settings = Settings(
+        _env_file=None,
+        resume_storage_path=str(tmp_path / "resumes"),
+        company_document_storage_path=str(tmp_path / "company-documents"),
+    )
+    monkeypatch.setattr("app.services.asset_storage.get_settings", lambda: settings)
+    student = make_user(52, UserRole.STUDENT, "avatar-erasure@example.com")
+    filename = "avatar_52_12345678.png"
+    key = f"avatars/{filename}"
+    storage = LocalAssetStorage(
+        settings.resume_storage_path,
+        settings.company_document_storage_path,
+        tmp_path / "avatars",
+    )
+    storage.save(key, b"avatar-bytes", "image/png")
+
+    async with sessions() as session:
+        session.add_all(
+            [
+                student,
+                StudentProfile(
+                    user_id=student.id,
+                    full_name="Avatar Owner",
+                    university="University",
+                    major="Computer Science",
+                    graduation_year=2026,
+                    avatar_url=f"/api/v1/profiles/avatar/{filename}",
+                    avatar_storage_key=key,
+                    avatar_storage_backend="local",
+                ),
+            ]
+        )
+        await session.commit()
+        await erase_user(session, student, reason="Account deletion request")
+
+    assert not storage.exists(key)
 
 
 @pytest.mark.anyio

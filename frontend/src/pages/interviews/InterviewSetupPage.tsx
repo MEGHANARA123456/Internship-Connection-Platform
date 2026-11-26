@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Card, CardContent } from '../../components/ui/Card'
@@ -6,10 +6,13 @@ import { InterviewErrorNotice, useInterviewError } from '../../components/interv
 import { InterviewPageLayout } from '../../components/interviews/InterviewPageLayout'
 import { routes } from '../../lib/routes'
 import { showToast } from '../../lib/feedback'
+import { useToast } from '../../components/ui/ToastProvider'
 import {
   acknowledgeInterviewProctoringConsent,
   createInterviewSession,
+  getInterviewVideoRecordingPolicy,
   getInterviewSession,
+  setInterviewVideoStorageConsent,
   startInterviewSession,
 } from '../../services/interviewService'
 import type {
@@ -26,6 +29,8 @@ const categoryOptions: Array<{ value: InterviewCategory; label: string }> = [
 export function InterviewSetupPage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const { toast } = useToast()
+  const submitLock = useRef(false)
   const requestError = useInterviewError()
   const retakeIdValue = Number(searchParams.get('retake_of_session_id'))
   const retakeId = Number.isInteger(retakeIdValue) && retakeIdValue > 0 ? retakeIdValue : undefined
@@ -34,6 +39,10 @@ export function InterviewSetupPage() {
   const interviewMode: InterviewMode = 'VIDEO'
   const [questionCount, setQuestionCount] = useState<5 | 10>(5)
   const [consent, setConsent] = useState(false)
+  const [videoStorageConsent, setVideoStorageConsent] = useState(false)
+  const [retentionDays, setRetentionDays] = useState<number | null>(null)
+  const [storageBackend, setStorageBackend] = useState<'local' | 'gdrive'>('local')
+  const [videoPolicyError, setVideoPolicyError] = useState('')
   const [proctoringConsent, setProctoringConsent] = useState(false)
   const [loadingRetake, setLoadingRetake] = useState(Boolean(retakeId))
   const [submitting, setSubmitting] = useState(false)
@@ -52,6 +61,7 @@ export function InterviewSetupPage() {
       setCategory(session.category === 'HR' ? 'HR' : 'TECHNICAL')
       setSessionType(session.session_type)
       setQuestionCount(session.question_count === 10 ? 10 : 5)
+      setVideoStorageConsent(session.video_storage_consent)
     } catch (loadError) {
       setError(requestError(loadError, routes.interviewSetup()))
     } finally {
@@ -63,14 +73,27 @@ export function InterviewSetupPage() {
     void loadRetakeSettings()
   }, [loadRetakeSettings])
 
+  useEffect(() => {
+    void getInterviewVideoRecordingPolicy()
+      .then((policy) => {
+        setRetentionDays(policy.retention_days)
+        setStorageBackend(policy.storage_backend)
+        setVideoPolicyError('')
+      })
+      .catch(() => {
+        setVideoPolicyError('Storage retention settings could not be loaded. You can continue without recording.')
+      })
+  }, [])
+
   const changeCategory = (value: InterviewCategory) => {
     setCategory(value)
   }
 
-  const start = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
+  const start = async () => {
     const proctoringRequired = interviewMode === 'VIDEO'
-    if (!consent || (proctoringRequired && !proctoringConsent) || submitting) return
+    if (!consent || (proctoringRequired && !proctoringConsent) || submitLock.current) return
+    if (videoStorageConsent && retentionDays === null) return
+    submitLock.current = true
     if (proctoringRequired) {
       const request = document.fullscreenEnabled
         ? document.documentElement.requestFullscreen?.()
@@ -85,25 +108,48 @@ export function InterviewSetupPage() {
     }
     setSubmitting(true)
     setError('')
-    setCreatedSessionId(null)
+    let attemptId = createdSessionId
     try {
-      const created = await createInterviewSession({
-        session_type: sessionType,
-        category,
-        question_count: questionCount,
-        interview_mode: interviewMode,
-        consent_acknowledged: true,
-        ...(retakeId ? { retake_of_session_id: retakeId } : {}),
-      })
-      setCreatedSessionId(created.id)
-      if (proctoringRequired) {
-        await acknowledgeInterviewProctoringConsent(created.id)
+      if (attemptId === null) {
+        const created = await createInterviewSession({
+          session_type: sessionType,
+          category,
+          question_count: questionCount,
+          interview_mode: interviewMode,
+          consent_acknowledged: true,
+          video_storage_consent: videoStorageConsent,
+          ...(retakeId ? { retake_of_session_id: retakeId } : {}),
+        })
+        attemptId = created.id
+        setCreatedSessionId(created.id)
+      } else {
+        await setInterviewVideoStorageConsent(attemptId, videoStorageConsent)
       }
-      await startInterviewSession(created.id)
-      navigate(routes.interviewSession(created.id))
+      if (proctoringRequired) {
+        const { session } = await getInterviewSession(attemptId)
+        if (!session.proctoring_consent_acknowledged) {
+          await acknowledgeInterviewProctoringConsent(attemptId)
+        }
+      }
+      await startInterviewSession(attemptId)
+      navigate(routes.interviewSession(attemptId))
     } catch (startError) {
-      setError(requestError(startError, routes.interviewSetup()))
+      const message = requestError(startError, routes.interviewSetup())
+      if (message) {
+        const savedAttemptId = attemptId
+        toast(message, {
+          kind: 'error',
+          actions: [
+            { label: 'Try again', onClick: () => void start() },
+            ...(savedAttemptId === null ? [] : [{
+              label: 'Continue attempt',
+              onClick: () => navigate(routes.interviewSession(savedAttemptId)),
+            }]),
+          ],
+        })
+      }
     } finally {
+      submitLock.current = false
       setSubmitting(false)
     }
   }
@@ -115,12 +161,7 @@ export function InterviewSetupPage() {
       actions={<Link to={routes.interviewStudio} className="rounded-lg px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-950/40">Back to Studio</Link>}
     >
       {error && <InterviewErrorNotice message={error} onRetry={() => void loadRetakeSettings()} retrying={loadingRetake} />}
-      {createdSessionId !== null && (
-        <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          Your session was created but could not be started. <Link className="font-semibold underline" to={routes.interviewSession(createdSessionId)}>Continue to the session</Link>.
-        </div>
-      )}
-      <form onSubmit={(event) => void start(event)} className="space-y-5">
+      <form onSubmit={(event) => { event.preventDefault(); void start() }} className="space-y-5">
         <Card>
           <CardContent className="grid gap-5 py-5 sm:grid-cols-2">
             <label className="space-y-2 text-sm font-semibold text-slate-800 dark:text-slate-200">
@@ -170,12 +211,31 @@ export function InterviewSetupPage() {
           <label htmlFor="interview-consent" className="flex cursor-pointer items-start gap-3 text-sm leading-6 text-amber-950 dark:text-amber-100">
             <input id="interview-consent" type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} disabled={submitting} required className="mt-1 h-4 w-4 rounded border-amber-400 text-indigo-600 focus:ring-indigo-500" />
             <span>
-              I understand that my interview answers will be sent to an external AI provider for evaluation.
+              I understand that my interview answers may be sent to any AI provider configured by the platform (such as Groq, Gemini, or OpenRouter) for evaluation.
               {' Spoken answers are transcribed by browser speech recognition when supported; typing is always available.'}
-              {' Video recording is a separate opt-in and is off unless you explicitly consent in the interview room.'}
+              {' Video recording requires separate, optional storage and recording consent.'}
             </span>
           </label>
         </div>
+
+        {interviewMode === 'VIDEO' && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
+            <label htmlFor="video-storage-consent" className="flex cursor-pointer items-start gap-3 text-sm leading-6 text-amber-950 dark:text-amber-100">
+              <input
+                id="video-storage-consent"
+                type="checkbox"
+                checked={videoStorageConsent}
+                onChange={(event) => setVideoStorageConsent(event.target.checked)}
+                disabled={submitting || retentionDays === null}
+                className="mt-1 h-4 w-4 rounded border-amber-400 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>
+                I agree to store my video recording in secure {storageBackend === 'gdrive' ? 'cloud' : 'local'} storage for up to {retentionDays ?? 'the configured'} days. Recording remains off unless separately started in the interview room.
+              </span>
+            </label>
+            {videoPolicyError && <p role="status" className="mt-2 text-sm text-amber-900 dark:text-amber-200">{videoPolicyError}</p>}
+          </div>
+        )}
 
         {interviewMode === 'VIDEO' && (
           <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 dark:border-indigo-900 dark:bg-indigo-950/30">

@@ -10,7 +10,7 @@ export type InterviewSessionStatus =
   | 'COMPLETED'
   | 'EXPIRED'
   | 'TERMINATED'
-export type InterviewEvaluationStatus = 'PENDING' | 'COMPLETED' | 'FAILED'
+export type InterviewEvaluationStatus = 'PENDING' | 'EVALUATING' | 'COMPLETED' | 'FAILED'
 
 export interface InterviewSession {
   id: number
@@ -24,6 +24,7 @@ export interface InterviewSession {
   time_limit_seconds: number
   status: InterviewSessionStatus
   consent_acknowledged: boolean
+  video_storage_consent: boolean
   proctoring_consent_acknowledged: boolean
   proctoring_max_violations: number
   retake_of_session_id: number | null
@@ -60,18 +61,21 @@ export interface InterviewSessionCreate {
   question_count: 5 | 10
   interview_mode: InterviewMode
   consent_acknowledged: true
+  video_storage_consent?: boolean
   retake_of_session_id?: number
 }
 
 export interface InterviewEvaluation {
-  relevance: number
-  technical_correctness: number
-  completeness: number
-  communication: number
-  structure: number
+  relevance: number | null
+  technical_correctness: number | null
+  completeness: number | null
+  communication: number | null
+  structure: number | null
   feedback: string
   strengths: string[]
   improvements: string[]
+  score?: number | null
+  suggested_answer?: string | null
 }
 
 export interface InterviewAnswerResult {
@@ -83,10 +87,20 @@ export interface InterviewAnswerResult {
 }
 
 export interface InterviewAnswerRecord {
+  answer_id: number
   question_id: number
   position: number
   answer_text: string
   submitted_at: string
+  evaluation_status: InterviewEvaluationStatus
+  failure_code: string | null
+  evaluation: InterviewEvaluation | null
+}
+
+export interface InterviewEvaluationRetryResult {
+  queued: number
+  evaluated: number
+  failed: number
 }
 
 export type InterviewProctoringEventType =
@@ -155,7 +169,17 @@ export interface InterviewVideoConsent {
 
 export interface InterviewVideoRecording {
   id: number
-  status: 'UPLOADING' | 'AVAILABLE' | 'DELETED' | 'EXPIRED' | 'FAILED'
+  status:
+    | 'UPLOADING'
+    | 'PENDING_UPLOAD'
+    | 'AVAILABLE'
+    | 'PENDING_DELETE'
+    | 'DELETED'
+    | 'EXPIRED'
+    | 'FAILED'
+  finalized: boolean
+  source_type: 'mock' | 'real'
+  retryable: boolean
   mime_type: string
   chunk_count: number
   next_chunk_index: number
@@ -163,13 +187,22 @@ export interface InterviewVideoRecording {
   duration_seconds: number | null
   retention_expires_at: string
   created_at: string
+  error_code: string | null
 }
 
 export interface InterviewVideoRecordingState {
   required_consent_version: string
+  video_storage_consent: boolean
+  retention_days: number
+  storage_backend: 'local' | 'gdrive'
   consent: InterviewVideoConsent | null
   recording: InterviewVideoRecording | null
   recordings: InterviewVideoRecording[]
+}
+
+export interface InterviewVideoPolicy {
+  retention_days: number
+  storage_backend: 'local' | 'gdrive'
 }
 
 export interface InterviewAudioTranscript {
@@ -185,6 +218,9 @@ export interface InterviewReport {
   rubric_scores: Record<string, number> | null
   answer_count: number
   summary: string | null
+  top_strengths?: string[]
+  top_improvements?: string[]
+  next_steps?: string[]
   failure_code: string | null
   retry_after_seconds?: number | null
   evaluations: InterviewAnswerReview[]

@@ -5,6 +5,12 @@
 **/__pycache__/
 **/.pytest_cache/
 **/.ruff_cache/
+**/.mypy_cache/
+**/.tox/
 **/.env
 **/.env.*
 **/storage/
+**/*.py[cod]
+**/*.log
+coverage/
+pytest_result.txt

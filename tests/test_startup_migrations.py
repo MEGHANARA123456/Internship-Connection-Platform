@@ -58,6 +58,12 @@ async def test_lifespan_cancels_background_workers_on_exit(monkeypatch: pytest.M
     async def fake_knowledge_ingestion(_config) -> dict[str, int]:
         return {"indexed": 0, "unchanged": 0, "files": 0}
 
+    async def fake_recovery(_db) -> int:
+        return 0
+
+    async def fake_video_recovery(_db) -> int:
+        return 0
+
     async def fake_worker() -> None:
         try:
             await asyncio.sleep(3600)
@@ -79,10 +85,14 @@ async def test_lifespan_cancels_background_workers_on_exit(monkeypatch: pytest.M
     monkeypatch.setattr("app.main._interview_reminder_worker", fake_worker)
     monkeypatch.setattr("app.main._interview_expiry_worker", fake_worker)
     monkeypatch.setattr("app.main._interview_video_retention_worker", fake_worker)
+    monkeypatch.setattr("app.main._interview_video_upload_worker", fake_worker)
+    monkeypatch.setattr("app.services.interview_studio.recover_stuck_evaluations", fake_recovery)
+    monkeypatch.setattr("app.services.interview_video.recover_video_uploads", fake_video_recovery)
+    monkeypatch.setattr("app.services.interview_studio.interview_evaluation_worker", fake_worker)
     monkeypatch.setattr("app.main.asyncio.create_task", capture_task)
 
     async with lifespan(app):
         pass
 
-    assert len(worker_tasks) == 3
+    assert len(worker_tasks) == 5
     assert all(task.cancelled() for task in worker_tasks)

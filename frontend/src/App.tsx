@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Route, Routes, Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from 'react'
+import { Route, Routes, Navigate, Outlet, useParams } from 'react-router-dom'
 import { Navbar } from './components/layout/Navbar'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { GuestRoute } from './components/GuestRoute'
@@ -7,69 +7,138 @@ import { api } from './api/client'
 import { useAuthStore } from './store/auth'
 import { PageLoader } from './components/ui/LoadingSkeleton'
 import { FeedbackHost } from './components/ui/FeedbackHost'
+import { ToastProvider } from './components/ui/ToastProvider'
 import { SessionTimeoutManager } from './components/auth/SessionTimeoutManager'
 import { routes } from './lib/routes'
 import { NotFoundPage } from './pages/RouteFallbacks'
 
-export function SessionIdentityVerifier() {
-  const session = useAuthStore((state) => state.session)
-  const setSession = useAuthStore((state) => state.setSession)
-  const setAuthCheckState = useAuthStore((state) => state.setAuthCheckState)
-  const location = useLocation()
-  const [historyCheck, setHistoryCheck] = useState(0)
-  const identityKey = session
-    ? `${session.userId ?? ''}:${session.email?.trim().toLowerCase() ?? ''}`
-    : null
-  const verificationKey = session
-    ? `${session.accessToken}:${location.key}:${historyCheck}`
-    : null
-  const requestId = useRef(0)
+const AUTH_IDENTITY_STALE_TIME_MS = 5 * 60 * 1000
 
-  useLayoutEffect(() => {
-    const handlePopState = () => setHistoryCheck((value) => value + 1)
-    const handlePageShow = (event: PageTransitionEvent) => {
-      if (event.persisted) setHistoryCheck((value) => value + 1)
+type AuthIdentity = {
+  id: number
+  email: string
+  name?: string | null
+}
+
+let authIdentityCache: {
+  accessToken: string
+  expiresAt: number
+  identity: AuthIdentity | null
+} | null = null
+let authIdentityRequest: { accessToken: string; promise: Promise<void> } | null = null
+
+function sameUser(
+  first: { userId?: number; email?: string } | null,
+  second: { userId?: number; email?: string } | null,
+): boolean {
+  if (!first || !second) return false
+  if (first.userId != null && second.userId != null) return first.userId === second.userId
+  return Boolean(first.email && second.email && first.email.toLowerCase() === second.email.toLowerCase())
+}
+
+function applyAuthIdentity(accessToken: string, force = false): void {
+  const { session, setSession, setAuthCheckState } = useAuthStore.getState()
+  if (!session?.accessToken) {
+    setAuthCheckState(false, true)
+    return
+  }
+
+  if (
+    !force
+    && authIdentityCache?.accessToken === session.accessToken
+    && authIdentityCache.expiresAt > Date.now()
+  ) {
+    if (authIdentityCache.identity && sameUser(session, authIdentityCache.identity)) {
+      setSession({
+        ...session,
+        userId: authIdentityCache.identity.id,
+        email: authIdentityCache.identity.email,
+        name: authIdentityCache.identity.name ?? undefined,
+      })
     }
-    window.addEventListener('popstate', handlePopState)
+    setAuthCheckState(false, true)
+    return
+  }
+
+  if (authIdentityRequest?.accessToken === accessToken) return
+
+  const initialSession = session
+  setAuthCheckState(true)
+  let request: Promise<void>
+  request = api.get('/auth/me')
+    .then(({ data }) => {
+      const currentSession = useAuthStore.getState().session
+      if (!currentSession) return
+      const accessToken = currentSession.accessToken
+      if (!accessToken) {
+        setSession(null)
+        return
+      }
+      if (!sameUser(initialSession, currentSession)) return
+      if (!data?.id || !data.email) return
+
+      const resolvedIdentity: AuthIdentity = {
+        id: data.id,
+        email: data.email,
+        name: data.name ?? null,
+      }
+      authIdentityCache = {
+        accessToken,
+        expiresAt: Date.now() + AUTH_IDENTITY_STALE_TIME_MS,
+        identity: resolvedIdentity,
+      }
+      setSession({
+        ...currentSession,
+        accessToken,
+        userId: resolvedIdentity.id,
+        email: resolvedIdentity.email,
+        name: resolvedIdentity.name ?? undefined,
+      })
+    })
+    .catch(() => {
+      const currentSession = useAuthStore.getState().session
+      if (!currentSession) return
+      const accessToken = currentSession.accessToken
+      if (!accessToken) {
+        setSession(null)
+        return
+      }
+      if (!sameUser(initialSession, currentSession)) return
+      authIdentityCache = {
+        accessToken,
+        expiresAt: Date.now() + 60_000,
+        identity: null,
+      }
+    })
+    .finally(() => {
+      const currentSession = useAuthStore.getState().session
+      if (sameUser(initialSession, currentSession)) {
+        useAuthStore.getState().setAuthCheckState(false, true)
+      }
+      if (authIdentityRequest?.promise === request) authIdentityRequest = null
+    })
+  authIdentityRequest = { accessToken, promise: request }
+}
+
+export function SessionIdentityVerifier() {
+  useLayoutEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        const session = useAuthStore.getState().session
+        if (session?.accessToken) applyAuthIdentity(session.accessToken, true)
+      }
+    }
+    const session = useAuthStore.getState().session
+    if (session?.accessToken) {
+      applyAuthIdentity(session.accessToken)
+    } else {
+      useAuthStore.getState().setAuthCheckState(false, true)
+    }
     window.addEventListener('pageshow', handlePageShow)
     return () => {
-      window.removeEventListener('popstate', handlePopState)
       window.removeEventListener('pageshow', handlePageShow)
     }
   }, [])
-
-  useLayoutEffect(() => {
-    if (!session?.accessToken || !verificationKey || !identityKey) {
-      setAuthCheckState(false, true)
-      return
-    }
-    const currentRequestId = ++requestId.current
-    setAuthCheckState(true)
-
-    const accessToken = session.accessToken
-    void api.get('/auth/me')
-      .then(({ data }) => {
-        if (data?.id == null || !data.email) return
-        const currentSession = useAuthStore.getState().session
-        if (currentSession?.accessToken !== accessToken) return
-
-        setSession({
-          ...currentSession,
-          userId: data.id,
-          email: data.email,
-          name: data.name ?? undefined,
-        })
-      })
-      .catch(() => {
-        // A network outage should not discard a locally stored session.
-      })
-      .finally(() => {
-        if (requestId.current === currentRequestId) {
-          setAuthCheckState(false, true)
-        }
-      })
-  }, [identityKey, location.key, historyCheck, verificationKey, session?.accessToken, setAuthCheckState, setSession])
-
   return null
 }
 
@@ -212,8 +281,9 @@ function CommunicationLayout() {
 
 export default function App() {
   return (
-    <MobileViewSimulator>
-      <div className="min-h-screen flex flex-col bg-transparent text-slate-900 dark:text-slate-100 font-sans antialiased transition-colors">
+    <ToastProvider>
+      <MobileViewSimulator>
+        <div className="min-h-screen flex flex-col bg-transparent text-slate-900 dark:text-slate-100 font-sans antialiased transition-colors">
         <SessionIdentityVerifier />
         <SessionTimeoutManager />
         <SessionChangedBanner />
@@ -337,7 +407,8 @@ export default function App() {
         <Footer />
         <CookieConsentBanner />
         <Suspense fallback={null}><ChatbotWidget /></Suspense>
-      </div>
-    </MobileViewSimulator>
+        </div>
+      </MobileViewSimulator>
+    </ToastProvider>
   )
 }

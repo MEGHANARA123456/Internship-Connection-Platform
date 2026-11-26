@@ -6,6 +6,7 @@ import { Badge } from '../../components/ui/Badge'
 import { DataList } from '../../components/ui/DataList'
 import { IconButton } from '../../components/ui/IconButton'
 import { queryClient } from '../../lib/queryClient'
+import { useToast } from '../../components/ui/ToastProvider'
 import {
   approveAdminInterviewQuestion,
   createAdminInterviewQuestion,
@@ -222,6 +223,7 @@ const blankQuestion = {
 }
 
 export function InterviewStudioAdminPage() {
+  const { toast } = useToast()
   const [tab, setTab] = useState<Tab>('questions')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -398,6 +400,52 @@ export function InterviewStudioAdminPage() {
     void loadTab()
   }, [loadTab, retry])
 
+  useEffect(() => {
+    if (error) {
+      toast(error, {
+        kind: 'error',
+        actions: [{
+          label: retryWait ? `Retry in ${retryWait}s` : 'Retry',
+          onClick: () => {
+            void queryClient.invalidateQueries({ queryKey: ['admin-interview-studio'] })
+            setRetry((value) => value + 1)
+          },
+        }],
+      })
+    }
+  }, [error, toast])
+
+  useEffect(() => {
+    if (notice) toast(notice, { kind: 'success' })
+  }, [notice, toast])
+
+  useEffect(() => {
+    if (analyticsError) {
+      toast(analyticsError, {
+        kind: 'error',
+        actions: [{ label: 'Retry', onClick: () => void loadAnalytics(true) }],
+      })
+    }
+  }, [analyticsError, loadAnalytics, toast])
+
+  useEffect(() => {
+    if (failuresError) {
+      toast(failuresError, {
+        kind: 'error',
+        actions: [{ label: 'Retry', onClick: () => void loadFailures(true) }],
+      })
+    }
+  }, [failuresError, loadFailures, toast])
+
+  useEffect(() => {
+    if (providerStatusError) {
+      toast(providerStatusError, {
+        kind: 'error',
+        actions: [{ label: 'Retry', onClick: () => void loadProviderStatus(true) }],
+      })
+    }
+  }, [loadProviderStatus, providerStatusError, toast])
+
   const runMutation = async (operation: () => Promise<unknown>, successMessage: string) => {
     setBusy(true)
     setError('')
@@ -559,9 +607,13 @@ export function InterviewStudioAdminPage() {
               key: 'status',
               header: 'State',
               render: (question) => (
-                <div className="flex flex-wrap gap-1.5">
-                  <Badge>{question.review_status.replaceAll('_', ' ')}</Badge>
-                  <Badge variant={question.active ? 'emerald' : 'slate'}>{question.active ? 'Active' : 'Inactive'}</Badge>
+                <div className="flex min-w-44 flex-col items-start gap-1.5">
+                  <Badge variant={question.review_status === 'APPROVED' ? 'emerald' : 'amber'}>
+                    {question.review_status === 'APPROVED' ? 'Approved' : 'Pending approval'}
+                  </Badge>
+                  <Badge variant={question.review_status === 'APPROVED' && question.active ? 'emerald' : 'slate'}>
+                    {question.review_status === 'APPROVED' && question.active ? 'Active' : 'Inactive'}
+                  </Badge>
                 </div>
               ),
             },
@@ -575,20 +627,35 @@ export function InterviewStudioAdminPage() {
                   variant="primary"
                   aria-label={`Approve question ${question.id}`}
                   disabled={busy}
-                  onClick={() => void runMutation(() => approveAdminInterviewQuestion(question.id), 'Question approved.')}
+                  onClick={() => {
+                    setBusy(true)
+                    void approveAdminInterviewQuestion(question.id)
+                      .then((approved) => {
+                        setQuestions((current) => current.map((item) => item.id === approved.id ? approved : item))
+                        setNotice('Question approved.')
+                        void queryClient.invalidateQueries({ queryKey: ['admin-interview-studio', 'questions'] })
+                      })
+                      .catch((approvalError) => setError(messageFromError(approvalError)))
+                      .finally(() => setBusy(false))
+                  }}
                 />
               )}
-              <IconButton
-                icon={Power}
-                aria-label={`${question.active ? 'Deactivate' : 'Reactivate'} question ${question.id}`}
-                title={`${question.active ? 'Deactivate' : 'Reactivate'} question`}
-                disabled={busy}
-                onClick={() => {
-                  if (window.confirm(`${question.active ? 'Deactivate' : 'Reactivate'} this question? Active tests using it will also be deactivated.`)) {
-                    void runMutation(() => updateAdminInterviewQuestion(question.id, { active: !question.active }), 'Question status updated.')
-                  }
-                }}
-              />
+              <span
+                className="inline-flex"
+                title={question.review_status !== 'APPROVED' ? 'Approve this question first' : undefined}
+              >
+                <IconButton
+                  icon={Power}
+                  aria-label={`${question.review_status === 'APPROVED' && question.active ? 'Deactivate' : 'Reactivate'} question ${question.id}`}
+                  title={`${question.review_status === 'APPROVED' && question.active ? 'Deactivate' : 'Reactivate'} question`}
+                  disabled={busy || question.review_status !== 'APPROVED'}
+                  onClick={() => {
+                    if (window.confirm(`${question.review_status === 'APPROVED' && question.active ? 'Deactivate' : 'Reactivate'} this question? Active tests using it will also be deactivated.`)) {
+                      void runMutation(() => updateAdminInterviewQuestion(question.id, { active: !(question.review_status === 'APPROVED' && question.active) }), 'Question status updated.')
+                    }
+                  }}
+                />
+              </span>
             </>
           )}
         />
@@ -723,7 +790,6 @@ export function InterviewStudioAdminPage() {
           {providerStatusMessage(providerStatus.last_error)}
         </p>
       )}
-      {providerStatusError && <p role="alert" className="mt-2 text-sm text-rose-700 dark:text-rose-300">{providerStatusError}</p>}
       <Button type="button" className="mt-2" size="sm" variant="secondary" disabled={providerStatusLoading || retryWait > 0} onClick={() => void loadProviderStatus(true)}>
         Retry provider check
       </Button>
@@ -743,12 +809,23 @@ export function InterviewStudioAdminPage() {
       ? failures.reports as Array<{ code?: string; count?: number }>
       : []
     const providerFailures = Array.isArray(failures?.provider_failures)
-      ? failures.provider_failures as Array<{ code?: string; count?: number }>
+      ? failures.provider_failures as Array<{ area?: string; code?: string; count?: number }>
+      : []
+    const recentFailures = Array.isArray(failures?.recent_failures)
+      ? failures.recent_failures as Array<{
+          area?: string
+          provider?: string
+          attempt_id?: number | null
+          answer_id?: number | null
+          status_code?: number | null
+          error_type?: string
+          created_at?: string
+        }>
       : []
     const failureRows = [
       ...evaluationFailures.map((failure) => ({ area: 'Evaluation', reason: failureReasonLabel(failure.code ?? 'evaluation_failed'), count: Number(failure.count ?? 0) })),
       ...reportFailures.map((failure) => ({ area: 'Report', reason: failureReasonLabel(failure.code ?? 'report_failed'), count: Number(failure.count ?? 0) })),
-      ...providerFailures.map((failure) => ({ area: 'Provider', reason: failureReasonLabel(failure.code ?? 'provider_failed'), count: Number(failure.count ?? 0) })),
+      ...providerFailures.map((failure) => ({ area: failure.area ?? 'Provider', reason: failureReasonLabel(failure.code ?? 'provider_failed'), count: Number(failure.count ?? 0) })),
     ]
     const modeCounts = (analytics?.mode_split ?? {}) as Record<string, number>
     const dailyRows = Array.isArray(analytics?.daily)
@@ -769,7 +846,7 @@ export function InterviewStudioAdminPage() {
 
     return <div className="space-y-5">
       {analyticsError
-        ? <div role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-950 dark:text-rose-100">{analyticsError}<Button className="ml-3" size="sm" variant="secondary" disabled={retryWait > 0} onClick={() => void loadAnalytics(true)}>{retryWait ? `Retry in ${retryWait}s` : 'Retry'}</Button></div>
+        ? null
         : analyticsLoading
           ? <p role="status" className="text-sm text-slate-500">Loading usage data…</p>
           : analytics && <>
@@ -809,7 +886,7 @@ export function InterviewStudioAdminPage() {
             </section>
           </>}
       {failuresError
-        ? <div role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-950 dark:text-rose-100">{failuresError}<Button className="ml-3" size="sm" variant="secondary" disabled={retryWait > 0} onClick={() => void loadFailures(true)}>{retryWait ? `Retry in ${retryWait}s` : 'Retry'}</Button></div>
+        ? null
         : failuresLoading
           ? <p role="status" className="text-sm text-slate-500">Loading failure data…</p>
           : failures && <section className="rounded-xl border border-slate-200 p-4 dark:border-slate-800">
@@ -817,8 +894,8 @@ export function InterviewStudioAdminPage() {
           if (window.confirm('Retry up to 10 failed evaluations? No student content will be returned.')) {
             void runMutation(async () => {
               const result = await retryAdminInterviewFailures()
-              setNotice(`Retry batch: ${result.completed} recovered, ${result.failed} still failed.`)
-            }, 'Retry batch completed.')
+              setNotice(`Retry batch: ${result.queued} queued, ${result.evaluated} already evaluated, ${result.failed} still failed.`)
+            }, 'Retry batch queued.')
           }
         }}>Retry evaluation batch</Button>}</div>
         {failureRows.length === 0
@@ -827,6 +904,24 @@ export function InterviewStudioAdminPage() {
             <thead><tr className="text-xs text-slate-500"><th className="py-2">Area</th><th className="py-2">Reason</th><th className="py-2">Count</th></tr></thead>
             <tbody>{failureRows.map((failure, index) => <tr key={`${failure.area}-${failure.reason}-${index}`} className="border-t border-slate-100 dark:border-slate-800"><td className="py-2">{failure.area}</td><td className="py-2">{failure.reason}</td><td className="py-2"><Badge variant="rose">{failure.count}</Badge></td></tr>)}</tbody>
           </table></div>}
+       {recentFailures.length > 0 && (
+         <div className="mt-4 overflow-x-auto">
+           <table aria-label="Recent provider failures" className="w-full text-left text-sm">
+             <thead><tr className="text-xs text-slate-500"><th className="py-2">Area</th><th className="py-2">Provider</th><th className="py-2">Attempt</th><th className="py-2">Answer</th><th className="py-2">Status</th><th className="py-2">Error</th><th className="py-2">Time</th></tr></thead>
+             <tbody>{recentFailures.map((failure, index) => (
+               <tr key={`${failure.attempt_id}-${failure.answer_id}-${index}`} className="border-t border-slate-100 dark:border-slate-800">
+                 <td className="py-2">{failure.area ?? 'Provider'}</td>
+                 <td className="py-2">{failure.provider ?? 'Unknown'}</td>
+                 <td className="py-2">{failure.attempt_id ?? '—'}</td>
+                 <td className="py-2">{failure.answer_id ?? '—'}</td>
+                 <td className="py-2">{failure.status_code ?? '—'}</td>
+                 <td className="py-2">{failureReasonLabel(failure.error_type ?? 'provider_failed')}</td>
+                 <td className="py-2">{failure.created_at ? new Date(failure.created_at).toLocaleString() : '—'}</td>
+               </tr>
+             ))}</tbody>
+           </table>
+         </div>
+       )}
       </section>}
     </div>
   }
@@ -913,11 +1008,6 @@ export function InterviewStudioAdminPage() {
           setRetry((value) => value + 1)
         }}>{retryWait ? `Refresh in ${retryWait}s` : 'Refresh'}</Button>
       </nav>
-      {error && <div role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-950 dark:text-rose-100">{error}<Button className="ml-3" size="sm" variant="secondary" disabled={retryWait > 0} onClick={() => {
-        void queryClient.invalidateQueries({ queryKey: ['admin-interview-studio'] })
-        setRetry((value) => value + 1)
-      }}>{retryWait ? `Retry in ${retryWait}s` : 'Retry'}</Button></div>}
-      {notice && <p role="status" className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950 dark:text-emerald-100">{notice}</p>}
       {tab === 'questions' && renderQuestions()}
       {tab === 'tests' && renderTests()}
       {tab === 'taxonomy' && renderTaxonomy()}

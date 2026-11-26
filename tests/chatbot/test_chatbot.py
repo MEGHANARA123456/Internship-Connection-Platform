@@ -1732,12 +1732,31 @@ async def test_api_drops_empty_assistant_turns(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
-async def test_api_shortens_over_limit_user_message() -> None:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/v1/chatbot/ask",
-            json={"message": "x" * 501},
-        )
+async def test_api_shortens_over_limit_user_message(monkeypatch) -> None:
+    import app.chatbot.router as chatbot_router
+    from app.core.database import get_db
+
+    class OfflineDatabase:
+        def add(self, _record) -> None:
+            pass
+
+        async def commit(self) -> None:
+            pass
+
+    config = _config()
+    monkeypatch.setattr(chatbot_router, "_settings", config)
+    monkeypatch.setattr(chatbot_router, "_service", ChatbotService(config=config))
+    app.dependency_overrides[get_current_user_optional] = lambda: None
+    app.dependency_overrides[get_db] = OfflineDatabase
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/chatbot/ask",
+                json={"message": "x" * 501},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user_optional, None)
+        app.dependency_overrides.pop(get_db, None)
     assert response.status_code == 200
     assert response.json()["answer"]
 

@@ -100,8 +100,7 @@ function microphoneErrorMessage(error: unknown): string {
 }
 
 function isSecureForMicrophone(): boolean {
-  const hostname = window.location.hostname
-  return window.isSecureContext || hostname === 'localhost' || hostname === '127.0.0.1'
+  return window.isSecureContext
 }
 
 export function VoiceRoom({
@@ -125,6 +124,7 @@ export function VoiceRoom({
   const [muted, setMuted] = useState(false)
   const [speaking, setSpeaking] = useState(false)
   const [listeningForAnswer, setListeningForAnswer] = useState(false)
+  const answerRef = useRef<HTMLTextAreaElement>(null)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const recognitionBaseRef = useRef('')
   const streamRef = useRef<MediaStream | null>(null)
@@ -133,6 +133,11 @@ export function VoiceRoom({
   const animationRef = useRef<number | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const blobRef = useRef<Blob | null>(null)
+
+  useEffect(() => {
+    answerRef.current?.focus({ preventScroll: true })
+    answerRef.current?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+  }, [questionId])
 
   const startMeter = useCallback((stream: MediaStream) => {
     if (typeof AudioContext === 'undefined') return
@@ -174,7 +179,7 @@ export function VoiceRoom({
     }
     if (streamRef.current) return streamRef.current
     if (!isSecureForMicrophone()) {
-      setError('Microphone access requires HTTPS or localhost. You can still type your answer.')
+      setError('Microphone access requires a secure context (HTTPS). You can still type your answer.')
       return null
     }
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -515,6 +520,7 @@ export function VoiceRoom({
         <p className="text-xs text-slate-500 dark:text-slate-400">Verified recording duration: {clipDuration.toFixed(1)} seconds. The session timer continues while recording is paused.</p>
       )}
       <Textarea
+        ref={answerRef}
         label="Transcript / your answer"
         value={answer}
         onChange={(event) => onAnswerChange(event.target.value)}

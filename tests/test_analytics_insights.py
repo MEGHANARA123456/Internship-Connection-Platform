@@ -253,7 +253,7 @@ async def test_role_scoped_analytics_aggregates_and_empty_results(monkeypatch: p
             headers=company_headers,
         )
         assert company_insights.status_code == 200
-        assert company_insights.headers["cache-control"] == "no-store"
+        assert company_insights.headers["cache-control"] == "private, no-store"
         company_payload = company_insights.json()
         assert company_payload["kpis"]["total_applicants"]["value"] == 3
         assert company_payload["kpis"]["shortlisted"]["value"] == 1
@@ -305,7 +305,7 @@ async def test_role_scoped_analytics_aggregates_and_empty_results(monkeypatch: p
             headers={"Authorization": f"Bearer {student_a_token}"},
         )
         assert insights_response.status_code == 200
-        assert insights_response.headers["cache-control"] == "no-store"
+        assert insights_response.headers["cache-control"] == "private, no-store"
         insights_payload = insights_response.json()
         assert insights_payload["kpis"]["applications_submitted"]["value"] == 9
         assert insights_payload["kpis"]["under_review"]["value"] == 0
@@ -369,7 +369,7 @@ async def test_role_scoped_analytics_aggregates_and_empty_results(monkeypatch: p
             headers={"Authorization": f"Bearer {admin_token}"},
         )
         assert admin_insights.status_code == 200
-        assert admin_insights.headers["cache-control"] == "no-store"
+        assert admin_insights.headers["cache-control"] == "private, no-store"
         admin_payload = admin_insights.json()
         assert admin_payload["kpis"]["admin_actions"]["value"] == 0
         assert sum(item["count"] for item in admin_payload["charts"]["admin_applications_over_time"]) == 11

@@ -497,7 +497,7 @@ async def test_admin_chatbot_reads_audit_records_but_student_cannot(db_setup, mo
             action="posting_approved",
             target_type="posting",
             target_id=77,
-            created_at=datetime(2026, 10, 28, 8, 15, tzinfo=timezone.utc),
+            created_at=datetime.now(timezone.utc) - timedelta(days=1),
         ))
         await session.commit()
 
@@ -520,8 +520,7 @@ async def test_admin_chatbot_reads_audit_records_but_student_cannot(db_setup, mo
         )
 
     assert admin_response.status_code == 200
-    assert "Admin postings approved for posting" in admin_response.json()["answer"]
-    assert "days ago" in admin_response.json()["answer"]
+    assert admin_response.json()["answer"] == "Last 7 days: 1 posting approved."
     assert "example.com" not in admin_response.json()["answer"]
     assert student_response.status_code == 200
     assert student_response.json()["refused"] is True

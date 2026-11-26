@@ -15,7 +15,10 @@ from app.core.config import get_settings
 
 # Read the database URL from the app settings and set it for Alembic.
 config = context.config
-config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
+config.set_main_option(
+    "sqlalchemy.url",
+    get_settings().sqlalchemy_database_url.replace("%", "%%"),
+)
 
 # Load the Alembic logging configuration if it exists.
 if config.config_file_name is not None:

@@ -5,19 +5,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createMockTestAttempt,
   getMockTest,
+  getInterviewVideoRecordingPolicy,
   getMockTestRecommendation,
+  listMockTestAttempts,
   listMockTests,
-  startInterviewSession,
+  setInterviewVideoStorageConsent,
 } from '../../services/interviewService'
-import type { InterviewSession, MockTest, MockTestDetail } from '../../types/interview'
+import type { MockTest, MockTestDetail } from '../../types/interview'
 import { MockTestsLibrary } from './MockTestsLibrary'
 
 vi.mock('../../services/interviewService', () => ({
   createMockTestAttempt: vi.fn(),
+  getInterviewVideoRecordingPolicy: vi.fn(),
   getMockTest: vi.fn(),
   getMockTestRecommendation: vi.fn(),
+  listMockTestAttempts: vi.fn(),
   listMockTests: vi.fn(),
-  startInterviewSession: vi.fn(),
+  setInterviewVideoStorageConsent: vi.fn(),
 }))
 
 const mockTest: MockTest = {
@@ -73,7 +77,10 @@ beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(listMockTests).mockResolvedValue([mockTest])
   vi.mocked(getMockTestRecommendation).mockResolvedValue({ weakest_skill: null, recommended_test: null })
+  vi.mocked(getInterviewVideoRecordingPolicy).mockResolvedValue({ retention_days: 30, storage_backend: 'local' })
+  vi.mocked(setInterviewVideoStorageConsent).mockResolvedValue()
   vi.mocked(getMockTest).mockResolvedValue(mockTestDetail)
+  vi.mocked(listMockTestAttempts).mockResolvedValue([])
   vi.mocked(createMockTestAttempt).mockResolvedValue({
     id: 25,
     session_type: 'PRACTICE',
@@ -84,6 +91,7 @@ beforeEach(() => {
     time_limit_seconds: 1200,
     status: 'CREATED',
     consent_acknowledged: true,
+    video_storage_consent: false,
     proctoring_consent_acknowledged: true,
     proctoring_max_violations: 3,
     retake_of_session_id: null,
@@ -92,25 +100,6 @@ beforeEach(() => {
     expires_at: null,
     completed_at: null,
   })
-  const startedSession: InterviewSession = {
-    id: 25,
-    session_type: 'PRACTICE',
-    interview_mode: 'TEXT',
-    category: 'HR',
-    difficulty: 'INTERMEDIATE',
-    question_count: 5,
-    time_limit_seconds: 1200,
-    status: 'IN_PROGRESS',
-    consent_acknowledged: true,
-    proctoring_consent_acknowledged: true,
-    proctoring_max_violations: 3,
-    retake_of_session_id: null,
-    created_at: '2026-11-19T10:00:00Z',
-    started_at: '2026-11-19T10:00:00Z',
-    expires_at: '2026-11-19T10:20:00Z',
-    completed_at: null,
-  }
-  vi.mocked(startInterviewSession).mockResolvedValue(startedSession)
 })
 
 describe('MockTestsLibrary', () => {
@@ -139,7 +128,7 @@ describe('MockTestsLibrary', () => {
 
     fireEvent.change(screen.getByLabelText('Practice type'), { target: { value: 'ASSESSMENT' } })
     fireEvent.change(screen.getByLabelText('Interview mode'), { target: { value: 'VIDEO' } })
-    fireEvent.click(screen.getByRole('checkbox', { name: /answers are sent to an external AI provider/i }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /may be sent to any AI provider configured/i }))
     fireEvent.click(startButton)
 
     await waitFor(() => {
@@ -147,10 +136,11 @@ describe('MockTestsLibrary', () => {
         session_type: 'ASSESSMENT',
         interview_mode: 'VIDEO',
         consent_acknowledged: true,
+        video_storage_consent: false,
       })
-      expect(startInterviewSession).toHaveBeenCalledWith(25)
       expect(screen.getByLabelText('Current path')).toHaveTextContent('/interview-studio/session/25')
     })
+    expect(listMockTestAttempts).toHaveBeenCalledWith(8)
   })
 
   it('shows metadata and the start form without exposing question or attempt lists', async () => {

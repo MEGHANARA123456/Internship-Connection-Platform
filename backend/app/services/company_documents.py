@@ -1,11 +1,8 @@
 """Validation and private storage helpers for company verification documents."""
 
 from pathlib import Path
-import re
 
 from fastapi import HTTPException, UploadFile, status
-
-from app.core.config import get_settings
 
 MAX_COMPANY_DOCUMENT_BYTES = 5 * 1024 * 1024
 DOCUMENT_FORMATS = {
@@ -14,7 +11,6 @@ DOCUMENT_FORMATS = {
     ".jpeg": ("image/jpeg", b"\xff\xd8\xff"),
     ".png": ("image/png", b"\x89PNG\r\n\x1a\n"),
 }
-STORED_FILENAME_PATTERN = re.compile(r"^[a-f0-9]{32}\.(pdf|jpg|jpeg|png)$")
 
 
 async def validate_company_document(upload: UploadFile) -> tuple[bytes, str, str]:
@@ -47,14 +43,3 @@ async def validate_company_document(upload: UploadFile) -> tuple[bytes, str, str
             detail="The uploaded file content does not match its extension and content type.",
         )
     return content, filename, extension
-
-
-def company_document_path(stored_filename: str) -> Path:
-    """Resolve a generated company-document filename inside the configured storage directory."""
-    if not STORED_FILENAME_PATTERN.fullmatch(stored_filename):
-        raise HTTPException(status_code=404, detail="Company document file not found.")
-    storage = Path(get_settings().company_document_storage_path).resolve()
-    path = (storage / stored_filename).resolve()
-    if path.parent != storage:
-        raise HTTPException(status_code=404, detail="Company document file not found.")
-    return path

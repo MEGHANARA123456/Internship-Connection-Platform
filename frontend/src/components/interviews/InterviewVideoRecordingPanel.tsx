@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '../ui/Button'
+import { useToast } from '../ui/ToastProvider'
 import {
   deleteInterviewVideoRecording,
   finalizeInterviewVideoRecording,
   getInterviewVideoRecording,
   getInterviewVideoRecordingState,
+  retryInterviewVideoRecording,
 } from '../../services/interviewService'
 import type { InterviewVideoRecordingState } from '../../types/interview'
 
@@ -27,6 +29,7 @@ export function InterviewVideoRecordingPanel({
   const [playingId, setPlayingId] = useState<number | null>(null)
   const [videoUrl, setVideoUrl] = useState('')
   const objectUrlRef = useRef<string | null>(null)
+  const { toast } = useToast()
 
   const loadState = useCallback(async () => {
     try {
@@ -35,9 +38,11 @@ export function InterviewVideoRecordingPanel({
       onStateChange?.(current)
       setError('')
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Recording status could not be loaded.')
+      const message = loadError instanceof Error ? loadError.message : 'Recording status could not be loaded.'
+      setError(message)
+      toast(message, { kind: 'error' })
     }
-  }, [onStateChange, sessionId])
+  }, [onStateChange, sessionId, toast])
 
   useEffect(() => {
     void loadState()
@@ -46,6 +51,28 @@ export function InterviewVideoRecordingPanel({
   useEffect(() => () => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
   }, [])
+
+  const pendingWork = state?.recordings.some((recording) => (
+    recording.status === 'PENDING_UPLOAD'
+    || recording.status === 'PENDING_DELETE'
+    || (recording.status === 'UPLOADING' && recording.finalized)
+  )) ?? false
+
+  useEffect(() => {
+    if (!pendingWork) return
+    const timer = window.setInterval(() => void loadState(), 3000)
+    return () => window.clearInterval(timer)
+  }, [loadState, pendingWork])
+
+  useEffect(() => {
+    if (!pendingWork && busyRecordingId === null) return
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeLeaving)
+    return () => window.removeEventListener('beforeunload', warnBeforeLeaving)
+  }, [busyRecordingId, pendingWork])
 
   const playRecording = async (recordingId: number) => {
     setBusyRecordingId(recordingId)
@@ -58,7 +85,9 @@ export function InterviewVideoRecordingPanel({
       setVideoUrl(url)
       setPlayingId(recordingId)
     } catch (playError) {
-      setError(playError instanceof Error ? playError.message : 'Recording could not be played.')
+      const message = playError instanceof Error ? playError.message : 'Recording could not be played.'
+      setError(message)
+      toast(message, { kind: 'error' })
     } finally {
       setBusyRecordingId(null)
     }
@@ -71,7 +100,9 @@ export function InterviewVideoRecordingPanel({
       await finalizeInterviewVideoRecording(sessionId, recordingId)
       await loadState()
     } catch (finalizeError) {
-      setError(finalizeError instanceof Error ? finalizeError.message : 'The saved recording segment could not be finalized.')
+      const message = finalizeError instanceof Error ? finalizeError.message : 'The saved recording segment could not be finalized.'
+      setError(message)
+      toast(message, { kind: 'error' })
     } finally {
       setBusyRecordingId(null)
     }
@@ -91,7 +122,24 @@ export function InterviewVideoRecordingPanel({
       }
       await loadState()
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : 'The recording could not be deleted.')
+      const message = deleteError instanceof Error ? deleteError.message : 'The recording could not be deleted.'
+      setError(message)
+      toast(message, { kind: 'error' })
+    } finally {
+      setBusyRecordingId(null)
+    }
+  }
+
+  const retryUpload = async (recordingId: number) => {
+    setBusyRecordingId(recordingId)
+    setError('')
+    try {
+      await retryInterviewVideoRecording(sessionId, recordingId)
+      await loadState()
+    } catch (retryError) {
+      const message = retryError instanceof Error ? retryError.message : 'The recording upload could not be retried.'
+      setError(message)
+      toast(message, { kind: 'error' })
     } finally {
       setBusyRecordingId(null)
     }
@@ -107,15 +155,27 @@ export function InterviewVideoRecordingPanel({
       {recordings.map((recording) => (
         <div key={recording.id} className="space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
           <p className="text-sm">
-            {recording.status === 'UPLOADING'
+            {recording.status === 'PENDING_UPLOAD'
+              ? 'Queued for secure storage...'
+              : recording.status === 'UPLOADING' && recording.finalized
+                ? 'Uploading recording...'
+                : recording.status === 'UPLOADING'
               ? `Saved segment in progress · ${recording.chunk_count} uploaded chunk(s)`
-              : `Recording · ${recording.duration_seconds?.toFixed(1) ?? '—'} seconds`}
+              : recording.status === 'FAILED'
+                ? 'Recording upload failed.'
+                : recording.status === 'PENDING_DELETE'
+                  ? 'Recording deletion is queued.'
+                  : recording.status === 'DELETED'
+                    ? 'Recording deleted.'
+                    : recording.status === 'EXPIRED'
+                      ? 'Recording expired.'
+                      : `Recording · ${recording.duration_seconds?.toFixed(1) ?? '—'} seconds`}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             Private to you. Expires {new Date(recording.retention_expires_at).toLocaleDateString()}.
           </p>
           <div className="flex flex-wrap gap-2">
-            {recording.status === 'UPLOADING' && (
+            {recording.status === 'UPLOADING' && !recording.finalized && (
               <Button
                 type="button"
                 variant="outline"
@@ -139,11 +199,23 @@ export function InterviewVideoRecordingPanel({
                 Play recording
               </Button>
             )}
+            {recording.status === 'FAILED' && recording.retryable && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={busyRecordingId === recording.id}
+                isLoading={busyRecordingId === recording.id}
+                onClick={() => void retryUpload(recording.id)}
+              >
+                Retry upload
+              </Button>
+            )}
             <Button
               type="button"
               variant="outline"
               size="sm"
-              disabled={busyRecordingId === recording.id}
+              disabled={busyRecordingId === recording.id || ['DELETED', 'EXPIRED', 'PENDING_DELETE'].includes(recording.status)}
               onClick={() => void removeRecording(recording.id)}
             >
               Delete recording

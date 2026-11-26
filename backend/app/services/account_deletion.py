@@ -1,6 +1,5 @@
 """Shared account-erasure service used by privacy and administrator endpoints."""
 
-from pathlib import Path
 import asyncio
 import logging
 from typing import Any
@@ -9,7 +8,6 @@ from fastapi import HTTPException
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.models import (
     Application,
     AuditLog,
@@ -21,6 +19,7 @@ from app.models import (
     EmailVerificationToken,
     Interview,
     InterviewRecording,
+    InterviewRecordingDeletion,
     Internship,
     Message,
     Notification,
@@ -34,7 +33,11 @@ from app.models import (
     User,
     UserRole,
 )
-from app.services.company_documents import company_document_path
+from app.services.asset_storage import (
+    asset_key,
+    get_asset_storage,
+    legacy_avatar_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +55,8 @@ async def erase_user(
     The optional administrator policy prevents self-deletion and removal of the
     last administrator. GDPR self-service erasure keeps its existing policy.
     """
-    resume_path: Path | None = None
-    company_document_paths: list[Path] = []
-    interview_video_keys: list[str] = []
+    assets_to_delete: list[tuple[str, str]] = []
+    interview_video_recordings: list[InterviewRecording] = []
 
     try:
         if admin_action and actor is not None and actor.id == target.id:
@@ -72,11 +74,17 @@ async def erase_user(
 
         resume = await db.scalar(select(Resume).where(Resume.student_id == target.id))
         if resume is not None:
-            resume_path = Path(get_settings().resume_storage_path) / resume.stored_filename
+            assets_to_delete.append(
+                (
+                    resume.storage_backend,
+                    resume.storage_key
+                    or asset_key("resumes", resume.stored_filename),
+                )
+            )
         if target.role == UserRole.STUDENT:
-            interview_video_keys = list(
+            interview_video_recordings = list(
                 await db.scalars(
-                    select(InterviewRecording.storage_key).where(
+                    select(InterviewRecording).where(
                         InterviewRecording.student_id == target.id
                     )
                 )
@@ -86,12 +94,38 @@ async def erase_user(
                 select(CompanyDocument).where(CompanyDocument.company_id == target.id)
             )
             for document in documents:
-                try:
-                    company_document_paths.append(
-                        company_document_path(document.stored_filename)
+                assets_to_delete.append(
+                    (
+                        document.storage_backend,
+                        document.storage_key
+                        or asset_key("company_documents", document.stored_filename),
                     )
-                except HTTPException:
-                    continue
+                )
+
+        profiles = await db.scalars(
+            select(StudentProfile).where(StudentProfile.user_id == target.id)
+        )
+        for profile in profiles:
+            avatar_key = profile.avatar_storage_key or legacy_avatar_key(profile.avatar_url)
+            if avatar_key:
+                assets_to_delete.append(
+                    (
+                        profile.avatar_storage_backend or "local",
+                        avatar_key,
+                    )
+                )
+        company_profiles = await db.scalars(
+            select(CompanyProfile).where(CompanyProfile.user_id == target.id)
+        )
+        for profile in company_profiles:
+            avatar_key = profile.avatar_storage_key or legacy_avatar_key(profile.avatar_url)
+            if avatar_key:
+                assets_to_delete.append(
+                    (
+                        profile.avatar_storage_backend or "local",
+                        avatar_key,
+                    )
+                )
 
         internship_ids: list[int] = []
         if target.role == UserRole.COMPANY:
@@ -247,33 +281,33 @@ async def erase_user(
                 )
             )
 
+        db.add_all(
+            [
+                InterviewRecordingDeletion(
+                    storage_key=recording.storage_key,
+                    storage_backend=recording.storage_backend,
+                    storage_file_id=recording.storage_file_id,
+                    source_type=recording.source_type,
+                    user_id=recording.student_id,
+                    session_id=recording.session_id,
+                    upload_active=recording.upload_active,
+                    final_status="DELETED",
+                )
+                for recording in interview_video_recordings
+            ]
+        )
+        for backend, key in assets_to_delete:
+            await asyncio.to_thread(get_asset_storage(backend).delete, key)
         await db.execute(delete(User).where(User.id == target.id))
         await db.commit()
     except BaseException:
         await db.rollback()
         raise
 
-    if resume_path is not None:
-        try:
-            resume_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-    for document_path in company_document_paths:
-        try:
-            document_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-    if interview_video_keys:
-        from app.services.interview_video_storage import LocalPrivateInterviewVideoStorage
+    if interview_video_recordings:
+        from app.services.interview_video import process_recording_deletions
 
-        storage = LocalPrivateInterviewVideoStorage(
-            get_settings().interview_video_storage_path
-        )
-        for storage_key in interview_video_keys:
-            try:
-                await asyncio.to_thread(storage.delete, storage_key)
-            except OSError:
-                logger.warning("Could not remove a deleted student's interview video file.")
+        await process_recording_deletions(db, limit=len(interview_video_recordings))
 
     return {
         "success": True,

@@ -3,25 +3,40 @@
 # -----------------------------------------------------------------------------
 
 from datetime import datetime, timezone
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
-from sqlalchemy import delete, select
+from fastapi.responses import RedirectResponse, StreamingResponse
+from sqlalchemy import delete, or_, select
 
 from app.api.v1.dependencies import DbSession, require_roles
 from app.core.config import get_settings
 from app.models import Application, CompanyProfile, Internship, Resume, StudentProfile, User, UserRole
 from app.schemas.profile import CompanyProfileUpdate, ProfileResponse, ResumeResponse, StudentHandlesUpdate, StudentProfileUpdate
 from app.services.application_events import record_event
+from app.services.asset_storage import (
+    asset_key,
+    delete_asset_after_commit,
+    get_asset_storage,
+    legacy_avatar_key,
+    materialize_asset,
+    sanitize_filename,
+)
 
 router = APIRouter(prefix="/profiles", tags=["profiles"])
 student_only = Annotated[User, Depends(require_roles(UserRole.STUDENT))] # type: ignore
 company_only = Annotated[User, Depends(require_roles(UserRole.COMPANY))] # type: ignore
 ALLOWED_TYPES = {"application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
+RESUME_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 
 
 def assert_resume_access(user: User, resume: Resume, company_has_application: bool = False) -> None:
@@ -77,6 +92,19 @@ async def update_student_handles(data: StudentHandlesUpdate, user: student_only,
 @router.delete("/student", status_code=204)
 async def delete_student_profile(user: student_only, db: DbSession) -> None:
     """Delete the authenticated student?s profile record."""
+    profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+    storage_key = (
+        profile.avatar_storage_key
+        or legacy_avatar_key(profile.avatar_url)
+        if profile
+        else None
+    )
+    backend = profile.avatar_storage_backend if profile else None
+    if storage_key:
+        await asyncio.to_thread(
+            get_asset_storage(backend or "local", settings=get_settings()).delete,
+            storage_key,
+        )
     await db.execute(delete(StudentProfile).where(StudentProfile.user_id == user.id))
     await db.commit()
 
@@ -108,14 +136,32 @@ async def update_company_profile(data: CompanyProfileUpdate, user: company_only,
 @router.delete("/company", status_code=204)
 async def delete_company_profile(user: company_only, db: DbSession) -> None:
     """Delete the authenticated company?s profile record."""
+    profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
+    storage_key = (
+        profile.avatar_storage_key
+        or legacy_avatar_key(profile.avatar_url)
+        if profile
+        else None
+    )
+    backend = profile.avatar_storage_backend if profile else None
+    if storage_key:
+        await asyncio.to_thread(
+            get_asset_storage(backend or "local", settings=get_settings()).delete,
+            storage_key,
+        )
     await db.execute(delete(CompanyProfile).where(CompanyProfile.user_id == user.id))
     await db.commit()
 
 
 async def validate_resume(upload: UploadFile) -> bytes:
     """Read and validate a resume upload against the supported file types and configured size limit."""
-    extension = Path(upload.filename or "").suffix.lower()
-    if extension not in ALLOWED_EXTENSIONS or upload.content_type not in ALLOWED_TYPES:
+    filename = (upload.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    extension = Path(filename).suffix.lower()
+    if (
+        extension not in ALLOWED_EXTENSIONS
+        or upload.content_type not in ALLOWED_TYPES
+        or upload.content_type != RESUME_CONTENT_TYPES[extension]
+    ):
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Resume must be PDF, DOC, or DOCX")
     content = await upload.read(get_settings().max_resume_size_mb * 1024 * 1024 + 1)
     if len(content) > get_settings().max_resume_size_mb * 1024 * 1024:
@@ -128,22 +174,52 @@ async def upload_resume(user: student_only, db: DbSession, file: UploadFile = Fi
     """Validate and store the authenticated student?s resume, replacing an existing resume when present."""
     content = await validate_resume(file)
     existing = await db.scalar(select(Resume).where(Resume.student_id == user.id))
-    storage = Path(get_settings().resume_storage_path)
-    storage.mkdir(parents=True, exist_ok=True)
-    stored_name = f"{uuid4().hex}{Path(file.filename or '').suffix.lower()}"
-    (storage / stored_name).write_bytes(content)
-    if existing:
-        old_path = storage / existing.stored_filename
-        old_path.unlink(missing_ok=True)
-        existing.original_filename, existing.stored_filename = file.filename or stored_name, stored_name
-        existing.content_type, existing.file_size = file.content_type or "application/octet-stream", len(content)
-        existing.uploaded_at = datetime.now(timezone.utc)
-        resume = existing
-    else:
-        resume = Resume(student_id=user.id, original_filename=file.filename or stored_name, stored_filename=stored_name, content_type=file.content_type or "application/octet-stream", file_size=len(content))
-        db.add(resume)
-    await db.commit()
-    await db.refresh(resume)
+    extension = Path((file.filename or "").replace("\\", "/")).suffix.lower()
+    stored_name = f"{uuid4().hex}{extension}"
+    key = asset_key("resumes", stored_name)
+    backend = get_settings().asset_storage_backend
+    storage = get_asset_storage(backend, settings=get_settings())
+    await asyncio.to_thread(
+        storage.save,
+        key,
+        content,
+        file.content_type or "application/octet-stream",
+    )
+    old_key = existing.storage_key if existing else None
+    old_backend = existing.storage_backend if existing else None
+    try:
+        if existing:
+            existing.original_filename = sanitize_filename(file.filename, fallback=stored_name)
+            existing.stored_filename = stored_name
+            existing.storage_key = key
+            existing.storage_backend = backend
+            existing.content_type = file.content_type or "application/octet-stream"
+            existing.file_size = len(content)
+            existing.uploaded_at = datetime.now(timezone.utc)
+            resume = existing
+        else:
+            resume = Resume(
+                student_id=user.id,
+                original_filename=sanitize_filename(file.filename, fallback=stored_name),
+                stored_filename=stored_name,
+                storage_key=key,
+                storage_backend=backend,
+                content_type=file.content_type or "application/octet-stream",
+                file_size=len(content),
+            )
+            db.add(resume)
+        await db.commit()
+        await db.refresh(resume)
+    except BaseException:
+        await db.rollback()
+        await asyncio.to_thread(storage.delete, key)
+        raise
+    if old_key and old_key != key:
+        await asyncio.to_thread(
+            delete_asset_after_commit,
+            get_asset_storage(old_backend or "local", settings=get_settings()),
+            old_key,
+        )
     return resume
 
 
@@ -186,7 +262,7 @@ async def resume_metadata(resume_id: int, user: Annotated[User, Depends(require_
 
 
 @router.get("/resume/{resume_id}/download")
-async def download_resume(resume_id: int, user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))], db: DbSession) -> FileResponse:   # type: ignore
+async def download_resume(resume_id: int, user: Annotated[User, Depends(require_roles(UserRole.STUDENT, UserRole.COMPANY))], db: DbSession) -> StreamingResponse:   # type: ignore
     """Stream a stored resume file after enforcing the caller?s access and confirming the file exists."""
     resume = await get_resume_for_user(resume_id, user, db)
     if user.role == UserRole.COMPANY:
@@ -198,17 +274,26 @@ async def download_resume(resume_id: int, user: Annotated[User, Depends(require_
         for app in matching_apps:
             await record_event(db, app.id, "RESUME_VIEWED", user.id, once=True)
         await db.commit()
-    path = Path(get_settings().resume_storage_path) / resume.stored_filename
-    if not path.is_file():
+    key = resume.storage_key or asset_key("resumes", resume.stored_filename)
+    storage = get_asset_storage(resume.storage_backend, settings=get_settings())
+    if not await asyncio.to_thread(storage.exists, key):
         raise HTTPException(404, "Resume file not found")
-    return FileResponse(path, media_type=resume.content_type, filename=resume.original_filename)
+    filename = quote(sanitize_filename(resume.original_filename, fallback="resume"))
+    stream = await asyncio.to_thread(storage.open_stream, key)
+    return StreamingResponse(
+        stream,
+        media_type=resume.content_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 
 @router.delete("/student/resume/{resume_id}", status_code=204)
 async def delete_resume(resume_id: int, user: student_only, db: DbSession) -> None:
     """Delete the accessible resume record and its stored file."""
     resume = await get_resume_for_user(resume_id, user, db)
-    (Path(get_settings().resume_storage_path) / resume.stored_filename).unlink(missing_ok=True)
+    key = resume.storage_key or asset_key("resumes", resume.stored_filename)
+    storage = get_asset_storage(resume.storage_backend, settings=get_settings())
+    await asyncio.to_thread(storage.delete, key)
     await db.delete(resume)
     await db.commit()
 
@@ -220,12 +305,19 @@ async def parse_student_resume(user: student_only, db: DbSession) -> dict[str, A
     if resume is None:
         raise HTTPException(404, "No resume uploaded yet. Please upload a resume first.")
 
-    path = Path(get_settings().resume_storage_path) / resume.stored_filename
-    if not path.is_file():
-        raise HTTPException(404, "Resume file not found on disk")
-
     from app.services.resume_parser import parse_resume_pdf
-    parsed = parse_resume_pdf(path)
+    key = resume.storage_key or asset_key("resumes", resume.stored_filename)
+    storage = get_asset_storage(resume.storage_backend, settings=get_settings())
+    if not await asyncio.to_thread(storage.exists, key):
+        raise HTTPException(404, "Resume file not found")
+
+    def parse():
+        with materialize_asset(
+            storage, key, Path(resume.original_filename).suffix.lower()
+        ) as path:
+            return parse_resume_pdf(path)
+
+    parsed = await asyncio.to_thread(parse)
     return {
         "success": True,
         "filename": resume.original_filename,
@@ -247,12 +339,19 @@ async def apply_parsed_resume_to_profile(user: student_only, db: DbSession) -> d
     if resume is None:
         raise HTTPException(404, "No resume uploaded yet")
 
-    path = Path(get_settings().resume_storage_path) / resume.stored_filename
-    if not path.is_file():
-        raise HTTPException(404, "Resume file not found on disk")
-
     from app.services.resume_parser import parse_resume_pdf
-    parsed = parse_resume_pdf(path)
+    key = resume.storage_key or asset_key("resumes", resume.stored_filename)
+    storage = get_asset_storage(resume.storage_backend, settings=get_settings())
+    if not await asyncio.to_thread(storage.exists, key):
+        raise HTTPException(404, "Resume file not found")
+
+    def parse():
+        with materialize_asset(
+            storage, key, Path(resume.original_filename).suffix.lower()
+        ) as path:
+            return parse_resume_pdf(path)
+
+    parsed = await asyncio.to_thread(parse)
 
     profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
     if profile is None:
@@ -304,21 +403,37 @@ async def upload_avatar(
     file: UploadFile = File(...),
 ) -> dict[str, str]:
     """Validate and store the user?s avatar image within the supported format and size limits."""
-    ext = Path(file.filename or "").suffix.lower()
-    if ext not in ALLOWED_AVATAR_EXTENSIONS or (file.content_type and file.content_type not in ALLOWED_AVATAR_TYPES):
+    filename = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    ext = Path(filename).suffix.lower()
+    avatar_content_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+        ".gif": "image/gif",
+    }
+    if (
+        ext not in ALLOWED_AVATAR_EXTENSIONS
+        or avatar_content_types[ext] not in ALLOWED_AVATAR_TYPES
+        or file.content_type != avatar_content_types[ext]
+    ):
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Avatar must be a JPEG, PNG, WEBP, or SVG image")
 
     content = await file.read(MAX_AVATAR_SIZE_BYTES + 1)
     if len(content) > MAX_AVATAR_SIZE_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Image exceeds 5MB size limit")
 
-    avatar_dir = Path(get_settings().resume_storage_path).parent / "avatars"
-    avatar_dir.mkdir(parents=True, exist_ok=True)
-    stored_name = f"avatar_{user.id}_{uuid4().hex[:8]}{ext}"
-    (avatar_dir / stored_name).write_bytes(content)
+    stored_name = f"avatar_{user.id}_{uuid4().hex}{ext}"
+    key = asset_key("avatars", stored_name)
+    backend = get_settings().asset_storage_backend
+    storage = get_asset_storage(backend, settings=get_settings())
+    await asyncio.to_thread(
+        storage.save, key, content, file.content_type or "application/octet-stream"
+    )
 
-    avatar_url = f"/api/v1/profiles/avatar/{stored_name}"
-
+    old_key = None
+    old_backend = None
     if user.role == UserRole.STUDENT:
         profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
         if profile is None:
@@ -328,11 +443,13 @@ async def upload_avatar(
                 university="University",
                 major="Computer Science",
                 graduation_year=2026,
-                avatar_url=avatar_url,
             )
             db.add(profile)
-        else:
-            profile.avatar_url = avatar_url
+        old_key = profile.avatar_storage_key
+        old_backend = profile.avatar_storage_backend
+        profile.avatar_url = f"/api/v1/profiles/avatar/{stored_name}"
+        profile.avatar_storage_key = key
+        profile.avatar_storage_backend = backend
     elif user.role == UserRole.COMPANY:
         profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
         if profile is None:
@@ -340,22 +457,66 @@ async def upload_avatar(
                 user_id=user.id,
                 company_name=user.email.split("@")[0].title(),
                 industry="Technology",
-                avatar_url=avatar_url,
             )
             db.add(profile)
-        else:
-            profile.avatar_url = avatar_url
+        old_key = profile.avatar_storage_key
+        old_backend = profile.avatar_storage_backend
+        profile.avatar_url = f"/api/v1/profiles/avatar/{stored_name}"
+        profile.avatar_storage_key = key
+        profile.avatar_storage_backend = backend
 
-    await db.commit()
-    return {"avatar_url": avatar_url}
+    try:
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        await asyncio.to_thread(storage.delete, key)
+        raise
+    if old_key and old_key != key:
+        await asyncio.to_thread(
+            delete_asset_after_commit,
+            get_asset_storage(old_backend or "local", settings=get_settings()),
+            old_key,
+        )
+    return {"avatar_url": f"/api/v1/profiles/avatar/{stored_name}"}
 
 
 @router.get("/avatar/{filename}")
-async def get_avatar(filename: str) -> FileResponse:
-    """Serve the user avatar from the configured storage location when the file is available."""
-    avatar_dir = Path(get_settings().resume_storage_path).parent / "avatars"
-    safe_path = avatar_dir / Path(filename).name
-    if not safe_path.exists() or not safe_path.is_file():
+async def get_avatar(filename: str, db: DbSession):
+    """Serve a profile avatar through local storage or a short-lived private S3 URL."""
+    clean_filename = sanitize_filename(filename, fallback="avatar")
+    if clean_filename != filename or Path(clean_filename).suffix.lower() not in ALLOWED_AVATAR_EXTENSIONS:
+        raise HTTPException(404, "Avatar not found")
+    key = asset_key("avatars", clean_filename)
+    student_profile = await db.scalar(
+        select(StudentProfile).where(
+            or_(
+                StudentProfile.avatar_storage_key == key,
+                StudentProfile.avatar_url.endswith(
+                    f"/api/v1/profiles/avatar/{clean_filename}"
+                ),
+            )
+        )
+    )
+    company_profile = None
+    if student_profile is None:
+        company_profile = await db.scalar(
+            select(CompanyProfile).where(
+                or_(
+                    CompanyProfile.avatar_storage_key == key,
+                    CompanyProfile.avatar_url.endswith(
+                        f"/api/v1/profiles/avatar/{clean_filename}"
+                    ),
+                )
+            )
+        )
+    profile = student_profile or company_profile
+    if profile is None:
+        raise HTTPException(404, "Avatar not found")
+    key = profile.avatar_storage_key or legacy_avatar_key(profile.avatar_url) or key
+    storage = get_asset_storage(
+        profile.avatar_storage_backend or "local", settings=get_settings()
+    )
+    if not await asyncio.to_thread(storage.exists, key):
         raise HTTPException(404, "Avatar not found")
 
     content_types = {
@@ -366,7 +527,29 @@ async def get_avatar(filename: str) -> FileResponse:
         ".svg": "image/svg+xml",
         ".gif": "image/gif",
     }
-    return FileResponse(safe_path, media_type=content_types.get(safe_path.suffix.lower(), "application/octet-stream"))
+    content_type = content_types.get(
+        Path(clean_filename).suffix.lower(), "application/octet-stream"
+    )
+    signed_url = getattr(storage, "signed_url", None)
+    if signed_url is not None:
+        url = await asyncio.to_thread(signed_url, key, 300)
+        return RedirectResponse(
+            url,
+            headers={
+                "Cache-Control": "private, max-age=300",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    stream = await asyncio.to_thread(storage.open_stream, key)
+    return StreamingResponse(
+        stream,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.delete("/avatar")
@@ -380,10 +563,20 @@ async def delete_avatar(
     else:
         profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user.id))
 
-    if profile and profile.avatar_url:
-        filename = profile.avatar_url.split("/")[-1]
-        avatar_dir = Path(get_settings().resume_storage_path).parent / "avatars"
-        (avatar_dir / filename).unlink(missing_ok=True)
+    if profile and (profile.avatar_url or profile.avatar_storage_key):
+        key = profile.avatar_storage_key or legacy_avatar_key(profile.avatar_url)
+        if key is None:
+            profile.avatar_url = None
+            profile.avatar_storage_key = None
+            profile.avatar_storage_backend = None
+            await db.commit()
+            return {"message": "Avatar removed", "avatar_url": None}
+        storage = get_asset_storage(
+            profile.avatar_storage_backend or "local", settings=get_settings()
+        )
+        await asyncio.to_thread(storage.delete, key)
         profile.avatar_url = None
+        profile.avatar_storage_key = None
+        profile.avatar_storage_backend = None
         await db.commit()
     return {"message": "Avatar removed", "avatar_url": None}

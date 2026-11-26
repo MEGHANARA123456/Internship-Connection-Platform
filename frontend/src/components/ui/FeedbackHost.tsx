@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from './Button'
 import { Modal } from './Modal'
-import type { ToastKind } from '../../lib/feedback'
-import { Z_INDEX } from '../../lib/zIndex'
 
 interface Confirmation {
   title: string
@@ -12,16 +10,8 @@ interface Confirmation {
   resolve: (confirmed: boolean) => void
 }
 
-interface ToastMessage {
-  id: number
-  message: string
-  kind: ToastKind
-}
-
 export function FeedbackHost() {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
-  const [toast, setToast] = useState<ToastMessage | null>(null)
-  const toastId = useRef(0)
   const activeConfirmation = useRef<Confirmation | null>(null)
 
   useEffect(() => {
@@ -31,19 +21,9 @@ export function FeedbackHost() {
       activeConfirmation.current = next
       setConfirmation(next)
     }
-    const showToast = (event: Event) => {
-      const detail = (event as CustomEvent<{ message: string; kind: ToastKind }>).detail
-      const id = ++toastId.current
-      setToast({ id, ...detail })
-      window.setTimeout(() => {
-        setToast((current) => current?.id === id ? null : current)
-      }, 3500)
-    }
     window.addEventListener('app:confirm', showConfirmation)
-    window.addEventListener('app:toast', showToast)
     return () => {
       window.removeEventListener('app:confirm', showConfirmation)
-      window.removeEventListener('app:toast', showToast)
     }
   }, [])
 
@@ -71,22 +51,6 @@ export function FeedbackHost() {
           </Button>
         </div>
       </Modal>
-      {toast && (
-        <div
-          key={toast.id}
-          role={toast.kind === 'error' ? 'alert' : 'status'}
-          aria-live={toast.kind === 'error' ? 'assertive' : 'polite'}
-          className={`fixed bottom-4 right-4 ${Z_INDEX.notifications} max-w-sm rounded-lg px-4 py-3 text-sm font-medium shadow-lg ${
-            toast.kind === 'success'
-              ? 'bg-emerald-100 text-emerald-950 dark:bg-emerald-950 dark:text-emerald-100'
-              : toast.kind === 'error'
-                ? 'bg-rose-100 text-rose-950 dark:bg-rose-950 dark:text-rose-100'
-                : 'bg-slate-100 text-slate-950 dark:bg-slate-800 dark:text-slate-100'
-          }`}
-        >
-          {toast.message}
-        </div>
-      )}
     </>
   )
 }

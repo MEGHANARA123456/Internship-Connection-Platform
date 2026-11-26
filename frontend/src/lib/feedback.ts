@@ -1,7 +1,22 @@
-export type ToastKind = 'success' | 'error' | 'info'
+export type ToastKind = 'success' | 'error' | 'warning' | 'info'
+export interface ToastAction {
+  label: string
+  onClick: () => void
+}
+export interface ToastOptions {
+  kind?: ToastKind
+  actions?: ToastAction[]
+  durationMs?: number
+}
 
-export function showToast(message: string, kind: ToastKind = 'info') {
-  window.dispatchEvent(new CustomEvent('app:toast', { detail: { message, kind } }))
+export function showToast(
+  message: string,
+  kind: ToastKind = 'info',
+  actions?: ToastAction[],
+) {
+  window.dispatchEvent(new CustomEvent('app:toast', {
+    detail: { message, kind, actions },
+  }))
 }
 
 export function confirmAction(options: {

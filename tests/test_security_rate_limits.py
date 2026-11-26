@@ -22,6 +22,14 @@ def _limited_app() -> FastAPI:
     async def login() -> dict[str, str]:
         return {"status": "ok"}
 
+    @application.get("/api/v1/auth/me")
+    async def current_user() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @application.get("/api/v1/navigation/counts")
+    async def navigation_counts() -> dict[str, str]:
+        return {"status": "ok"}
+
     @application.post("/api/v1/interviews/sessions/1/audio")
     async def interview_audio() -> dict[str, str]:
         return {"status": "ok"}
@@ -50,6 +58,27 @@ async def test_authenticated_users_from_same_ip_have_separate_buckets(monkeypatc
     assert response_b.status_code == 200
     assert blocked_a.status_code == 429
     assert int(blocked_a.headers["retry-after"]) >= 1
+    get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_authenticated_identity_and_navigation_reads_have_headroom(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
+    get_settings.cache_clear()
+    app = _limited_app()
+    token = create_token("102", "ADMIN", "access", timedelta(minutes=5))
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("203.0.113.15", 4567)),
+        base_url="http://rate-limit-test",
+    ) as client:
+        responses = [
+            await client.get(path, headers=headers)
+            for path in ("/api/v1/auth/me", "/api/v1/navigation/counts") * 3
+        ]
+
+    assert [response.status_code for response in responses] == [200] * 6
     get_settings.cache_clear()
 
 

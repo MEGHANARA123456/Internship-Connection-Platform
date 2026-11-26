@@ -80,6 +80,8 @@ class StudentProfile(Base):
     skills: Mapped[str] = mapped_column(Text, default="")
     institution_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    avatar_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    avatar_storage_backend: Mapped[str | None] = mapped_column(String(20), nullable=True)
     github_username: Mapped[str | None] = mapped_column(String(39), nullable=True)
     leetcode_username: Mapped[str | None] = mapped_column(String(50), nullable=True)
     show_verified_badges: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
@@ -97,6 +99,8 @@ class CompanyProfile(Base):
     verification_status: Mapped[str] = mapped_column(String(20), default="PENDING")
     verification_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    avatar_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    avatar_storage_backend: Mapped[str | None] = mapped_column(String(20), nullable=True)
     company_size: Mapped[str | None] = mapped_column(String(40), nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     recruiter_contact_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -113,6 +117,10 @@ class CompanyDocument(Base):
     document_type: Mapped[str] = mapped_column(String(40), index=True)
     original_filename: Mapped[str] = mapped_column(String(255))
     stored_filename: Mapped[str] = mapped_column(String(255), unique=True)
+    storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    storage_backend: Mapped[str] = mapped_column(
+        String(20), default="local", server_default="local", nullable=False
+    )
     content_type: Mapped[str] = mapped_column(String(100))
     file_size: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
@@ -236,6 +244,10 @@ class Resume(Base):
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
     original_filename: Mapped[str] = mapped_column(String(255))
     stored_filename: Mapped[str] = mapped_column(String(255), unique=True)
+    storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    storage_backend: Mapped[str] = mapped_column(
+        String(20), default="local", server_default="local", nullable=False
+    )
     content_type: Mapped[str] = mapped_column(String(100))
     file_size: Mapped[int] = mapped_column()
     uploaded_at: Mapped[datetime | None] = mapped_column(

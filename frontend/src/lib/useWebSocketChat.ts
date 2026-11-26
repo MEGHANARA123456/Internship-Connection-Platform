@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { api, refreshSession } from '../api/client'
+import { getAccessTokenExpirationMs, getWebSocketBaseUrl, refreshSession } from '../api/client'
 import { useAuthStore } from '../store/auth'
 import { isSensitiveNotification, maskCodes, sendSystemNotification } from './notifications'
 
@@ -9,44 +9,90 @@ interface WebSocketMessage {
 }
 
 export function useWebSocketChat(userId?: number) {
-  const accessToken = useAuthStore((state) => state.session?.accessToken)
+  const isAuthenticated = useAuthStore((state) => Boolean(state.session))
   const [isConnected, setIsConnected] = useState(false)
   const [onlineUsers, setOnlineUsers] = useState<number[]>([])
   const [typingMap, setTypingMap] = useState<Record<number, boolean>>({})
   const socketRef = useRef<WebSocket | null>(null)
   const onNewMessageRef = useRef<((convId: number, msg: any) => void) | null>(null)
-  const nextConnectDelayRef = useRef(0)
 
   useEffect(() => {
-    if (!userId || !accessToken) return
-    const apiUrl = new URL(api.defaults.baseURL ?? window.location.origin)
-    const protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:'
-    const apiPath = apiUrl.pathname.replace(/\/+$/, '')
+    if (!userId || !isAuthenticated) return
+    const webSocketBaseUrl = getWebSocketBaseUrl()
 
     let socket: WebSocket | null = null
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
     let reconnectAttempts = 0
     let isActive = true
+    let reconnectNoticeShown = false
     const maxReconnectAttempts = 8
+
+    const scheduleReconnect = (refreshFirst = false) => {
+      if (!isActive) return
+      if (!reconnectNoticeShown) {
+        reconnectNoticeShown = true
+        window.dispatchEvent(new CustomEvent('app:toast', {
+          detail: { kind: 'warning', message: 'Chat connection problem, retrying...' },
+        }))
+      }
+      if (reconnectAttempts >= maxReconnectAttempts) {
+        window.dispatchEvent(new CustomEvent('app:toast', {
+          detail: {
+            kind: 'error',
+            message: 'Chat is temporarily unavailable. Your session is still active.',
+          },
+        }))
+        return
+      }
+      const delay = Math.min(1000 * 2 ** reconnectAttempts, 30000)
+      reconnectAttempts += 1
+      reconnectTimeout = setTimeout(async () => {
+        const currentSession = useAuthStore.getState().session
+        if (!isActive || !currentSession) return
+        const expiresAt = getAccessTokenExpirationMs(currentSession)
+        if (refreshFirst || (expiresAt !== null && expiresAt <= Date.now() + 30_000)) {
+          try {
+            await refreshSession()
+          } catch {
+            if (isActive && useAuthStore.getState().session) scheduleReconnect(true)
+            return
+          }
+        }
+        if (isActive) connect()
+      }, delay)
+    }
 
     const connect = () => {
       try {
-        const freshAccessToken = useAuthStore.getState().session?.accessToken
-        if (!freshAccessToken) return
-        const wsUrl = `${protocol}//${apiUrl.host}${apiPath}/ws/chat/${userId}?token=${encodeURIComponent(freshAccessToken)}`
+        const currentSession = useAuthStore.getState().session
+        if (!currentSession) return
+        const expiresAt = getAccessTokenExpirationMs(currentSession)
+        if (expiresAt !== null && expiresAt <= Date.now() + 30_000) {
+          void refreshSession().then(connect).catch(() => scheduleReconnect(true))
+          return
+        }
+        const wsUrl = `${webSocketBaseUrl}/ws/chat/${userId}`
         socket = new WebSocket(wsUrl)
         socketRef.current = socket
 
         socket.onopen = () => {
-          reconnectAttempts = 0
-          setIsConnected(true)
+          const accessToken = useAuthStore.getState().session?.accessToken
+          if (!accessToken) {
+            socket?.close()
+            return
+          }
+          socket?.send(JSON.stringify({ type: 'authenticate', token: accessToken }))
         }
 
         socket.onmessage = (event) => {
           try {
             const data: WebSocketMessage = JSON.parse(event.data)
 
-            if (data.type === 'presence_update' && Array.isArray(data.online_users)) {
+            if (data.type === 'authenticated') {
+              reconnectAttempts = 0
+              reconnectNoticeShown = false
+              setIsConnected(true)
+            } else if (data.type === 'presence_update' && Array.isArray(data.online_users)) {
               setOnlineUsers(data.online_users)
             } else if (data.type === 'typing') {
               const convId = data.conversation_id
@@ -69,7 +115,7 @@ export function useWebSocketChat(userId?: number) {
               })
             }
           } catch {
-            // Ignored
+            // Ignore malformed socket messages without affecting auth state.
           }
         }
 
@@ -77,43 +123,18 @@ export function useWebSocketChat(userId?: number) {
           const closeCode = event.code
           setIsConnected(false)
           if (closeCode === 4403) return
-          if (closeCode === 4401) {
-            if (!isActive || reconnectAttempts >= maxReconnectAttempts) return
-            const delay = Math.min(1000 * 2 ** reconnectAttempts, 30000)
-            reconnectAttempts += 1
-            nextConnectDelayRef.current = delay
-            void refreshSession().catch(() => {
-              if (!isActive || !useAuthStore.getState().session) return
-              reconnectTimeout = setTimeout(() => {
-                nextConnectDelayRef.current = 0
-                connect()
-              }, delay)
-            })
-            return
-          }
-          if (!isActive || reconnectAttempts >= maxReconnectAttempts) return
-          const delay = Math.min(1000 * 2 ** reconnectAttempts, 30000)
-          reconnectAttempts += 1
-          reconnectTimeout = setTimeout(connect, delay)
+          scheduleReconnect(closeCode === 4401)
         }
 
         socket.onerror = () => {
           socket?.close()
         }
       } catch {
-        // Ignored
+        scheduleReconnect()
       }
     }
 
-    const initialDelay = nextConnectDelayRef.current
-    if (initialDelay > 0) {
-      reconnectTimeout = setTimeout(() => {
-        nextConnectDelayRef.current = 0
-        connect()
-      }, initialDelay)
-    } else {
-      connect()
-    }
+    connect()
 
     return () => {
       isActive = false
@@ -125,7 +146,7 @@ export function useWebSocketChat(userId?: number) {
         connectingSocket.onopen = () => connectingSocket.close()
       }
     }
-  }, [userId, accessToken])
+  }, [userId, isAuthenticated])
 
   const sendTyping = useCallback(
     (conversationId: number, recipientId: number, isTyping: boolean) => {

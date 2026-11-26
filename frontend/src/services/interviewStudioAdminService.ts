@@ -128,7 +128,7 @@ export async function getAdminInterviewFailures() {
 }
 
 export async function retryAdminInterviewFailures(limit = 10) {
-  return (await api.post<{ attempted: number; completed: number; failed: number }>(
+  return (await api.post<{ attempted: number; queued: number; evaluated: number; failed: number }>(
     `${root}/failures/retry`,
     null,
     { params: { limit } },

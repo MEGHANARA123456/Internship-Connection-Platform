@@ -202,7 +202,7 @@ async def seed_mock_test_library(db: AsyncSession) -> int:
                 "technical-engineering-standard",
                 "data-science-full-practice",
             },
-            active=True,
+            active=False,
             version=1,
             source_metadata={
                 "status": "DRAFT-for-review",

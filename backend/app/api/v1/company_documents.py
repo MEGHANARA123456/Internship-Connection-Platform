@@ -1,15 +1,19 @@
 """Company document upload and private access endpoints."""
 
+import asyncio
 from uuid import uuid4
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from app.api.v1.dependencies import DbSession, require_roles
+from app.core.config import get_settings
 from app.models import CompanyDocument, CompanyProfile, User, UserRole
-from app.services.company_documents import company_document_path, validate_company_document
+from app.services.asset_storage import asset_key, get_asset_storage, sanitize_filename
+from app.services.company_documents import validate_company_document
 from app.services.mail import send_dev_email
 from app.services.notify import notify
 
@@ -58,18 +62,21 @@ async def upload_company_document(
         raise HTTPException(status_code=400, detail="A company may upload no more than 5 verification documents.")
 
     content, original_filename, extension = await validate_company_document(file)
+    original_filename = sanitize_filename(original_filename, fallback=f"document{extension}")
     content_type = file.content_type or ""
     stored_filename = f"{uuid4().hex}{extension}"
-    path = company_document_path(stored_filename)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("xb") as stored_file:
-        stored_file.write(content)
+    key = asset_key("company_documents", stored_filename)
+    storage_backend = get_settings().asset_storage_backend
+    storage = get_asset_storage(storage_backend, settings=get_settings())
+    await asyncio.to_thread(storage.save, key, content, content_type)
 
     document = CompanyDocument(
         company_id=user.id,
         document_type=clean_type,
         original_filename=original_filename,
         stored_filename=stored_filename,
+        storage_key=key,
+        storage_backend=storage_backend,
         content_type=content_type,
         file_size=len(content),
     )
@@ -93,7 +100,7 @@ async def upload_company_document(
         await db.refresh(document)
     except BaseException:
         await db.rollback()
-        path.unlink(missing_ok=True)
+        await asyncio.to_thread(storage.delete, key)
         raise
     for admin in admins:
         await send_dev_email(
@@ -120,8 +127,8 @@ async def download_company_document(
     document_id: int,
     user: company_only,
     db: DbSession,
-) -> FileResponse:
-    """Return a stored company document only when it exists and is available on disk."""
+) -> StreamingResponse:
+    """Return a stored company document through an authenticated private stream."""
     document = await db.scalar(
         select(CompanyDocument).where(
             CompanyDocument.id == document_id,
@@ -130,10 +137,17 @@ async def download_company_document(
     )
     if document is None:
         raise HTTPException(status_code=404, detail="Company document not found.")
-    path = company_document_path(document.stored_filename)
-    if not path.is_file():
+    key = document.storage_key or asset_key("company_documents", document.stored_filename)
+    storage = get_asset_storage(document.storage_backend, settings=get_settings())
+    if not await asyncio.to_thread(storage.exists, key):
         raise HTTPException(status_code=404, detail="Company document file not found.")
-    return FileResponse(path, media_type=document.content_type, filename=document.original_filename)
+    stream = await asyncio.to_thread(storage.open_stream, key)
+    filename = quote(sanitize_filename(document.original_filename, fallback="document"))
+    return StreamingResponse(
+        stream,
+        media_type=document.content_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_company_document(
@@ -158,10 +172,8 @@ async def delete_company_document(
             status_code=400,
             detail="Company verification documents cannot be deleted after verification.",
         )
-    path = company_document_path(document.stored_filename)
+    key = document.storage_key or asset_key("company_documents", document.stored_filename)
+    storage = get_asset_storage(document.storage_backend, settings=get_settings())
+    await asyncio.to_thread(storage.delete, key)
     await db.delete(document)
     await db.commit()
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass

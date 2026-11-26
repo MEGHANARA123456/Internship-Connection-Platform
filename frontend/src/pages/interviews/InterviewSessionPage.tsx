@@ -14,6 +14,7 @@ import {
   type VideoInterviewRoomHandle,
 } from '../../components/interviews/VideoInterviewRoom'
 import { InterviewVideoRecordingPanel } from '../../components/interviews/InterviewVideoRecordingPanel'
+import { useToast } from '../../components/ui/ToastProvider'
 import { routes } from '../../lib/routes'
 import { confirmAction, showToast } from '../../lib/feedback'
 import {
@@ -23,7 +24,7 @@ import {
 import {
   acknowledgeInterviewProctoringConsent,
   completeInterviewSession,
-  getInterviewProviderAvailability,
+  getInterviewAnswers,
   getInterviewSession,
   getNextInterviewQuestion,
   retryInterviewEvaluation,
@@ -32,11 +33,45 @@ import {
 } from '../../services/interviewService'
 import type {
   InterviewEvaluation,
+  InterviewEvaluationStatus,
   InterviewQuestion,
   InterviewSession,
 } from '../../types/interview'
 
 const ANSWER_LIMIT = 5000
+
+function CurrentQuestionCard({
+  question,
+  questionCount,
+}: {
+  question: InterviewQuestion
+  questionCount: number
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => setExpanded(false), [question.id])
+
+  return (
+    <section className="sticky top-[4.5rem] z-30 rounded-xl border border-indigo-200 bg-white/95 p-4 shadow-md backdrop-blur dark:border-indigo-900 dark:bg-slate-950/95">
+      <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">
+        Question {question.position} of {questionCount}{question.is_follow_up ? ' · Follow-up' : ''}
+      </p>
+      <div className={`mt-2 overflow-y-auto ${expanded ? 'max-h-64' : 'max-h-14 sm:max-h-40'}`}>
+        <h2 className="select-none text-lg font-semibold leading-7 text-slate-900 dark:text-white">
+          {question.prompt}
+        </h2>
+      </div>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className="mt-2 text-xs font-semibold text-indigo-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300 sm:hidden"
+      >
+        {expanded ? 'Show less' : 'Show full question'}
+      </button>
+    </section>
+  )
+}
 
 function formatTime(seconds: number): string {
   const minutes = Math.floor(seconds / 60)
@@ -48,9 +83,14 @@ export function InterviewSessionPage() {
   const { sessionId: rawSessionId } = useParams()
   const sessionId = Number(rawSessionId)
   const navigate = useNavigate()
+  const { toast } = useToast()
   const requestError = useInterviewError()
-  const headingRef = useRef<HTMLHeadingElement>(null)
+  const answerInputRef = useRef<HTMLTextAreaElement>(null)
   const videoRoomRef = useRef<VideoInterviewRoomHandle>(null)
+  const startRequestRef = useRef<{
+    sessionId: number
+    promise: Promise<InterviewSession>
+  } | null>(null)
   const [session, setSession] = useState<InterviewSession | null>(null)
   const [answeredCount, setAnsweredCount] = useState(0)
   const [question, setQuestion] = useState<InterviewQuestion | null>(null)
@@ -59,7 +99,7 @@ export function InterviewSessionPage() {
   const [answer, setAnswer] = useState('')
   const [evaluation, setEvaluation] = useState<InterviewEvaluation | null>(null)
   const [evaluationFailure, setEvaluationFailure] = useState('')
-  const [providerAvailable, setProviderAvailable] = useState<boolean | null>(null)
+  const [evaluationStatus, setEvaluationStatus] = useState<InterviewEvaluationStatus | null>(null)
   const [retryWait, setRetryWait] = useState(0)
   const [currentAnswerId, setCurrentAnswerId] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -69,6 +109,17 @@ export function InterviewSessionPage() {
   const [audioDurationToken, setAudioDurationToken] = useState<string | null>(null)
   const [voiceBusy, setVoiceBusy] = useState(false)
   const [videoBusy, setVideoBusy] = useState(false)
+
+  const startSessionOnce = useCallback((id: number) => {
+    if (startRequestRef.current?.sessionId === id) {
+      return startRequestRef.current.promise
+    }
+    const promise = startInterviewSession(id).finally(() => {
+      if (startRequestRef.current?.promise === promise) startRequestRef.current = null
+    })
+    startRequestRef.current = { sessionId: id, promise }
+    return promise
+  }, [])
 
   useEffect(() => {
     if (retryWait <= 0) return
@@ -93,7 +144,7 @@ export function InterviewSessionPage() {
         && (nextSession.interview_mode === 'VOICE'
           || nextSession.proctoring_consent_acknowledged)
       ) {
-        nextSession = await startInterviewSession(sessionId)
+        nextSession = await startSessionOnce(sessionId)
       }
       setSession(nextSession)
       if (['EVALUATION_PENDING', 'EVALUATION_FAILED', 'COMPLETED', 'TERMINATED'].includes(nextSession.status)) {
@@ -114,6 +165,7 @@ export function InterviewSessionPage() {
       setAnswer('')
       setEvaluation(null)
       setEvaluationFailure('')
+      setEvaluationStatus(null)
       setCurrentAnswerId(null)
       setAudioDurationToken(null)
     } catch (loadError) {
@@ -121,7 +173,7 @@ export function InterviewSessionPage() {
     } finally {
       setLoading(false)
     }
-  }, [navigate, requestError, sessionId])
+  }, [navigate, requestError, sessionId, startSessionOnce])
 
   useEffect(() => {
     void loadSession()
@@ -129,8 +181,14 @@ export function InterviewSessionPage() {
 
   useEffect(() => {
     if (!question) return
-    headingRef.current?.focus()
-  }, [question?.id])
+    if (session?.interview_mode === 'TEXT') {
+      const frame = window.requestAnimationFrame(() => {
+        answerInputRef.current?.focus({ preventScroll: true })
+        answerInputRef.current?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+      })
+      return () => window.cancelAnimationFrame(frame)
+    }
+  }, [question?.id, session?.interview_mode])
 
   useEffect(() => {
     if (!session?.expires_at) {
@@ -195,6 +253,7 @@ export function InterviewSessionPage() {
       if (session?.session_type === 'PRACTICE') {
         setEvaluation(result.evaluation)
         setEvaluationFailure(result.evaluation_status === 'FAILED' ? result.failure_code ?? 'evaluation_failed' : '')
+        setEvaluationStatus(result.evaluation_status)
         setRetryWait(result.evaluation_status === 'FAILED' ? result.retry_after_seconds ?? 0 : 0)
       } else {
         const next = await getNextInterviewQuestion(sessionId)
@@ -204,6 +263,7 @@ export function InterviewSessionPage() {
         setCurrentQuestionAnswered(next.question?.answer_submitted ?? false)
         setAnswer('')
         setEvaluation(null)
+        setEvaluationStatus(null)
         setCurrentAnswerId(null)
         setAudioDurationToken(null)
       }
@@ -219,22 +279,14 @@ export function InterviewSessionPage() {
     setBusy(true)
     setError('')
     try {
-      const results = await retryInterviewEvaluation(sessionId)
-      if (Array.isArray(results)) {
-        const result = results.find((item) => item.answer_id === currentAnswerId)
-        if (result?.evaluation) {
-          setEvaluation(result.evaluation)
-          setEvaluationFailure('')
-          setRetryWait(0)
-        } else if (result?.evaluation_status === 'FAILED') {
-          setEvaluationFailure(result.failure_code ?? 'evaluation_failed')
-          setRetryWait(result.retry_after_seconds ?? 0)
-        } else {
-          setError('Evaluation retry completed without a result for this answer. Refresh the session to check its status.')
-        }
-      } else {
-        setError('The evaluation response was unexpected. Refresh the session to check its status.')
-      }
+      const result = await retryInterviewEvaluation(sessionId)
+      showToast(
+        `${result.queued} answer(s) queued, ${result.evaluated} already evaluated, ${result.failed} still failed.`,
+        result.failed ? 'error' : 'info',
+      )
+      setEvaluationStatus(result.queued ? 'PENDING' : null)
+      setEvaluationFailure(result.failed ? 'evaluation_failed' : '')
+      setRetryWait(0)
     } catch (retryError) {
       setRetryWait(retryAfterSecondsFromError(retryError))
       setError(requestError(retryError, routes.interviewSession(sessionId)))
@@ -244,31 +296,40 @@ export function InterviewSessionPage() {
   }
 
   useEffect(() => {
-    if (!evaluationFailure) {
-      setProviderAvailable(null)
-      setRetryWait(0)
-      return
-    }
+    if (
+      session?.session_type !== 'PRACTICE'
+      || currentAnswerId === null
+      || (evaluationStatus !== 'PENDING' && evaluationStatus !== 'EVALUATING')
+    ) return
 
     let active = true
-    const checkAvailability = async () => {
+    let inFlight = false
+    const refreshEvaluation = async () => {
+      if (inFlight) return
+      inFlight = true
       try {
-        const status = await getInterviewProviderAvailability()
-        if (active) {
-          setProviderAvailable(status.available)
-          setRetryWait(status.retry_after_seconds ?? 0)
-        }
-      } catch {
-        if (active) setProviderAvailable(false)
+        const answers = await getInterviewAnswers(sessionId)
+        if (!active) return
+        const current = answers.find((item) => item.answer_id === currentAnswerId)
+        if (!current) return
+        setEvaluation(current.evaluation)
+        setEvaluationFailure(current.evaluation_status === 'FAILED'
+          ? current.failure_code ?? 'evaluation_failed'
+          : '')
+        setEvaluationStatus(current.evaluation_status)
+      } catch (pollError) {
+        if (active) setError(requestError(pollError, routes.interviewSession(sessionId)))
+      } finally {
+        inFlight = false
       }
     }
-    void checkAvailability()
-    const interval = window.setInterval(() => void checkAvailability(), 30_000)
+    void refreshEvaluation()
+    const interval = window.setInterval(() => void refreshEvaluation(), 3000)
     return () => {
       active = false
       window.clearInterval(interval)
     }
-  }, [evaluationFailure])
+  }, [currentAnswerId, evaluationStatus, requestError, session?.session_type, sessionId])
 
   const complete = async (endEarly = false) => {
     if (session?.session_type === 'ASSESSMENT' || endEarly) {
@@ -354,10 +415,19 @@ export function InterviewSessionPage() {
           showToast('Fullscreen is unavailable; proctoring will continue without fullscreen enforcement.', 'info')
         }
         await acknowledgeInterviewProctoringConsent(session.id)
-        await startInterviewSession(session.id)
+        await startSessionOnce(session.id)
         await loadSession()
       } catch (consentError) {
-        setError(requestError(consentError, routes.interviewSession(session.id)))
+        const message = requestError(consentError, routes.interviewSession(session.id))
+        if (message) {
+          toast(message, {
+            kind: 'error',
+            actions: [
+              { label: 'Try again', onClick: () => void acceptAndStart() },
+              { label: 'Continue attempt', onClick: () => void loadSession() },
+            ],
+          })
+        }
       } finally {
         setBusy(false)
       }
@@ -421,12 +491,12 @@ export function InterviewSessionPage() {
         <VideoInterviewRoom
           ref={videoRoomRef}
           sessionId={session.id}
-          questionText={question?.prompt ?? 'Your interview questions will appear here.'}
           onBusyChange={setVideoBusy}
         >
           {(sharedStream) => question ? (
             <Card>
               <CardContent className="space-y-5 py-5">
+                <CurrentQuestionCard question={question} questionCount={session.question_count} />
                 {session.session_type === 'PRACTICE' && question.hint && (
                   <details className="rounded-lg border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900 dark:bg-amber-950/30">
                     <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-amber-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-amber-100">
@@ -477,12 +547,7 @@ export function InterviewSessionPage() {
       ) : question && (
         <Card>
           <CardContent className="space-y-5 py-5">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">
-                Question {question.position} of {session.question_count}{question.is_follow_up ? ' · Follow-up' : ''}
-              </p>
-              <h2 ref={headingRef} tabIndex={-1} className="mt-2 select-none text-xl font-semibold leading-8 text-slate-900 focus:outline-none dark:text-white">{question.prompt}</h2>
-            </div>
+            <CurrentQuestionCard question={question} questionCount={session.question_count} />
 
             {session.session_type === 'PRACTICE' && question.hint && (
               <details className="rounded-lg border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900 dark:bg-amber-950/30">
@@ -511,6 +576,7 @@ export function InterviewSessionPage() {
             ) : (
               <>
                 <Textarea
+                  ref={answerInputRef}
                   label="Your answer"
                   value={answer}
                   onChange={(event) => {
@@ -551,12 +617,22 @@ export function InterviewSessionPage() {
       )}
 
       {session.session_type === 'PRACTICE' && evaluation && <InterviewFeedback evaluation={evaluation} />}
+      {session.session_type === 'PRACTICE'
+        && !evaluation
+        && !evaluationFailure
+        && (evaluationStatus === 'PENDING' || evaluationStatus === 'EVALUATING')
+        && (
+          <div role="status" className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-amber-700 border-t-transparent dark:border-amber-300 dark:border-t-transparent" aria-hidden="true" />
+            Queued for evaluation...
+          </div>
+        )}
       {session.session_type === 'PRACTICE' && evaluationFailure && (
         <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
           <p role="status" className="text-sm text-amber-950 dark:text-amber-100">
             {studentProviderFailureMessage(evaluationFailure)}
           </p>
-          <Button variant="outline" size="sm" disabled={busy || retryWait > 0 || providerAvailable !== true} isLoading={busy} onClick={() => void retryPracticeEvaluation()}>
+          <Button variant="outline" size="sm" disabled={busy || retryWait > 0} isLoading={busy} onClick={() => void retryPracticeEvaluation()}>
             {retryWait > 0 ? `Try again in ${retryWait}s` : 'Retry evaluation'}
           </Button>
         </div>

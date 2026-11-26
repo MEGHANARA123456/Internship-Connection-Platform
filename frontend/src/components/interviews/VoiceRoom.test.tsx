@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { useState } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { VoiceRoom } from './VoiceRoom'
 import { submitInterviewAnswer, transcribeInterviewAudio } from '../../services/interviewService'
 
@@ -85,6 +85,10 @@ afterEach(() => {
 })
 
 describe('VoiceRoom', () => {
+  beforeEach(() => {
+    vi.stubGlobal('isSecureContext', true)
+  })
+
   it('explains microphone permission denial and keeps text entry available', async () => {
     installMediaDevices(vi.fn().mockRejectedValue(Object.assign(new Error('denied'), { name: 'NotAllowedError' })))
     render(<VoiceRoom

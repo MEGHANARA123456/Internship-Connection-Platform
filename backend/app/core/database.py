@@ -4,7 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.config import get_settings
 
 # Create an async PostgreSQL engine using the app database URL.
-engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
+engine = create_async_engine(
+    get_settings().sqlalchemy_database_url,
+    pool_pre_ping=True,
+)
 
 # Session factory used by API routes to open database transactions.
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)

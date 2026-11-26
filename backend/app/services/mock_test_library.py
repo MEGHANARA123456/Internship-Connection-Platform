@@ -1,14 +1,16 @@
 """Student-scoped catalog, attempts, comparisons, and recommendations."""
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     InterviewReport,
+    InterviewQuestionBank,
     InterviewSession,
     InterviewStudioDifficulty,
     MockTest,
     MockTestCategory,
+    MockTestQuestion,
 )
 from app.schemas.interview import (
     MockTestAttemptSummary,
@@ -18,6 +20,26 @@ from app.schemas.interview import (
     MockTestView,
 )
 from app.services.interview_studio import InterviewStudioError
+
+
+async def _has_approved_active_questions(db: AsyncSession, test: MockTest) -> bool:
+    count = int(
+        await db.scalar(
+            select(func.count(MockTestQuestion.id))
+            .join(
+                InterviewQuestionBank,
+                InterviewQuestionBank.id == MockTestQuestion.question_bank_id,
+            )
+            .where(
+                MockTestQuestion.mock_test_id == test.id,
+                MockTestQuestion.version == test.version,
+                InterviewQuestionBank.active.is_(True),
+                InterviewQuestionBank.source_metadata["status"].as_string() == "APPROVED",
+            )
+        )
+        or 0
+    )
+    return count == test.question_count
 
 
 async def _get_test(
@@ -43,6 +65,8 @@ async def _get_test(
         )
     row = (await db.execute(statement)).first()
     if row is None:
+        raise InterviewStudioError(404, "mock_test_not_found")
+    if not include_inactive and not await _has_approved_active_questions(db, row[0]):
         raise InterviewStudioError(404, "mock_test_not_found")
     return row
 
@@ -187,6 +211,8 @@ async def list_mock_tests(
     tests = list((await db.execute(statement)).all())
     result = []
     for test, test_category in tests:
+        if not await _has_approved_active_questions(db, test):
+            continue
         attempts = await _attempt_rows(db, student_id, test.id)
         result.append(_test_view(test, test_category, attempts))
     return result

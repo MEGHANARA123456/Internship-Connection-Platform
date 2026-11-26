@@ -17,6 +17,18 @@ import { routes } from '../lib/routes'
 import { resolvePostLoginTarget } from '../lib/postLoginTarget'
 
 const NETWORK_ERROR_MESSAGE = "Can't reach the server. Please check your connection or try again shortly."
+const LOGIN_CONNECTION_ERROR_MESSAGE = 'Cannot reach the server. Please try again.'
+
+function isLoginUserNotFound(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const response = (error as {
+    response?: { status?: unknown; data?: { detail?: unknown } }
+  }).response
+  const detail = response?.data?.detail
+  return response?.status === 404
+    && typeof detail === 'string'
+    && /^No account found with email '[^']+'. Please check for typos or sign up first\.$/.test(detail)
+}
 
 function isNetworkError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false
@@ -275,21 +287,20 @@ export function LoginPage() {
 
       finishLogin(role, response.data?.is_first_login === true)
     } catch (err: any) {
+      if (isLoginUserNotFound(err)) {
+        setServerError('No account registered with this email. Please sign up first.')
+        return
+      }
       if (isNetworkError(err)) {
-        setServerError(NETWORK_ERROR_MESSAGE)
+        setServerError(LOGIN_CONNECTION_ERROR_MESSAGE)
         return
       }
-      if (err.response?.status >= 500) {
-        setServerError('Server error, please try again')
+      if (err.response?.status === 404 || err.response?.status >= 500) {
+        setServerError(LOGIN_CONNECTION_ERROR_MESSAGE)
         return
       }
-      const detail = err.response?.data?.detail
       if (err.response?.status === 400 || err.response?.status === 401) {
         setServerError('Sign in failed. Please check your credentials and try again.')
-      } else if (detail) {
-        setServerError(detail)
-      } else if (err.response?.status === 404) {
-        setServerError('No account registered with this email. Please sign up first.')
       } else if (err.response?.status === 403) {
         setServerError('Account access restricted or email verification required.')
       } else {
@@ -436,7 +447,7 @@ export function LoginPage() {
                 </Button>
               </div>
             )}
-            {serverError === NETWORK_ERROR_MESSAGE && (
+            {(serverError === NETWORK_ERROR_MESSAGE || serverError === LOGIN_CONNECTION_ERROR_MESSAGE) && (
               <Button type="submit" variant="outline" size="sm" isLoading={isSubmitting}>
                 Retry
               </Button>
@@ -480,6 +491,9 @@ export function LoginPage() {
           />
           Keep me signed in on this device
         </label>
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Without this option, your session is limited to this tab. When enabled, it is shared across tabs on this device.
+        </p>
 
         <div className="flex items-center justify-between text-xs">
           <Link to={routes.forgotPassword} className="text-indigo-600 hover:underline">

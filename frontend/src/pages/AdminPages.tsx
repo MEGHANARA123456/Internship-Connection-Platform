@@ -933,7 +933,7 @@ export function AdminVerificationsPage() {
   }, [])
   useAutoRefresh(
     () => fetchCompanies(true),
-    15_000,
+    60_000,
     !rejectingCompany && !documentPreview && !openingDocument && actionId === null,
   )
 
@@ -1571,7 +1571,7 @@ export function AdminAuditLogsPage() {
     setTotal(res.data.total || 0)
   }
   useEffect(() => { void fetchLogs() }, [page, actor, action, range, targetType, targetSearch, dateFrom, dateTo])
-  useAutoRefresh(() => fetchLogs(), 15_000, expanded === null)
+  useAutoRefresh(() => fetchLogs(), 60_000, expanded === null)
 
   useEffect(() => {
     setRange(searchParams.get('range') || '')

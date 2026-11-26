@@ -17,9 +17,42 @@ class InterviewVideoStorage(Protocol):
 
     def recording_path(self, storage_key: str) -> Path: ...
 
-    def iter_recording(self, storage_key: str) -> Iterator[bytes]: ...
+    def save_from_path(
+        self,
+        path: Path,
+        *,
+        source_type: str,
+        user_id: int,
+        session_id: int,
+        storage_key: str,
+        mime_type: str,
+    ) -> str | None: ...
 
-    def delete(self, storage_key: str) -> None: ...
+    def open_stream(
+        self,
+        storage_key: str,
+        *,
+        file_id: str | None = None,
+        start: int | None = None,
+        end: int | None = None,
+    ) -> Iterator[bytes]: ...
+
+    def delete(self, storage_key: str, *, file_id: str | None = None) -> None: ...
+
+    def remove_staging(self, storage_key: str) -> None: ...
+
+    def exists(self, storage_key: str, *, file_id: str | None = None) -> bool: ...
+
+    def size(self, storage_key: str, *, file_id: str | None = None) -> int: ...
+
+    def find_file_id(
+        self,
+        *,
+        source_type: str,
+        user_id: int,
+        session_id: int,
+        storage_key: str,
+    ) -> str | None: ...
 
 
 class LocalPrivateInterviewVideoStorage:
@@ -70,14 +103,64 @@ class LocalPrivateInterviewVideoStorage:
     def recording_path(self, storage_key: str) -> Path:
         return self._directory(storage_key) / "recording"
 
-    def iter_recording(self, storage_key: str) -> Iterator[bytes]:
+    def save_from_path(
+        self,
+        path: Path,
+        *,
+        source_type: str,
+        user_id: int,
+        session_id: int,
+        storage_key: str,
+        mime_type: str,
+    ) -> None:
+        return None
+
+    def open_stream(
+        self,
+        storage_key: str,
+        *,
+        file_id: str | None = None,
+        start: int | None = None,
+        end: int | None = None,
+    ) -> Iterator[bytes]:
         path = self.recording_path(storage_key)
         with path.open("rb") as file:
+            if start is not None:
+                file.seek(start)
+            remaining = None if end is None else end - (start or 0) + 1
             while content := file.read(64 * 1024):
-                yield content
+                if remaining is not None:
+                    content = content[:remaining]
+                    remaining -= len(content)
+                if content:
+                    yield content
+                if remaining == 0:
+                    break
 
-    def delete(self, storage_key: str) -> None:
+    def iter_recording(self, storage_key: str) -> Iterator[bytes]:
+        yield from self.open_stream(storage_key)
+
+    def delete(self, storage_key: str, *, file_id: str | None = None) -> None:
+        self.remove_staging(storage_key)
+
+    def remove_staging(self, storage_key: str) -> None:
         shutil.rmtree(self._directory(storage_key), ignore_errors=True)
+
+    def exists(self, storage_key: str, *, file_id: str | None = None) -> bool:
+        return self.recording_path(storage_key).is_file()
+
+    def size(self, storage_key: str, *, file_id: str | None = None) -> int:
+        return self.recording_path(storage_key).stat().st_size
+
+    def find_file_id(
+        self,
+        *,
+        source_type: str,
+        user_id: int,
+        session_id: int,
+        storage_key: str,
+    ) -> None:
+        return None
 
     def _directory(self, storage_key: str) -> Path:
         try:

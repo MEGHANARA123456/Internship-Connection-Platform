@@ -67,6 +67,19 @@ describe('tab-scoped authentication storage', () => {
     expect(sessionStorage.getItem('session')).toBeNull()
   })
 
+  it('receives a rotated persistent token from another tab', () => {
+    useAuthStore.getState().setSession(student, 'local')
+    const refreshed = { ...student, accessToken: 'rotated-access', refreshToken: 'rotated-refresh' }
+
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'session',
+      newValue: JSON.stringify(refreshed),
+      storageArea: localStorage,
+    }))
+
+    expect(useAuthStore.getState().session).toEqual(refreshed)
+  })
+
   it('announces a different persistent identity received from another tab', () => {
     vi.useFakeTimers()
     useAuthStore.getState().setSession(student, 'local')

@@ -87,9 +87,142 @@ describe('API rate-limit responses', () => {
     await expect(request).resolves.toMatchObject({ data: { status: 'ok' } })
     expect(adapter).toHaveBeenCalledTimes(2)
   })
+
+  it('does not refresh or clear the session when /auth/me is rate-limited', async () => {
+    vi.useFakeTimers()
+    useAuthStore.getState().setSession({
+      accessToken: 'valid-access-token',
+      refreshToken: 'valid-refresh-token',
+      role: 'ADMIN',
+      userId: 101,
+      email: 'admin@example.com',
+    })
+    const adapter = vi.fn<AxiosAdapter>(async (config) => {
+      const response = {
+        config,
+        data: { detail: 'Rate limit exceeded.' },
+        headers: { 'retry-after': '1' },
+        status: 429,
+        statusText: 'Too Many Requests',
+      } as AxiosResponse
+      throw new AxiosError('Request failed with status code 429', AxiosError.ERR_BAD_REQUEST, config, undefined, response)
+    })
+    const refresh = vi.spyOn(axios, 'post')
+    api.defaults.adapter = adapter
+    const rateLimitNotice = new Promise<void>((resolve) => {
+      window.addEventListener('app:rate-limit', () => resolve(), { once: true })
+    })
+    const request = api.get('/auth/me')
+    const requestFailure = expect(request).rejects.toMatchObject({ response: { status: 429 } })
+
+    await rateLimitNotice
+    await vi.advanceTimersByTimeAsync(1000)
+    await requestFailure
+
+    expect(adapter).toHaveBeenCalledTimes(2)
+    expect(refresh).not.toHaveBeenCalled()
+    expect(useAuthStore.getState().session?.accessToken).toBe('valid-access-token')
+    expect(sessionStorage.getItem('session_expired_message')).toBeNull()
+  })
 })
 
 describe('access-token refresh', () => {
+  it('keeps the session when a protected request has a network failure', async () => {
+    vi.useFakeTimers()
+    useAuthStore.getState().setSession({
+      accessToken: 'valid-access-token',
+      refreshToken: 'valid-refresh-token',
+      role: 'STUDENT',
+      userId: 98,
+    })
+    const adapter = vi.fn<AxiosAdapter>(async (config) => {
+      throw new AxiosError('Network Error', AxiosError.ERR_NETWORK, config)
+    })
+    const refresh = vi.spyOn(axios, 'post')
+    api.defaults.adapter = adapter
+
+    const request = api.get('/protected')
+    const requestFailure = expect(request).rejects.toMatchObject({ code: AxiosError.ERR_NETWORK })
+    await vi.runAllTimersAsync()
+    await requestFailure
+
+    expect(adapter).toHaveBeenCalledTimes(3)
+    expect(refresh).not.toHaveBeenCalled()
+    expect(useAuthStore.getState().session?.accessToken).toBe('valid-access-token')
+  })
+
+  it('keeps the session when token refresh fails because of a network error', async () => {
+    vi.useFakeTimers()
+    useAuthStore.getState().setSession({
+      accessToken: 'expired-access-token',
+      refreshToken: 'valid-refresh-token',
+      role: 'STUDENT',
+      userId: 97,
+    })
+    const adapter = vi.fn<AxiosAdapter>(async (config) => {
+      throw unauthorized(config)
+    })
+    const refreshError = new AxiosError('Network Error', AxiosError.ERR_NETWORK)
+    const refresh = vi.spyOn(axios, 'post').mockRejectedValue(refreshError)
+    api.defaults.adapter = adapter
+
+    const request = api.get('/protected')
+    const requestFailure = expect(request).rejects.toBe(refreshError)
+    await vi.runAllTimersAsync()
+    await requestFailure
+
+    expect(refresh).toHaveBeenCalledTimes(3)
+    expect(useAuthStore.getState().session?.accessToken).toBe('expired-access-token')
+    expect(sessionStorage.getItem('session_expired_message')).toBeNull()
+  })
+
+  it('shares one refresh across concurrent unauthorized requests', async () => {
+    useAuthStore.getState().setSession({
+      accessToken: 'expired-access-token',
+      refreshToken: 'valid-refresh-token',
+      role: 'STUDENT',
+      userId: 96,
+    })
+    let resolveRefresh: ((value: unknown) => void) | undefined
+    let markRefreshStarted: (() => void) | undefined
+    const refreshStarted = new Promise<void>((resolve) => {
+      markRefreshStarted = resolve
+    })
+    const refresh = vi.spyOn(axios, 'post').mockImplementation(() => new Promise((resolve) => {
+      resolveRefresh = resolve
+      markRefreshStarted?.()
+    }) as never)
+    const adapter = vi.fn<AxiosAdapter>(async (config) => {
+      if (String(config.headers.Authorization ?? '') === 'Bearer expired-access-token') {
+        throw unauthorized(config)
+      }
+      return {
+        config,
+        data: { ok: true },
+        headers: {},
+        status: 200,
+        statusText: 'OK',
+      } as AxiosResponse
+    })
+    api.defaults.adapter = adapter
+
+    const first = api.get('/protected/first')
+    const second = api.get('/protected/second')
+    await refreshStarted
+    expect(refresh).toHaveBeenCalledOnce()
+
+    resolveRefresh?.({
+      data: {
+        access_token: 'fresh-access-token',
+        refresh_token: 'rotated-refresh-token',
+        role: 'STUDENT',
+        user_id: 96,
+      },
+    })
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2)
+    expect(refresh).toHaveBeenCalledOnce()
+  })
+
   it('refreshes an expired access token once and transparently retries the request', async () => {
     useAuthStore.getState().setSession({
       accessToken: 'expired-access-token',

@@ -27,7 +27,7 @@ describe('login server errors', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
 
     expect(await screen.findByText(
-      "Can't reach the server. Please check your connection or try again shortly.",
+      'Cannot reach the server. Please try again.',
     )).toBeInTheDocument()
     expect(screen.queryByText(/check your credentials/)).not.toBeInTheDocument()
 
@@ -35,7 +35,7 @@ describe('login server errors', () => {
     await waitFor(() => expect(post).toHaveBeenCalledTimes(2))
   })
 
-  it('shows a generic message without exposing the server response body', async () => {
+  it('shows the connectivity message for a 5xx without exposing the response body', async () => {
     vi.spyOn(api, 'post').mockRejectedValue({
       response: {
         status: 500,
@@ -52,11 +52,51 @@ describe('login server errors', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
 
-    expect(await screen.findByText('Server error, please try again')).toBeInTheDocument()
+    expect(await screen.findByText('Cannot reach the server. Please try again.')).toBeInTheDocument()
     expect(screen.queryByText(/UndefinedColumnError|first_login_at/)).not.toBeInTheDocument()
     await waitFor(() => expect(api.post).toHaveBeenCalledWith(
       '/auth/login',
       expect.objectContaining({ email: 'person@example.test' }),
     ))
+  })
+
+  it('shows the account-not-found message only for the login endpoint user-not-found response', async () => {
+    vi.spyOn(api, 'post').mockRejectedValue({
+      response: {
+        status: 404,
+        data: { detail: "No account found with email 'person@example.test'. Please check for typos or sign up first." },
+      },
+    })
+
+    render(<MemoryRouter><LoginPage /></MemoryRouter>)
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'person@example.test' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'test-password' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByText('No account registered with this email. Please sign up first.')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['unrelated 404', { response: { status: 404, data: { detail: 'Route not found' } } }],
+    ['request timeout', { isAxiosError: true, code: 'ECONNABORTED', message: 'timeout of 1000ms exceeded' }],
+  ])('shows the connectivity message for %s', async (_label, error) => {
+    vi.spyOn(api, 'post').mockRejectedValue(error)
+
+    render(<MemoryRouter><LoginPage /></MemoryRouter>)
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'person@example.test' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'test-password' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign In' }))
+
+    expect(await screen.findByText('Cannot reach the server. Please try again.')).toBeInTheDocument()
+    expect(screen.queryByText(/No account registered/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Route not found')).not.toBeInTheDocument()
   })
 })

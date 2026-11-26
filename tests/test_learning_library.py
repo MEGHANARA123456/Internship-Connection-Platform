@@ -175,7 +175,7 @@ async def test_recommendations_map_latest_weak_skill_to_verified_resources(learn
             session_type="ASSESSMENT",
             interview_mode="TEXT",
             category="TECHNICAL",
-            difficulty="BEGINNER",
+            difficulty="INTERMEDIATE",
             question_count=5,
             time_limit_seconds=1200,
             status="COMPLETED",

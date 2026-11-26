@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Eye, RotateCcw, Trash2 } from 'lucide-react'
+import { Eye, RotateCcw, Trash2, Video } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
 import { Badge } from '../../components/ui/Badge'
 import { DataList } from '../../components/ui/DataList'
 import { IconButton } from '../../components/ui/IconButton'
+import { useToast } from '../../components/ui/ToastProvider'
 import { InterviewErrorNotice, useInterviewError } from '../../components/interviews/InterviewErrorNotice'
 import { InterviewPageLayout } from '../../components/interviews/InterviewPageLayout'
+import { InterviewVideoRecordingPanel } from '../../components/interviews/InterviewVideoRecordingPanel'
 import { confirmAction, showToast } from '../../lib/feedback'
 import { routes } from '../../lib/routes'
 import {
@@ -45,8 +47,9 @@ export function InterviewHistoryPage() {
   const [items, setItems] = useState<HistoryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [recordingSessionId, setRecordingSessionId] = useState<number | null>(null)
   const [error, setError] = useState('')
-  const [viewNotice, setViewNotice] = useState('')
+  const { toast } = useToast()
   const requestError = useInterviewError()
   const navigate = useNavigate()
 
@@ -111,7 +114,6 @@ export function InterviewHistoryPage() {
       actions={<Link to={routes.interviewStudio} className="rounded-lg px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-950/40">Back to Studio</Link>}
     >
       {error && <InterviewErrorNotice message={error} onRetry={() => void loadHistory()} retrying={loading} />}
-      {viewNotice && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">{viewNotice}</p>}
       {loading && items.length === 0 && <p role="status" className="text-sm text-slate-500">Loading interview history…</p>}
       <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Interview attempts ({items.length})</h2>
       <DataList
@@ -127,6 +129,9 @@ export function InterviewHistoryPage() {
             render: ({ session, report, reportError }) => (
               <div className="min-w-0">
                 <p className="font-semibold text-slate-900 dark:text-white">
+                  <span className="mr-2 inline-flex rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200">
+                    {session.mock_test_id ? 'Mock' : 'Real'}
+                  </span>
                   {session.category.replaceAll('_', ' ')} · {session.session_type === 'PRACTICE' ? 'Practice' : 'Assessment'} · {session.interview_mode.toLowerCase()}
                 </p>
                 <p className="mt-1 text-xs text-slate-500">{session.question_count} questions · {formatDate(session.created_at)}</p>
@@ -156,18 +161,30 @@ export function InterviewHistoryPage() {
                     navigate(routes.interviewReport(session.id))
                     return
                   }
-                  setViewNotice(session.status === 'EXPIRED'
+                  toast(session.status === 'EXPIRED'
                     ? 'This attempt expired before it was completed. Retake the interview to get a report.'
                     : item?.reportError
                       ? 'The report could not be loaded. Refresh history and try again.'
-                      : 'This attempt has no report yet. Complete or retake the interview to get a report.')
+                      : 'This attempt has no report yet. Complete or retake the interview to get a report.',
+                    { kind: 'warning' },
+                  )
                 }}
               />
+              {session.interview_mode === 'VIDEO' && (
+                <IconButton
+                  icon={Video}
+                  aria-label={`View recordings for interview ${session.id}`}
+                  onClick={() => setRecordingSessionId((current) => current === session.id ? null : session.id)}
+                />
+              )}
               <IconButton
                 icon={RotateCcw}
                 aria-label={`Retake interview ${session.id}`}
                 onClick={() => navigate(routes.interviewSetup({ retake_of_session_id: session.id }))}
               />
+              {recordingSessionId !== null && (
+                <InterviewVideoRecordingPanel sessionId={recordingSessionId} />
+              )}
               <IconButton
                 icon={Trash2}
                 variant="danger"

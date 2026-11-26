@@ -175,6 +175,13 @@ export function PrivacyPolicyPage() {
           </p>
         </section>
 
+        <section className="space-y-3 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 dark:border-indigo-900 dark:bg-indigo-950/30">
+          <h2 className="text-base font-bold text-slate-900 dark:text-white">Interview AI evaluation and recordings</h2>
+          <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300">
+            Interview answers submitted for AI evaluation may be sent to any AI provider configured for the service, such as Groq, Gemini, or OpenRouter. Video recording and storage require separate, optional consent; recordings use the platform's configured private storage backend, are accessible through authenticated playback, and are removed according to the configured retention period or when you delete them.
+          </p>
+        </section>
+
         {/* Section 5 */}
         <section className="space-y-3">
           <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">

@@ -1,6 +1,6 @@
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 
 const noStoreSpaEntry: Plugin = {
   name: 'no-store-spa-entry',
@@ -25,12 +25,31 @@ const noStoreSpaEntry: Plugin = {
 }
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react(), tailwindcss(), noStoreSpaEntry],
-  server: {
-    host: '0.0.0.0',
-    watch: {
-      usePolling: true,
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), 'VITE_')
+  const apiUrl = env.VITE_API_URL?.trim()
+  if (mode === 'production' && !apiUrl) {
+    throw new Error('VITE_API_URL is required for production builds.')
+  }
+  let apiTarget: string | undefined
+  if (apiUrl) {
+    try {
+      apiTarget = new URL(apiUrl).origin
+    } catch {
+      throw new Error('VITE_API_URL must be an absolute URL when set.')
+    }
+  }
+
+  return {
+    plugins: [react(), tailwindcss(), noStoreSpaEntry],
+    server: {
+      host: '0.0.0.0',
+      watch: {
+        usePolling: true,
+      },
+      ...(apiTarget
+        ? { proxy: { '/api/v1': { target: apiTarget, changeOrigin: true, ws: true } } }
+        : {}),
     },
-  },
+  }
 })

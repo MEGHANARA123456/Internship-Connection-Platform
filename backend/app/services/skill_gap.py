@@ -5,9 +5,7 @@ import logging
 import re
 import unicodedata
 from typing import Any
-from urllib.parse import urlsplit
 
-import httpx
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +23,7 @@ from app.models import (
 )
 from app.schemas.skill_gap import SkillCreate, SkillUpdate, RoleSkillMapUpdate
 from app.services.ai import get_student_resume_text
+from app.services.interview_llm import InterviewProviderError, get_interview_provider
 
 logger = logging.getLogger(__name__)
 
@@ -153,33 +152,14 @@ def _resume_tips(resume_text: str, missing_skills: list[str]) -> list[str]:
     return tips
 
 
-def _completion_url() -> str:
-    settings = get_settings()
-    base = settings.interview_llm_base_url.rstrip("/")
-    if base.endswith("/v1"):
-        url = f"{base}/chat/completions"
-    else:
-        url = f"{base}/v1/chat/completions"
-    parsed = urlsplit(url)
-    allowed_hosts = {host.casefold() for host in settings.interview_allowed_provider_hosts}
-    if parsed.scheme != "https" or not parsed.hostname or parsed.hostname.casefold() not in allowed_hosts:
-        raise ValueError("provider_host_not_allowed")
-    return url
-
-
 async def _rephrase_tips(tips: list[str]) -> list[str]:
     settings = get_settings()
-    if not settings.skill_gap_llm_enabled or not settings.interview_llm_api_key or not tips:
+    provider = get_interview_provider()
+    if not settings.skill_gap_llm_enabled or provider.configuration_error() or not tips:
         return tips
     try:
-        url = _completion_url()
-        payload = {
-            "model": settings.interview_llm_model,
-            "temperature": 0.1,
-            "max_tokens": 700,
-            "stream": False,
-            "response_format": {"type": "json_object"},
-            "messages": [
+        completion = await provider.complete_json(
+            messages=[
                 {
                     "role": "system",
                     "content": (
@@ -192,27 +172,14 @@ async def _rephrase_tips(tips: list[str]) -> list[str]:
                 },
                 {"role": "user", "content": json.dumps({"tips": tips}, ensure_ascii=False)},
             ],
-        }
-        async with httpx.AsyncClient(timeout=settings.interview_llm_timeout_seconds) as client:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {settings.interview_llm_api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-        body = response.json()
-        content = body["choices"][0]["message"]["content"]
-        if not isinstance(content, str):
-            raise ValueError("invalid_model_output")
-        result = SkillGapLLMOutput.model_validate_json(content)
+            max_tokens=700,
+            temperature=0.1,
+        )
+        result = SkillGapLLMOutput.model_validate_json(completion.content)
         if len(result.tips) != len(tips) or any(not item.strip() for item in result.tips):
             raise ValueError("invalid_model_output")
         return result.tips
-    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError, ValidationError) as error:
+    except (InterviewProviderError, TypeError, ValueError, ValidationError) as error:
         logger.warning(
             "Skill gap suggestion rephrasing unavailable; using deterministic suggestions.",
             extra={"skill_gap_error_code": str(error) if str(error) in {
@@ -348,7 +315,6 @@ async def create_report(
         target_type = "ROLE"
         target_id = None
         target_label = requirement_rows[0][0].role_label
-        role_for_resources = role_slug
         required = [
             (skill.id, skill.canonical_name) for requirement, skill in requirement_rows
             if requirement.requirement_type == "required"
@@ -364,7 +330,6 @@ async def create_report(
         target_type = "INTERNSHIP"
         target_id = internship.id
         target_label = internship.title
-        role_for_resources = None
         all_skills = (await db.execute(select(Skill))).scalars().all()
         required = [
             (
